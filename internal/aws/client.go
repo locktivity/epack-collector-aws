@@ -661,16 +661,14 @@ func (c *AWSClient) ListGuardDutyDetectors(ctx context.Context, region string) (
 			FindingPublishingFreq: string(getOutput.FindingPublishingFrequency),
 		}
 
-		if getOutput.DataSources != nil {
-			if getOutput.DataSources.S3Logs != nil {
-				detector.S3LogsEnabled = getOutput.DataSources.S3Logs.Status == "ENABLED"
-			}
-			if getOutput.DataSources.Kubernetes != nil && getOutput.DataSources.Kubernetes.AuditLogs != nil {
-				detector.EKSAuditLogsEnabled = getOutput.DataSources.Kubernetes.AuditLogs.Status == "ENABLED"
-			}
-			if getOutput.DataSources.MalwareProtection != nil && getOutput.DataSources.MalwareProtection.ScanEc2InstanceWithFindings != nil {
-				detector.MalwareScanEnabled = getOutput.DataSources.MalwareProtection.ScanEc2InstanceWithFindings.EbsVolumes != nil &&
-					getOutput.DataSources.MalwareProtection.ScanEc2InstanceWithFindings.EbsVolumes.Status == "ENABLED"
+		for _, feature := range getOutput.Features {
+			switch feature.Name {
+			case guarddutytypes.DetectorFeatureResultS3DataEvents:
+				detector.S3LogsEnabled = feature.Status == guarddutytypes.FeatureStatusEnabled
+			case guarddutytypes.DetectorFeatureResultEksAuditLogs:
+				detector.EKSAuditLogsEnabled = feature.Status == guarddutytypes.FeatureStatusEnabled
+			case guarddutytypes.DetectorFeatureResultEbsMalwareProtection:
+				detector.MalwareScanEnabled = feature.Status == guarddutytypes.FeatureStatusEnabled
 			}
 		}
 
@@ -762,9 +760,7 @@ func (c *AWSClient) GetSecurityHubConfig(ctx context.Context, region string) (*S
 	if err == nil {
 		config.IntegrationCount = len(integrationsOutput.ProductSubscriptions)
 		config.ProductSubscriptions = make([]string, 0, len(integrationsOutput.ProductSubscriptions))
-		for _, productARN := range integrationsOutput.ProductSubscriptions {
-			config.ProductSubscriptions = append(config.ProductSubscriptions, productARN)
-		}
+		config.ProductSubscriptions = append(config.ProductSubscriptions, integrationsOutput.ProductSubscriptions...)
 	}
 
 	return config, nil

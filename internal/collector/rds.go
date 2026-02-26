@@ -26,7 +26,7 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 	// Get clusters
 	clusters, err := client.ListDBClusters(ctx, region)
 	if err != nil {
-		// Continue with instances
+		clusters = nil
 	}
 
 	result.instanceCount = len(instances)
