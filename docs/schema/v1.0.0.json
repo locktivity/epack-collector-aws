@@ -1,0 +1,195 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AWS Collector Output",
+  "description": "Security posture output from the epack AWS collector. Metrics include percentages (0-100), booleans, and counts.",
+  "type": "object",
+  "required": ["schema_version", "collected_at", "accounts"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Schema version"
+    },
+    "collected_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 timestamp of collection"
+    },
+    "accounts": {
+      "type": "array",
+      "description": "Posture data for each collected account",
+      "items": {
+        "$ref": "#/definitions/AccountPosture"
+      }
+    }
+  },
+  "definitions": {
+    "AccountPosture": {
+      "type": "object",
+      "required": ["account_id", "regions", "iam", "s3", "rds", "network", "account_security"],
+      "properties": {
+        "account_id": {
+          "type": "string",
+          "pattern": "^[0-9]{12}$",
+          "description": "AWS account ID"
+        },
+        "account_alias": {
+          "type": ["string", "null"],
+          "description": "AWS account alias if set"
+        },
+        "regions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Regions included in collection"
+        },
+        "iam": {
+          "$ref": "#/definitions/IAMMetrics"
+        },
+        "s3": {
+          "$ref": "#/definitions/S3Metrics"
+        },
+        "rds": {
+          "$ref": "#/definitions/RDSMetrics"
+        },
+        "network": {
+          "$ref": "#/definitions/NetworkMetrics"
+        },
+        "account_security": {
+          "$ref": "#/definitions/AccountSecurity"
+        }
+      }
+    },
+    "IAMMetrics": {
+      "type": "object",
+      "description": "IAM security metrics.",
+      "required": ["iam_users_present", "mfa_enabled", "hardware_mfa_enabled", "access_keys_rotated", "root_mfa_enabled", "root_access_keys_exist"],
+      "properties": {
+        "iam_users_present": { "type": "boolean", "description": "Whether the account has at least one IAM user (excluding root)" },
+        "mfa_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of IAM users with MFA enabled" },
+        "hardware_mfa_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of IAM users with hardware MFA" },
+        "access_keys_rotated": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of access keys rotated within 90 days" },
+        "root_mfa_enabled": { "type": "boolean", "description": "Whether root account has MFA enabled" },
+        "root_access_keys_exist": { "type": "boolean", "description": "Whether root account has access keys (should be false)" }
+      }
+    },
+    "S3Metrics": {
+      "type": "object",
+      "description": "S3 security metrics.",
+      "required": ["public_access_blocked", "default_encryption_enabled", "versioning_enabled", "logging_enabled", "account_public_access_block_enabled"],
+      "properties": {
+        "public_access_blocked": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets with public access blocked" },
+        "default_encryption_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets with default encryption" },
+        "versioning_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets with versioning enabled" },
+        "logging_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets with access logging" },
+        "account_public_access_block_enabled": { "type": "boolean", "description": "Whether account-level public access block is enabled" }
+      }
+    },
+    "RDSMetrics": {
+      "type": "object",
+      "description": "RDS security metrics.",
+      "required": [],
+      "properties": {
+        "encrypted_at_rest": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage with storage encryption" },
+        "publicly_accessible": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage publicly accessible (should be 0)" },
+        "deletion_protection": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage with deletion protection" },
+        "backup_retention_adequate": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage with backup retention >= 7 days" },
+        "multi_az_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage with Multi-AZ deployment" }
+      }
+    },
+    "NetworkMetrics": {
+      "type": "object",
+      "description": "Network security metrics.",
+      "required": [],
+      "properties": {
+        "open_to_world_ssh": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of SGs allowing SSH from 0.0.0.0/0" },
+        "open_to_world_rdp": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage allowing RDP from 0.0.0.0/0" },
+        "flow_logs_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of VPCs with flow logs" }
+      }
+    },
+    "AccountSecurity": {
+      "type": "object",
+      "description": "Account-level security service status and vulnerability posture.",
+      "required": ["cloudtrail", "config", "guardduty", "security_hub", "inspector"],
+      "properties": {
+        "cloudtrail": {
+          "type": "object",
+          "required": ["enabled", "multi_region_enabled"],
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Whether CloudTrail is enabled and logging" },
+            "multi_region_enabled": { "type": "boolean", "description": "Whether multi-region trail exists" }
+          }
+        },
+        "config": {
+          "type": "object",
+          "required": ["enabled", "recorder_running"],
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Whether AWS Config is enabled" },
+            "recorder_running": { "type": "boolean", "description": "Whether configuration recorder is running" }
+          }
+        },
+        "guardduty": {
+          "type": "object",
+          "required": ["enabled", "unremediated_findings_over_48h"],
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Whether GuardDuty is enabled" },
+            "unremediated_findings_over_48h": { "type": "integer", "minimum": 0, "description": "Count of unarchived severity >= 7 findings with last update older than 48 hours" }
+          }
+        },
+        "security_hub": {
+          "type": "object",
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Whether Security Hub is enabled" },
+            "cis_aws_foundations_benchmark_level_1": {
+              "type": "object",
+              "required": ["enabled", "compliance_percent", "compliance_state"],
+              "properties": {
+                "enabled": { "type": "boolean", "description": "Whether CIS AWS Foundations Benchmark level 1 data is available" },
+                "compliance_percent": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of level 1 controls in PASSED status over PASSED/FAILED/WARNING controls" },
+                "compliance_state": { "type": "string", "description": "Aggregate level 1 compliance state (PASSED, WARNING, FAILED, NOT_AVAILABLE, UNKNOWN)" },
+                "passed_controls": { "type": "integer", "minimum": 0, "description": "Number of level 1 controls in PASSED status" },
+                "failed_controls": { "type": "integer", "minimum": 0, "description": "Number of level 1 controls in FAILED status" },
+                "warning_controls": { "type": "integer", "minimum": 0, "description": "Number of level 1 controls in WARNING status" },
+                "not_available_controls": { "type": "integer", "minimum": 0, "description": "Number of level 1 controls in NOT_AVAILABLE status" }
+              }
+            },
+            "cis_aws_foundations_benchmark_level_2": {
+              "type": "object",
+              "required": ["enabled", "compliance_percent", "compliance_state"],
+              "properties": {
+                "enabled": { "type": "boolean", "description": "Whether CIS AWS Foundations Benchmark level 2 data is available" },
+                "compliance_percent": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of level 2 controls in PASSED status over PASSED/FAILED/WARNING controls" },
+                "compliance_state": { "type": "string", "description": "Aggregate level 2 compliance state (PASSED, WARNING, FAILED, NOT_AVAILABLE, UNKNOWN)" },
+                "passed_controls": { "type": "integer", "minimum": 0, "description": "Number of level 2 controls in PASSED status" },
+                "failed_controls": { "type": "integer", "minimum": 0, "description": "Number of level 2 controls in FAILED status" },
+                "warning_controls": { "type": "integer", "minimum": 0, "description": "Number of level 2 controls in WARNING status" },
+                "not_available_controls": { "type": "integer", "minimum": 0, "description": "Number of level 2 controls in NOT_AVAILABLE status" }
+              }
+            },
+            "cis_aws_foundations_benchmark_unknown_level": {
+              "type": "object",
+              "required": ["enabled", "compliance_percent", "compliance_state"],
+              "properties": {
+                "enabled": { "type": "boolean", "description": "Whether CIS controls without explicit level tags are present" },
+                "compliance_percent": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of unknown-level controls in PASSED status over PASSED/FAILED/WARNING controls" },
+                "compliance_state": { "type": "string", "description": "Aggregate unknown-level compliance state (PASSED, WARNING, FAILED, NOT_AVAILABLE, UNKNOWN)" },
+                "passed_controls": { "type": "integer", "minimum": 0, "description": "Number of unknown-level controls in PASSED status" },
+                "failed_controls": { "type": "integer", "minimum": 0, "description": "Number of unknown-level controls in FAILED status" },
+                "warning_controls": { "type": "integer", "minimum": 0, "description": "Number of unknown-level controls in WARNING status" },
+                "not_available_controls": { "type": "integer", "minimum": 0, "description": "Number of unknown-level controls in NOT_AVAILABLE status" }
+              }
+            }
+          }
+        },
+        "inspector": {
+          "type": "object",
+          "required": ["enabled", "unpatched_server_percent"],
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Whether Inspector is enabled" },
+            "unpatched_server_percent": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of affected servers with unresolved Inspector findings" }
+          }
+        }
+      }
+    }
+  }
+}
