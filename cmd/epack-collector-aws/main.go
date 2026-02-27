@@ -24,7 +24,9 @@ func run(ctx componentsdk.CollectorContext) error {
 	// Build config from SDK context
 	cfg := ctx.Config()
 	config := collector.Config{
-		Regions: getStringSlice(cfg, "regions"),
+		Regions:    getStringSlice(cfg, "regions"),
+		OnStatus:   ctx.Status,
+		OnProgress: ctx.Progress,
 	}
 
 	// Parse account configuration - supports three modes:

@@ -13,6 +13,20 @@ type Collector struct {
 	config Config
 }
 
+// status reports an indeterminate status update.
+func (c *Collector) status(message string) {
+	if c.config.OnStatus != nil {
+		c.config.OnStatus(message)
+	}
+}
+
+// progress reports a determinate progress update.
+func (c *Collector) progress(current, total int64, message string) {
+	if c.config.OnProgress != nil {
+		c.config.OnProgress(current, total, message)
+	}
+}
+
 // New creates a new Collector with the given configuration.
 func New(config Config) (*Collector, error) {
 	return &Collector{config: config}, nil
@@ -29,8 +43,13 @@ func (c *Collector) Collect(ctx context.Context) (*Output, error) {
 		accounts = []AccountConfig{{}}
 	}
 
+	total := int64(len(accounts))
+	c.status("Starting AWS posture collection")
+
 	// Collect from each account
-	for _, acct := range accounts {
+	for i, acct := range accounts {
+		c.progress(int64(i+1), total, fmt.Sprintf("Collecting account %d of %d", i+1, len(accounts)))
+
 		posture, err := c.collectAccount(ctx, acct)
 		if err != nil {
 			// Log error but continue with other accounts
@@ -39,12 +58,14 @@ func (c *Collector) Collect(ctx context.Context) (*Output, error) {
 		output.Accounts = append(output.Accounts, *posture)
 	}
 
+	c.status("Collection complete")
 	return output, nil
 }
 
 // collectAccount collects posture for a single AWS account.
 func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig) (*AccountPosture, error) {
 	// Create client for this account
+	c.status("Connecting to AWS...")
 	client, err := c.createClient(ctx, acctConfig)
 	if err != nil {
 		return nil, err
@@ -55,12 +76,14 @@ func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig
 	if err != nil {
 		return nil, fmt.Errorf("getting account ID: %w", err)
 	}
+	c.status(fmt.Sprintf("Connected to account %s", accountID))
 
 	// Determine regions to scan
 	regions, err := c.getRegions(ctx, client)
 	if err != nil {
 		return nil, err
 	}
+	c.status(fmt.Sprintf("Scanning %d regions", len(regions)))
 
 	posture := NewAccountPosture(accountID, regions)
 
@@ -115,11 +138,13 @@ func (c *Collector) getRegions(ctx context.Context, client *aws.AWSClient) ([]st
 // collectGlobalMetrics collects IAM and S3 metrics (global services).
 func (c *Collector) collectGlobalMetrics(ctx context.Context, client *aws.AWSClient, accountID string, posture *AccountPosture) {
 	// IAM metrics (global)
+	c.status("Collecting IAM metrics...")
 	if iamMetrics, err := c.collectIAMMetrics(ctx, client, accountID); err == nil {
 		posture.IAM = *iamMetrics
 	}
 
 	// S3 metrics (global bucket list)
+	c.status("Collecting S3 metrics...")
 	if s3Metrics, err := c.collectS3Metrics(ctx, client, accountID); err == nil {
 		posture.S3 = *s3Metrics
 	}
@@ -130,7 +155,10 @@ func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSC
 	var rdsMetrics rdsMetricsWithCounts
 	var networkMetrics networkMetricsWithCounts
 
-	for _, region := range regions {
+	total := int64(len(regions))
+	for i, region := range regions {
+		c.progress(int64(i+1), total, fmt.Sprintf("Scanning region %s", region))
+
 		if rds, err := c.collectRDSMetrics(ctx, client, region); err == nil {
 			rdsMetrics = mergeRDSMetrics(rdsMetrics, *rds)
 		}

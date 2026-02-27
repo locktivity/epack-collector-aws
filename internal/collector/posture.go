@@ -3,10 +3,20 @@ package collector
 
 import "time"
 
+// StatusFunc is called to report indeterminate status updates.
+type StatusFunc func(message string)
+
+// ProgressFunc is called to report determinate progress (current/total).
+type ProgressFunc func(current, total int64, message string)
+
 // Config holds the collector configuration passed via stdin.
 type Config struct {
 	Accounts []AccountConfig `json:"accounts"` // Accounts to collect from
 	Regions  []string        `json:"regions"`  // Regions to scan (empty = all enabled)
+
+	// Progress callbacks (optional, set by main to report status)
+	OnStatus   StatusFunc   `json:"-"`
+	OnProgress ProgressFunc `json:"-"`
 }
 
 // AccountConfig holds configuration for a single AWS account.

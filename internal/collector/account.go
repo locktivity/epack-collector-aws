@@ -11,10 +11,19 @@ import (
 func (c *Collector) collectAccountSecurity(ctx context.Context, client *aws.AWSClient, primaryRegion string, regions []string) (*AccountSecurity, error) {
 	security := &AccountSecurity{}
 
+	c.status("Checking CloudTrail...")
 	c.collectCloudTrailStatus(ctx, client, &security.CloudTrail)
+
+	c.status("Checking AWS Config...")
 	c.collectConfigStatus(ctx, client, primaryRegion, &security.Config)
+
+	c.status("Checking GuardDuty...")
 	c.collectGuardDutyStatus(ctx, client, regions, &security.GuardDuty)
+
+	c.status("Checking Security Hub...")
 	c.collectSecurityHubStatus(ctx, client, primaryRegion, &security.SecurityHub)
+
+	c.status("Checking Inspector...")
 	c.collectInspectorStatus(ctx, client, primaryRegion, &security.Inspector)
 
 	return security, nil
