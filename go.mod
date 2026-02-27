@@ -17,7 +17,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3control v1.55.0
 	github.com/aws/aws-sdk-go-v2/service/securityhub v1.59.0
 	github.com/aws/aws-sdk-go-v2/service/sts v1.33.19
-	github.com/locktivity/epack v0.1.17
+	github.com/locktivity/epack v0.1.18
 )
 
 require (
