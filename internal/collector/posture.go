@@ -70,6 +70,7 @@ type RDSMetrics struct {
 	PubliclyAccessible      int `json:"publicly_accessible"`
 	DeletionProtection      int `json:"deletion_protection"`
 	BackupRetentionAdequate int `json:"backup_retention_adequate"` // % with retention >= 7 days
+	BackupRetentionMin      int `json:"backup_retention_min"`      // Minimum retention days across all instances
 	MultiAZEnabled          int `json:"multi_az_enabled"`
 }
 

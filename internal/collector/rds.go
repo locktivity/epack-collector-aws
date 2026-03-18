@@ -34,6 +34,7 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 
 	// Calculate metrics for instances
 	var encrypted, publicAccess, deletionProtection, multiAZ, adequateBackup int
+	minRetention := -1 // -1 means no instances found yet
 
 	for _, inst := range instances {
 		if inst.StorageEncrypted {
@@ -51,6 +52,10 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 		if inst.BackupRetentionPeriod >= MinBackupRetentionDays {
 			adequateBackup++
 		}
+		// Track minimum retention
+		if minRetention == -1 || inst.BackupRetentionPeriod < minRetention {
+			minRetention = inst.BackupRetentionPeriod
+		}
 	}
 
 	// Also count clusters
@@ -67,6 +72,10 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 		if cluster.BackupRetentionPeriod >= MinBackupRetentionDays {
 			adequateBackup++
 		}
+		// Track minimum retention
+		if minRetention == -1 || cluster.BackupRetentionPeriod < minRetention {
+			minRetention = cluster.BackupRetentionPeriod
+		}
 	}
 
 	total := len(instances) + len(clusters)
@@ -75,6 +84,13 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 	result.DeletionProtection = percent(deletionProtection, total)
 	result.BackupRetentionAdequate = percent(adequateBackup, total)
 	result.MultiAZEnabled = percent(multiAZ, total)
+
+	// Set minimum retention (0 if no instances found)
+	if minRetention == -1 {
+		result.BackupRetentionMin = 0
+	} else {
+		result.BackupRetentionMin = minRetention
+	}
 
 	return result, nil
 }
@@ -102,6 +118,18 @@ func mergeRDSMetrics(a, b rdsMetricsWithCounts) rdsMetricsWithCounts {
 	if instancesAll > 0 {
 		result.PubliclyAccessible = (a.PubliclyAccessible*a.instanceCount + b.PubliclyAccessible*b.instanceCount) / instancesAll
 	}
+
+	// Minimum retention is the min across regions (only if both have instances)
+	if totalA > 0 && totalB > 0 {
+		if a.BackupRetentionMin < b.BackupRetentionMin {
+			result.BackupRetentionMin = a.BackupRetentionMin
+		} else {
+			result.BackupRetentionMin = b.BackupRetentionMin
+		}
+	} else if totalB > 0 {
+		result.BackupRetentionMin = b.BackupRetentionMin
+	}
+	// else keep a's value (already in result)
 
 	return result
 }

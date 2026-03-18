@@ -66,8 +66,23 @@ func run(ctx componentsdk.CollectorContext) error {
 		return componentsdk.NewNetworkError("collecting posture: %v", err)
 	}
 
-	// Emit the collected data (SDK handles protocol envelope)
-	return ctx.Emit(output)
+	// Transform to normalized cloud-posture format
+	normalized := output.ToCloudPosture()
+
+	// Emit both detailed and normalized artifacts
+	return ctx.Emit([]componentsdk.CollectedArtifact{
+		{
+			// Detailed AWS-specific output
+			Data: output,
+			Path: "artifacts/aws.json",
+		},
+		{
+			// Normalized cloud posture for profile evaluation
+			Data:   normalized,
+			Schema: "evidencepack/cloud-posture@v1",
+			Path:   "artifacts/aws.cloud-posture.json",
+		},
+	})
 }
 
 // getString safely extracts a string from config map
