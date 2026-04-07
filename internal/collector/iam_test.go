@@ -84,6 +84,36 @@ func TestProcessCredentialReport(t *testing.T) {
 	}
 }
 
+func TestProcessCredentialReport_NoActiveAccessKeys(t *testing.T) {
+	report := &aws.CredentialReport{
+		Users: []aws.CredentialReportUser{
+			{
+				User:             "<root_account>",
+				MFAActive:        true,
+				AccessKey1Active: false,
+				AccessKey2Active: false,
+			},
+			{
+				User:            "alice",
+				MFAActive:       true,
+				PasswordEnabled: true,
+			},
+			{
+				User:      "bob",
+				MFAActive: false,
+			},
+		},
+	}
+
+	c := &Collector{}
+	metrics := &IAMMetrics{}
+	c.processCredentialReport(report, metrics)
+
+	if metrics.AccessKeysRotated != 100 {
+		t.Fatalf("expected AccessKeysRotated=100 when no active access keys exist, got %d", metrics.AccessKeysRotated)
+	}
+}
+
 func TestHasExternalTrust(t *testing.T) {
 	current := "203984714075"
 

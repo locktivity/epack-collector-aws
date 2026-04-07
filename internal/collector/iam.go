@@ -46,7 +46,7 @@ func (c *Collector) processCredentialReport(report *aws.CredentialReport, metric
 	metrics.IAMUsersPresent = stats.totalUsers > 0
 	metrics.MFAEnabled = percent(stats.mfaEnabled, stats.totalUsers)
 	metrics.HardwareMFAEnabled = 0 // Would need additional API calls
-	metrics.AccessKeysRotated = percent(stats.keysRotated, stats.usersWithKeys)
+	metrics.AccessKeysRotated = accessKeyRotationPercent(stats.keysRotated, stats.usersWithKeys)
 }
 
 // userStats tracks counts during credential report processing.
@@ -92,6 +92,15 @@ func hasRotatedKeys(user aws.CredentialReportUser, threshold time.Time) bool {
 		}
 	}
 	return true
+}
+
+// accessKeyRotationPercent treats accounts with no active access keys as fully compliant.
+// Rotation requirements only apply when keys exist.
+func accessKeyRotationPercent(keysRotated, usersWithKeys int) int {
+	if usersWithKeys == 0 {
+		return MaxPercentage
+	}
+	return percent(keysRotated, usersWithKeys)
 }
 
 // hasExternalTrust checks if a role's trust policy allows external accounts.

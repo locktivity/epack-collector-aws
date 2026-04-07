@@ -76,9 +76,9 @@ type AWSClient struct {
 // Default regions per partition for STS and global services.
 // STS requires a region to construct endpoints, even for global operations.
 const (
-	DefaultRegionAWS    = "us-east-1"
-	DefaultRegionGov    = "us-gov-west-1"
-	DefaultRegionChina  = "cn-north-1"
+	DefaultRegionAWS   = "us-east-1"
+	DefaultRegionGov   = "us-gov-west-1"
+	DefaultRegionChina = "cn-north-1"
 )
 
 // regionForRoleARN returns an appropriate default region based on the role ARN's partition.
@@ -91,6 +91,29 @@ func regionForRoleARN(roleARN string) string {
 		return DefaultRegionChina
 	}
 	return DefaultRegionAWS
+}
+
+// normalizeBucketRegion maps S3 location-constraint edge cases to SDK regions.
+func normalizeBucketRegion(region string) string {
+	switch region {
+	case "":
+		return DefaultRegionAWS
+	case "EU":
+		return "eu-west-1"
+	default:
+		return region
+	}
+}
+
+// s3ConfigForRegion returns a copy of the client config pinned to the bucket region.
+// Bucket-level S3 APIs must be called against the bucket's home region.
+func (c *AWSClient) s3ConfigForRegion(region string) aws.Config {
+	cfg := c.cfg.Copy()
+	normalized := normalizeBucketRegion(region)
+	if normalized != "" {
+		cfg.Region = normalized
+	}
+	return cfg
 }
 
 // NewClient creates a new AWS client using the default credential chain.
@@ -487,8 +510,10 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 			}
 		}
 
+		bucketClient := s3.NewFromConfig(c.s3ConfigForRegion(bucket.Region))
+
 		// Get public access block
-		pabOutput, err := s3Client.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{
+		pabOutput, err := bucketClient.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{
 			Bucket: b.Name,
 		})
 		if err == nil && pabOutput.PublicAccessBlockConfiguration != nil {
@@ -500,7 +525,7 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 		}
 
 		// Get encryption
-		encOutput, err := s3Client.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{
+		encOutput, err := bucketClient.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{
 			Bucket: b.Name,
 		})
 		if err == nil && encOutput.ServerSideEncryptionConfiguration != nil {
@@ -508,7 +533,7 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 		}
 
 		// Get versioning
-		verOutput, err := s3Client.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{
+		verOutput, err := bucketClient.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{
 			Bucket: b.Name,
 		})
 		if err == nil {
@@ -517,7 +542,7 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 		}
 
 		// Get logging
-		logOutput, err := s3Client.GetBucketLogging(ctx, &s3.GetBucketLoggingInput{
+		logOutput, err := bucketClient.GetBucketLogging(ctx, &s3.GetBucketLoggingInput{
 			Bucket: b.Name,
 		})
 		if err == nil {
@@ -525,7 +550,7 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 		}
 
 		// Get bucket policy and check for SSL requirement
-		polOutput, err := s3Client.GetBucketPolicy(ctx, &s3.GetBucketPolicyInput{
+		polOutput, err := bucketClient.GetBucketPolicy(ctx, &s3.GetBucketPolicyInput{
 			Bucket: b.Name,
 		})
 		if err == nil && polOutput.Policy != nil {

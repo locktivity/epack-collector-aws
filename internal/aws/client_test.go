@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	securityhubtypes "github.com/aws/aws-sdk-go-v2/service/securityhub/types"
 )
 
@@ -67,6 +68,70 @@ func TestDefaultRegionConstants(t *testing.T) {
 	if DefaultRegionChina != "cn-north-1" {
 		t.Errorf("DefaultRegionChina = %q, want cn-north-1", DefaultRegionChina)
 	}
+}
+
+func TestNormalizeBucketRegion(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		output string
+	}{
+		{
+			name:   "empty maps to us-east-1",
+			input:  "",
+			output: DefaultRegionAWS,
+		},
+		{
+			name:   "legacy EU constraint maps to eu-west-1",
+			input:  "EU",
+			output: "eu-west-1",
+		},
+		{
+			name:   "regular region passes through",
+			input:  "us-east-2",
+			output: "us-east-2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeBucketRegion(tt.input); got != tt.output {
+				t.Fatalf("normalizeBucketRegion(%q) = %q, want %q", tt.input, got, tt.output)
+			}
+		})
+	}
+}
+
+func TestS3ConfigForRegion(t *testing.T) {
+	client := &AWSClient{
+		cfg: aws.Config{
+			Region: DefaultRegionAWS,
+		},
+	}
+
+	t.Run("uses bucket region when provided", func(t *testing.T) {
+		cfg := client.s3ConfigForRegion("us-east-2")
+		if cfg.Region != "us-east-2" {
+			t.Fatalf("cfg.Region = %q, want us-east-2", cfg.Region)
+		}
+		if client.cfg.Region != DefaultRegionAWS {
+			t.Fatalf("client cfg.Region mutated to %q", client.cfg.Region)
+		}
+	})
+
+	t.Run("normalizes EU bucket location", func(t *testing.T) {
+		cfg := client.s3ConfigForRegion("EU")
+		if cfg.Region != "eu-west-1" {
+			t.Fatalf("cfg.Region = %q, want eu-west-1", cfg.Region)
+		}
+	})
+
+	t.Run("falls back to default for empty bucket region", func(t *testing.T) {
+		cfg := client.s3ConfigForRegion("")
+		if cfg.Region != DefaultRegionAWS {
+			t.Fatalf("cfg.Region = %q, want %q", cfg.Region, DefaultRegionAWS)
+		}
+	})
 }
 
 func TestCISLevelsForFinding(t *testing.T) {
