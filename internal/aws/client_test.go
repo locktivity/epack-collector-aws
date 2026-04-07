@@ -8,6 +8,67 @@ import (
 	securityhubtypes "github.com/aws/aws-sdk-go-v2/service/securityhub/types"
 )
 
+func TestRegionForRoleARN(t *testing.T) {
+	tests := []struct {
+		name     string
+		roleARN  string
+		expected string
+	}{
+		{
+			name:     "standard AWS partition",
+			roleARN:  "arn:aws:iam::123456789012:role/EpackCollectorRole",
+			expected: DefaultRegionAWS,
+		},
+		{
+			name:     "GovCloud partition",
+			roleARN:  "arn:aws-us-gov:iam::123456789012:role/EpackCollectorRole",
+			expected: DefaultRegionGov,
+		},
+		{
+			name:     "China partition",
+			roleARN:  "arn:aws-cn:iam::123456789012:role/EpackCollectorRole",
+			expected: DefaultRegionChina,
+		},
+		{
+			name:     "empty ARN falls back to standard",
+			roleARN:  "",
+			expected: DefaultRegionAWS,
+		},
+		{
+			name:     "malformed ARN falls back to standard",
+			roleARN:  "not-an-arn",
+			expected: DefaultRegionAWS,
+		},
+		{
+			name:     "partial ARN prefix falls back to standard",
+			roleARN:  "arn:aws-fake:iam::123456789012:role/Role",
+			expected: DefaultRegionAWS,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := regionForRoleARN(tt.roleARN)
+			if got != tt.expected {
+				t.Errorf("regionForRoleARN(%q) = %q, want %q", tt.roleARN, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDefaultRegionConstants(t *testing.T) {
+	// Verify the constants are valid AWS regions
+	if DefaultRegionAWS != "us-east-1" {
+		t.Errorf("DefaultRegionAWS = %q, want us-east-1", DefaultRegionAWS)
+	}
+	if DefaultRegionGov != "us-gov-west-1" {
+		t.Errorf("DefaultRegionGov = %q, want us-gov-west-1", DefaultRegionGov)
+	}
+	if DefaultRegionChina != "cn-north-1" {
+		t.Errorf("DefaultRegionChina = %q, want cn-north-1", DefaultRegionChina)
+	}
+}
+
 func TestCISLevelsForFinding(t *testing.T) {
 	t.Run("level 1 only", func(t *testing.T) {
 		levels := cisLevelsForFinding([]string{"CIS AWS Foundations Benchmark v1.4.0 Level 1"})

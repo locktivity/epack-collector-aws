@@ -73,11 +73,36 @@ type AWSClient struct {
 	cfg aws.Config
 }
 
+// Default regions per partition for STS and global services.
+// STS requires a region to construct endpoints, even for global operations.
+const (
+	DefaultRegionAWS    = "us-east-1"
+	DefaultRegionGov    = "us-gov-west-1"
+	DefaultRegionChina  = "cn-north-1"
+)
+
+// regionForRoleARN returns an appropriate default region based on the role ARN's partition.
+// Falls back to us-east-1 for standard AWS or unrecognized ARNs.
+func regionForRoleARN(roleARN string) string {
+	if strings.HasPrefix(roleARN, "arn:aws-us-gov:") {
+		return DefaultRegionGov
+	}
+	if strings.HasPrefix(roleARN, "arn:aws-cn:") {
+		return DefaultRegionChina
+	}
+	return DefaultRegionAWS
+}
+
 // NewClient creates a new AWS client using the default credential chain.
+// Falls back to us-east-1 if no region is configured. GovCloud/China users
+// must configure AWS_REGION when using ambient credentials (no role ARN).
 func NewClient(ctx context.Context) (*AWSClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
+	}
+	if cfg.Region == "" {
+		cfg.Region = DefaultRegionAWS
 	}
 	return &AWSClient{cfg: cfg}, nil
 }
@@ -87,6 +112,9 @@ func NewClientWithRole(ctx context.Context, roleARN, externalID string) (*AWSCli
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
+	}
+	if cfg.Region == "" {
+		cfg.Region = regionForRoleARN(roleARN)
 	}
 
 	stsClient := sts.NewFromConfig(cfg)
@@ -108,6 +136,9 @@ func NewClientWithWebIdentity(ctx context.Context, roleARN string, tokenSource s
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
+	}
+	if cfg.Region == "" {
+		cfg.Region = regionForRoleARN(roleARN)
 	}
 
 	stsClient := sts.NewFromConfig(cfg)
