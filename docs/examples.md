@@ -6,30 +6,66 @@ Collect from the current AWS account using default credentials:
 
 ```yaml
 collectors:
-  - name: aws
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
     config: {}
 ```
 
 ## Cross-Account Collection
 
-Assume a role in a target account:
+### With OIDC (Recommended for GitHub Actions)
 
 ```yaml
 collectors:
-  - name: aws
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
     config:
+      auth_mode: "oidc"
+      role_arn: "arn:aws:iam::123456789012:role/EpackCollectorRole"
+    secrets:
+      - ACTIONS_ID_TOKEN_REQUEST_URL
+      - ACTIONS_ID_TOKEN_REQUEST_TOKEN
+```
+
+### With AssumeRole
+
+```yaml
+collectors:
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
+    config:
+      auth_mode: "assume_role"
       role_arn: "arn:aws:iam::123456789012:role/EpackCollectorRole"
       external_id: "epack-collection-abc123"
 ```
 
 ## Multi-Account Collection
 
-Collect from multiple AWS accounts:
+### With OIDC
 
 ```yaml
 collectors:
-  - name: aws
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
     config:
+      auth_mode: "oidc"
+      accounts:
+        - role_arn: "arn:aws:iam::111111111111:role/EpackCollectorRole"
+        - role_arn: "arn:aws:iam::222222222222:role/EpackCollectorRole"
+        - role_arn: "arn:aws:iam::333333333333:role/EpackCollectorRole"
+    secrets:
+      - ACTIONS_ID_TOKEN_REQUEST_URL
+      - ACTIONS_ID_TOKEN_REQUEST_TOKEN
+```
+
+### With AssumeRole
+
+```yaml
+collectors:
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
+    config:
+      auth_mode: "assume_role"
       accounts:
         - role_arn: "arn:aws:iam::111111111111:role/EpackCollectorRole"
           external_id: "prod"
@@ -45,7 +81,8 @@ Limit collection to specific regions:
 
 ```yaml
 collectors:
-  - name: aws
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
     config:
       role_arn: "arn:aws:iam::123456789012:role/EpackCollectorRole"
       regions:
@@ -149,7 +186,9 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
 
 ## CI/CD Integration
 
-### GitHub Actions
+### GitHub Actions with OIDC (Recommended)
+
+Using OIDC, the collector obtains credentials directly from GitHub without needing `aws-actions/configure-aws-credentials`:
 
 ```yaml
 name: Security Posture Collection
@@ -163,6 +202,47 @@ jobs:
   collect:
     runs-on: ubuntu-latest
     permissions:
+      id-token: write  # Required for OIDC token
+      contents: read
+
+    steps:
+      - name: Install epack
+        run: |
+          curl -sSL https://install.epack.dev | bash
+
+      - name: Collect AWS posture
+        run: |
+          epack collect
+        # epack.yaml should have:
+        # collectors:
+        #   aws:
+        #     source: "locktivity/epack-collector-aws@^0.1.0"
+        #     config:
+        #       auth_mode: "oidc"
+        #       role_arn: "arn:aws:iam::123456789012:role/EpackCollectorRole"
+        #     secrets:
+        #       - ACTIONS_ID_TOKEN_REQUEST_URL
+        #       - ACTIONS_ID_TOKEN_REQUEST_TOKEN
+```
+
+The `secrets` field tells epack to pass through the `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` environment variables (provided by GitHub when `id-token: write` permission is set). The collector uses these to obtain an OIDC token.
+
+### GitHub Actions with AssumeRole
+
+If OIDC isn't available, use `aws-actions/configure-aws-credentials` to obtain bootstrap credentials:
+
+```yaml
+name: Security Posture Collection
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    permissions:
       id-token: write
       contents: read
 
@@ -170,7 +250,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::123456789012:role/EpackCollectorRole
+          role-to-assume: arn:aws:iam::BOOTSTRAP_ACCOUNT:role/BootstrapRole
           aws-region: us-east-1
 
       - name: Install epack
@@ -180,9 +260,70 @@ jobs:
       - name: Collect AWS posture
         run: |
           epack collect
+        # epack.yaml should have:
+        # collectors:
+        #   aws:
+        #     source: "locktivity/epack-collector-aws@^0.1.0"
+        #     config:
+        #       auth_mode: "assume_role"
+        #       role_arn: "arn:aws:iam::TARGET_ACCOUNT:role/EpackCollectorRole"
+        #       external_id: "your-external-id"
 ```
 
 ## Terraform for IAM Role
+
+### OIDC Trust Policy (Recommended for GitHub Actions)
+
+```hcl
+# First, create the GitHub OIDC provider (once per account)
+resource "aws_iam_openid_connect_provider" "github" {
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = ["ffffffffffffffffffffffffffffffffffffffff"]
+}
+
+resource "aws_iam_role" "epack_collector" {
+  name = "EpackCollectorRole"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:*"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "epack_collector" {
+  role       = aws_iam_role.epack_collector.name
+  policy_arn = aws_iam_policy.epack_collector.arn
+}
+
+variable "github_org" {
+  description = "GitHub organization name"
+  type        = string
+}
+
+variable "github_repo" {
+  description = "GitHub repository name"
+  type        = string
+}
+```
+
+### AssumeRole Trust Policy
 
 ```hcl
 resource "aws_iam_role" "epack_collector" {
@@ -212,6 +353,21 @@ resource "aws_iam_role_policy_attachment" "epack_collector" {
   policy_arn = aws_iam_policy.epack_collector.arn
 }
 
+variable "collector_account_id" {
+  description = "AWS account ID where the collector runs"
+  type        = string
+}
+
+variable "external_id" {
+  description = "External ID for assume role"
+  type        = string
+  default     = "epack-collector"
+}
+```
+
+### Collector Policy (shared by both)
+
+```hcl
 resource "aws_iam_policy" "epack_collector" {
   name        = "EpackCollectorPolicy"
   description = "Read-only access for epack AWS collector"
@@ -253,16 +409,5 @@ resource "aws_iam_policy" "epack_collector" {
       }
     ]
   })
-}
-
-variable "collector_account_id" {
-  description = "AWS account ID where the collector runs"
-  type        = string
-}
-
-variable "external_id" {
-  description = "External ID for assume role"
-  type        = string
-  default     = "epack-collector"
 }
 ```

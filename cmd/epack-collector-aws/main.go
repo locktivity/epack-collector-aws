@@ -28,6 +28,7 @@ func run(ctx componentsdk.CollectorContext) error {
 	// Build config from SDK context
 	cfg := ctx.Config()
 	config := collector.Config{
+		AuthMode:   getString(cfg, "auth_mode"),
 		Regions:    getStringSlice(cfg, "regions"),
 		OnStatus:   ctx.Status,
 		OnProgress: ctx.Progress,

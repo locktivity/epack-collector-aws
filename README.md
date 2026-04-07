@@ -27,14 +27,40 @@ make build
 
 ## Configuration
 
-### Single Account
+### Authentication Modes
+
+The collector supports two authentication modes via the `auth_mode` option:
+
+- **`oidc`** - Uses GitHub Actions OIDC for credential-free authentication (recommended for GitHub Actions)
+- **`assume_role`** - Uses standard AssumeRole with optional external_id (default for backward compatibility)
+
+### Single Account with OIDC (Recommended)
 
 ```yaml
 collectors:
-  - name: aws
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
     config:
+      auth_mode: "oidc"
       role_arn: "arn:aws:iam::123456789012:role/EpackCollectorRole"
-      external_id: "unique-external-id"  # optional
+      regions:
+        - us-east-1
+        - us-west-2
+    secrets:
+      - ACTIONS_ID_TOKEN_REQUEST_URL
+      - ACTIONS_ID_TOKEN_REQUEST_TOKEN
+```
+
+### Single Account with AssumeRole
+
+```yaml
+collectors:
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
+    config:
+      auth_mode: "assume_role"
+      role_arn: "arn:aws:iam::123456789012:role/EpackCollectorRole"
+      external_id: "unique-external-id"
       regions:
         - us-east-1
         - us-west-2
@@ -44,16 +70,19 @@ collectors:
 
 ```yaml
 collectors:
-  - name: aws
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
     config:
+      auth_mode: "oidc"  # or "assume_role"
       accounts:
         - role_arn: "arn:aws:iam::111111111111:role/EpackCollectorRole"
-          external_id: "prod-external-id"
         - role_arn: "arn:aws:iam::222222222222:role/EpackCollectorRole"
-          external_id: "staging-external-id"
       regions:
         - us-east-1
         - us-west-2
+    secrets:
+      - ACTIONS_ID_TOKEN_REQUEST_URL
+      - ACTIONS_ID_TOKEN_REQUEST_TOKEN
 ```
 
 ### Default Credentials

@@ -173,3 +173,104 @@ func TestParseCredentialReportErrorsAndEmpty(t *testing.T) {
 		t.Fatalf("expected zero users for header-only report")
 	}
 }
+
+func TestIsGitHubActionsOIDCAvailable(t *testing.T) {
+	t.Run("not available when env vars missing", func(t *testing.T) {
+		// Clear any existing values
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+
+		if IsGitHubActionsOIDCAvailable() {
+			t.Fatal("expected OIDC to be unavailable when env vars are empty")
+		}
+	})
+
+	t.Run("not available when only URL set", func(t *testing.T) {
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://example.com/token")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+
+		if IsGitHubActionsOIDCAvailable() {
+			t.Fatal("expected OIDC to be unavailable when only URL is set")
+		}
+	})
+
+	t.Run("not available when only token set", func(t *testing.T) {
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "gha_token")
+
+		if IsGitHubActionsOIDCAvailable() {
+			t.Fatal("expected OIDC to be unavailable when only token is set")
+		}
+	})
+
+	t.Run("available when both env vars set", func(t *testing.T) {
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://example.com/token")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "gha_token")
+
+		if !IsGitHubActionsOIDCAvailable() {
+			t.Fatal("expected OIDC to be available when both env vars are set")
+		}
+	})
+}
+
+func TestNewGitHubOIDCTokenSource(t *testing.T) {
+	ts := NewGitHubOIDCTokenSource()
+	if ts == nil {
+		t.Fatal("expected non-nil token source")
+	}
+	if ts.cachedToken != "" {
+		t.Fatal("expected empty cached token on new source")
+	}
+	if !ts.cachedAt.IsZero() {
+		t.Fatal("expected zero cachedAt on new source")
+	}
+}
+
+func TestGitHubOIDCTokenSource_CachingBehavior(t *testing.T) {
+	t.Run("returns error when OIDC not available", func(t *testing.T) {
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+
+		ts := NewGitHubOIDCTokenSource()
+		_, err := ts.GetIdentityToken()
+		if err == nil {
+			t.Fatal("expected error when OIDC env vars not set")
+		}
+		if !strings.Contains(err.Error(), "OIDC not available") {
+			t.Fatalf("expected OIDC not available error, got: %v", err)
+		}
+	})
+
+	t.Run("uses cached token within TTL", func(t *testing.T) {
+		ts := NewGitHubOIDCTokenSource()
+		// Manually set a cached token
+		ts.cachedToken = "cached_jwt_token"
+		ts.cachedAt = time.Now()
+
+		token, err := ts.GetIdentityToken()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if string(token) != "cached_jwt_token" {
+			t.Fatalf("expected cached token, got: %s", token)
+		}
+	})
+
+	t.Run("refetches token after TTL expires", func(t *testing.T) {
+		// This test verifies the cache is bypassed after TTL
+		// We can't easily mock the HTTP call, but we can verify the logic
+		ts := NewGitHubOIDCTokenSource()
+		ts.cachedToken = "old_token"
+		ts.cachedAt = time.Now().Add(-tokenCacheTTL - time.Minute) // Expired
+
+		// Without valid env vars, this should attempt to fetch and fail
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+
+		_, err := ts.GetIdentityToken()
+		if err == nil {
+			t.Fatal("expected error when cache expired and env vars not set")
+		}
+		// This proves the cache was bypassed
+	})
+}

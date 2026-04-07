@@ -2,13 +2,67 @@
 
 ## Authentication
 
-The AWS collector supports multiple authentication methods:
+The AWS collector supports multiple authentication methods. The `auth_mode` option controls how the collector assumes IAM roles:
 
-### 1. IAM Role (Recommended for Cross-Account)
+- `oidc` - Uses GitHub Actions OIDC to assume roles via `AssumeRoleWithWebIdentity` (recommended for GitHub Actions)
+- `assume_role` - Uses standard `AssumeRole` with optional `external_id` (default for backward compatibility)
 
-Create an IAM role in each target account with the required permissions and a trust policy allowing the collector to assume it.
+### 1. GitHub Actions OIDC (Recommended)
 
-**Trust Policy:**
+When running in GitHub Actions, OIDC provides secure, credential-free authentication. The collector obtains a JWT token from GitHub and exchanges it for temporary AWS credentials.
+
+**Trust Policy (OIDC):**
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": "repo:your-org/your-repo:*"
+        }
+      }
+    }
+  ]
+}
+```
+
+**Configuration:**
+
+```yaml
+collectors:
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
+    config:
+      auth_mode: "oidc"
+      role_arn: "arn:aws:iam::123456789012:role/EpackCollectorRole"
+    secrets:
+      - ACTIONS_ID_TOKEN_REQUEST_URL
+      - ACTIONS_ID_TOKEN_REQUEST_TOKEN
+```
+
+**GitHub Actions Workflow:**
+
+```yaml
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+```
+
+### 2. IAM Role with AssumeRole
+
+For environments without OIDC support, use standard `AssumeRole` with bootstrap credentials.
+
+**Trust Policy (AssumeRole):**
 
 ```json
 {
@@ -34,13 +88,15 @@ Create an IAM role in each target account with the required permissions and a tr
 
 ```yaml
 collectors:
-  - name: aws
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
     config:
+      auth_mode: "assume_role"
       role_arn: "arn:aws:iam::123456789012:role/EpackCollectorRole"
       external_id: "your-external-id"
 ```
 
-### 2. Default Credential Chain
+### 3. Default Credential Chain
 
 If no `role_arn` is specified, the collector uses the AWS SDK's default credential chain:
 
@@ -50,7 +106,8 @@ If no `role_arn` is specified, the collector uses the AWS SDK's default credenti
 
 ```yaml
 collectors:
-  - name: aws
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
     config:
       regions:
         - us-east-1
@@ -164,10 +221,39 @@ Create a managed policy with these read-only permissions:
 
 For organizations with multiple AWS accounts:
 
+### With OIDC (Recommended)
+
+Each target account needs a role trusting the GitHub OIDC provider:
+
 ```yaml
 collectors:
-  - name: aws
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
     config:
+      auth_mode: "oidc"
+      accounts:
+        - role_arn: "arn:aws:iam::111111111111:role/EpackCollectorRole"
+        - role_arn: "arn:aws:iam::222222222222:role/EpackCollectorRole"
+        - role_arn: "arn:aws:iam::333333333333:role/EpackCollectorRole"
+      regions:
+        - us-east-1
+        - us-west-2
+        - eu-west-1
+    secrets:
+      - ACTIONS_ID_TOKEN_REQUEST_URL
+      - ACTIONS_ID_TOKEN_REQUEST_TOKEN
+```
+
+### With AssumeRole
+
+Each target account needs a role trusting the bootstrap account:
+
+```yaml
+collectors:
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
+    config:
+      auth_mode: "assume_role"
       accounts:
         - role_arn: "arn:aws:iam::111111111111:role/EpackCollectorRole"
           external_id: "prod-123"
@@ -181,13 +267,16 @@ collectors:
         - eu-west-1
 ```
 
+> **Note:** `external_id` is ignored in OIDC mode. The OIDC token claims provide equivalent security through repository/branch constraints in the trust policy.
+
 ## Region Configuration
 
 By default, the collector discovers all enabled regions in the account. To limit to specific regions:
 
 ```yaml
 collectors:
-  - name: aws
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
     config:
       regions:
         - us-east-1

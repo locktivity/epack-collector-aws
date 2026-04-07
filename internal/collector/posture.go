@@ -3,6 +3,17 @@ package collector
 
 import "time"
 
+// Auth mode constants for AWS authentication strategy.
+const (
+	// AuthModeOIDC uses GitHub Actions OIDC to assume roles via AssumeRoleWithWebIdentity.
+	// Each target role must trust the GitHub OIDC provider directly.
+	AuthModeOIDC = "oidc"
+
+	// AuthModeAssumeRole uses standard AssumeRole with optional external_id.
+	// Requires bootstrap AWS credentials (e.g., from aws-actions/configure-aws-credentials).
+	AuthModeAssumeRole = "assume_role"
+)
+
 // StatusFunc is called to report indeterminate status updates.
 type StatusFunc func(message string)
 
@@ -11,8 +22,9 @@ type ProgressFunc func(current, total int64, message string)
 
 // Config holds the collector configuration passed via stdin.
 type Config struct {
-	Accounts []AccountConfig `json:"accounts"` // Accounts to collect from
-	Regions  []string        `json:"regions"`  // Regions to scan (empty = all enabled)
+	AuthMode string          `json:"auth_mode"` // Authentication mode: "oidc" or "assume_role" (default: "assume_role")
+	Accounts []AccountConfig `json:"accounts"`  // Accounts to collect from
+	Regions  []string        `json:"regions"`   // Regions to scan (empty = all enabled)
 
 	// Progress callbacks (optional, set by main to report status)
 	OnStatus   StatusFunc   `json:"-"`

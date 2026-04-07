@@ -3,7 +3,12 @@ package aws
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -95,6 +100,116 @@ func NewClientWithRole(ctx context.Context, roleARN, externalID string) (*AWSCli
 	cfg.Credentials = aws.NewCredentialsCache(creds)
 
 	return &AWSClient{cfg: cfg}, nil
+}
+
+// NewClientWithWebIdentity creates a new AWS client using web identity federation.
+// The tokenSource must implement stscreds.IdentityTokenRetriever.
+func NewClientWithWebIdentity(ctx context.Context, roleARN string, tokenSource stscreds.IdentityTokenRetriever) (*AWSClient, error) {
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading AWS config: %w", err)
+	}
+
+	stsClient := sts.NewFromConfig(cfg)
+	creds := stscreds.NewWebIdentityRoleProvider(stsClient, roleARN, tokenSource, func(o *stscreds.WebIdentityRoleOptions) {
+		o.Duration = 1 * time.Hour
+	})
+
+	cfg.Credentials = aws.NewCredentialsCache(creds)
+
+	return &AWSClient{cfg: cfg}, nil
+}
+
+// tokenCacheTTL is how long to cache OIDC tokens before refetching.
+// GitHub OIDC tokens typically expire in ~10-15 minutes.
+// We use a shorter TTL to ensure tokens are fresh for multi-account runs.
+const tokenCacheTTL = 5 * time.Minute
+
+// GitHubOIDCTokenSource fetches OIDC tokens from GitHub Actions.
+// It implements stscreds.IdentityTokenRetriever.
+type GitHubOIDCTokenSource struct {
+	// cachedToken holds a previously fetched token to avoid redundant requests.
+	cachedToken string
+	// cachedAt tracks when the token was cached for TTL-based refresh.
+	cachedAt time.Time
+}
+
+// NewGitHubOIDCTokenSource creates a new token source for GitHub Actions OIDC.
+func NewGitHubOIDCTokenSource() *GitHubOIDCTokenSource {
+	return &GitHubOIDCTokenSource{}
+}
+
+// GetIdentityToken fetches an OIDC token from GitHub Actions with audience "sts.amazonaws.com".
+// Returns the cached token if still valid, otherwise fetches a new one.
+func (g *GitHubOIDCTokenSource) GetIdentityToken() ([]byte, error) {
+	// Return cached token if still within TTL
+	if g.cachedToken != "" && time.Since(g.cachedAt) < tokenCacheTTL {
+		return []byte(g.cachedToken), nil
+	}
+
+	token, err := fetchGitHubOIDCToken()
+	if err != nil {
+		return nil, err
+	}
+	g.cachedToken = token
+	g.cachedAt = time.Now()
+	return []byte(token), nil
+}
+
+// fetchGitHubOIDCToken requests an OIDC token from GitHub Actions.
+// Requires ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN env vars.
+func fetchGitHubOIDCToken() (string, error) {
+	requestURL := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
+	requestToken := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+
+	if requestURL == "" || requestToken == "" {
+		return "", fmt.Errorf("GitHub Actions OIDC not available: ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN not set")
+	}
+
+	// Add audience parameter for AWS STS using proper URL parsing
+	parsedURL, err := url.Parse(requestURL)
+	if err != nil {
+		return "", fmt.Errorf("parsing OIDC token request URL: %w", err)
+	}
+	query := parsedURL.Query()
+	query.Set("audience", "sts.amazonaws.com")
+	parsedURL.RawQuery = query.Encode()
+
+	req, err := http.NewRequest("GET", parsedURL.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("creating OIDC token request: %w", err)
+	}
+	req.Header.Set("Authorization", "bearer "+requestToken)
+	req.Header.Set("Accept", "application/json; api-version=2.0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("requesting OIDC token: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("OIDC token request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("parsing OIDC token response: %w", err)
+	}
+
+	if result.Value == "" {
+		return "", fmt.Errorf("OIDC token response missing 'value' field")
+	}
+
+	return result.Value, nil
+}
+
+// IsGitHubActionsOIDCAvailable returns true if running in GitHub Actions with OIDC enabled.
+func IsGitHubActionsOIDCAvailable() bool {
+	return os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "" && os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN") != ""
 }
 
 // GetCallerIdentity returns the account ID of the current credentials.

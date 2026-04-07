@@ -10,7 +10,8 @@ import (
 
 // Collector collects AWS account security posture.
 type Collector struct {
-	config Config
+	config      Config
+	tokenSource *aws.GitHubOIDCTokenSource // Cached token source for OIDC mode
 }
 
 // status reports an indeterminate status update.
@@ -46,21 +47,24 @@ func (c *Collector) Collect(ctx context.Context) (*Output, error) {
 	total := int64(len(accounts))
 	c.status("Starting AWS posture collection")
 
-	// Track account errors for diagnostics
+	// Track account errors and warnings for diagnostics
 	var accountErrors []string
+	var warnings []string
+
+	// Determine effective auth mode and initialize
+	authMode, oidcWarnings, err := c.initializeAuth(accounts)
+	if err != nil {
+		return nil, err
+	}
+	warnings = append(warnings, oidcWarnings...)
 
 	// Collect from each account
 	for i, acct := range accounts {
 		c.progress(int64(i+1), total, fmt.Sprintf("Collecting account %d of %d", i+1, len(accounts)))
 
-		posture, err := c.collectAccount(ctx, acct)
+		posture, err := c.collectAccount(ctx, acct, authMode)
 		if err != nil {
-			// Track error for diagnostics
-			roleInfo := "default credentials"
-			if acct.RoleARN != "" {
-				roleInfo = acct.RoleARN
-			}
-			errMsg := fmt.Sprintf("failed to collect account (%s): %v", roleInfo, err)
+			errMsg := formatAccountError(acct, err)
 			accountErrors = append(accountErrors, errMsg)
 			c.status(errMsg)
 			continue
@@ -68,10 +72,11 @@ func (c *Collector) Collect(ctx context.Context) (*Output, error) {
 		output.Accounts = append(output.Accounts, *posture)
 	}
 
-	// Add diagnostics if there were any errors
-	if len(accountErrors) > 0 {
+	// Add diagnostics if there were any errors or warnings
+	if len(accountErrors) > 0 || len(warnings) > 0 {
 		output.Diagnostics = &Diagnostics{
 			AccountErrors: accountErrors,
+			Warnings:      warnings,
 		}
 	}
 
@@ -80,10 +85,10 @@ func (c *Collector) Collect(ctx context.Context) (*Output, error) {
 }
 
 // collectAccount collects posture for a single AWS account.
-func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig) (*AccountPosture, error) {
+func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig, authMode string) (*AccountPosture, error) {
 	// Create client for this account
 	c.status("Connecting to AWS...")
-	client, err := c.createClient(ctx, acctConfig)
+	client, err := c.createClient(ctx, acctConfig, authMode)
 	if err != nil {
 		return nil, err
 	}
@@ -123,20 +128,35 @@ func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig
 }
 
 // createClient creates an AWS client for the given account configuration.
-func (c *Collector) createClient(ctx context.Context, acctConfig AccountConfig) (*aws.AWSClient, error) {
-	if acctConfig.RoleARN != "" {
+func (c *Collector) createClient(ctx context.Context, acctConfig AccountConfig, authMode string) (*aws.AWSClient, error) {
+	// No role ARN means use default credentials
+	if acctConfig.RoleARN == "" {
+		client, err := aws.NewClient(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("creating AWS client: %w", err)
+		}
+		return client, nil
+	}
+
+	// Route based on auth mode
+	switch authMode {
+	case AuthModeOIDC:
+		client, err := aws.NewClientWithWebIdentity(ctx, acctConfig.RoleARN, c.tokenSource)
+		if err != nil {
+			return nil, fmt.Errorf("creating AWS client with web identity: %w", err)
+		}
+		return client, nil
+
+	case AuthModeAssumeRole:
 		client, err := aws.NewClientWithRole(ctx, acctConfig.RoleARN, acctConfig.ExternalID)
 		if err != nil {
 			return nil, fmt.Errorf("creating AWS client with role: %w", err)
 		}
 		return client, nil
-	}
 
-	client, err := aws.NewClient(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("creating AWS client: %w", err)
+	default:
+		return nil, fmt.Errorf("unknown auth_mode: %s", authMode)
 	}
-	return client, nil
 }
 
 // getRegions returns the regions to scan, either from config or from AWS.
@@ -198,4 +218,77 @@ func (c *Collector) collectSecurityServices(ctx context.Context, client *aws.AWS
 	if acctSec, err := c.collectAccountSecurity(ctx, client, primaryRegion, regions); err == nil {
 		posture.AccountSecurity = *acctSec
 	}
+}
+
+// resolveAuthMode determines the effective authentication mode based on config.
+// If auth_mode is omitted, defaults to assume_role for backward compatibility.
+// Returns empty string if no role ARNs are specified (will use default credentials).
+func (c *Collector) resolveAuthMode(accounts []AccountConfig) (string, error) {
+	// Check if any accounts have role ARNs (need auth mode selection)
+	hasRoleARNs := false
+	for _, acct := range accounts {
+		if acct.RoleARN != "" {
+			hasRoleARNs = true
+			break
+		}
+	}
+
+	// If no role ARNs, no auth mode needed (default credentials)
+	if !hasRoleARNs {
+		return "", nil
+	}
+
+	// Determine effective auth mode (default to assume_role for backward compatibility)
+	authMode := c.config.AuthMode
+	if authMode == "" {
+		authMode = AuthModeAssumeRole
+	}
+
+	// Validate auth mode
+	switch authMode {
+	case AuthModeOIDC:
+		if !aws.IsGitHubActionsOIDCAvailable() {
+			return "", fmt.Errorf("auth_mode is 'oidc' but GitHub Actions OIDC is not available (missing ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN)")
+		}
+	case AuthModeAssumeRole:
+		// Valid, no additional checks needed
+	default:
+		return "", fmt.Errorf("invalid auth_mode %q: must be %q or %q", authMode, AuthModeOIDC, AuthModeAssumeRole)
+	}
+
+	return authMode, nil
+}
+
+// initializeAuth sets up authentication mode and returns any warnings.
+// For OIDC mode, initializes the token source and checks for incompatible settings.
+func (c *Collector) initializeAuth(accounts []AccountConfig) (authMode string, warnings []string, err error) {
+	authMode, err = c.resolveAuthMode(accounts)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if authMode != AuthModeOIDC {
+		return authMode, nil, nil
+	}
+
+	// Initialize OIDC token source
+	c.tokenSource = aws.NewGitHubOIDCTokenSource()
+
+	// Check for incompatible settings
+	for _, acct := range accounts {
+		if acct.ExternalID != "" {
+			warnings = append(warnings, fmt.Sprintf("external_id is ignored in OIDC mode for role %s", acct.RoleARN))
+		}
+	}
+
+	return authMode, warnings, nil
+}
+
+// formatAccountError creates a diagnostic error message for a failed account collection.
+func formatAccountError(acct AccountConfig, err error) string {
+	roleInfo := "default credentials"
+	if acct.RoleARN != "" {
+		roleInfo = acct.RoleARN
+	}
+	return fmt.Sprintf("failed to collect account (%s): %v", roleInfo, err)
 }
