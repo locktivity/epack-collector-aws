@@ -30,6 +30,14 @@ type Output struct {
 	SchemaVersion string           `json:"schema_version"`
 	CollectedAt   string           `json:"collected_at"`
 	Accounts      []AccountPosture `json:"accounts"`
+	Diagnostics   *Diagnostics     `json:"diagnostics,omitempty"`
+}
+
+// Diagnostics contains warnings and errors encountered during collection.
+// This helps identify permission issues vs features that are genuinely disabled.
+type Diagnostics struct {
+	AccountErrors []string `json:"account_errors,omitempty"`
+	Warnings      []string `json:"warnings,omitempty"`
 }
 
 // AccountPosture represents the collected security posture of a single AWS account.

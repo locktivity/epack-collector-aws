@@ -46,16 +46,33 @@ func (c *Collector) Collect(ctx context.Context) (*Output, error) {
 	total := int64(len(accounts))
 	c.status("Starting AWS posture collection")
 
+	// Track account errors for diagnostics
+	var accountErrors []string
+
 	// Collect from each account
 	for i, acct := range accounts {
 		c.progress(int64(i+1), total, fmt.Sprintf("Collecting account %d of %d", i+1, len(accounts)))
 
 		posture, err := c.collectAccount(ctx, acct)
 		if err != nil {
-			// Log error but continue with other accounts
+			// Track error for diagnostics
+			roleInfo := "default credentials"
+			if acct.RoleARN != "" {
+				roleInfo = acct.RoleARN
+			}
+			errMsg := fmt.Sprintf("failed to collect account (%s): %v", roleInfo, err)
+			accountErrors = append(accountErrors, errMsg)
+			c.status(errMsg)
 			continue
 		}
 		output.Accounts = append(output.Accounts, *posture)
+	}
+
+	// Add diagnostics if there were any errors
+	if len(accountErrors) > 0 {
+		output.Diagnostics = &Diagnostics{
+			AccountErrors: accountErrors,
+		}
 	}
 
 	c.status("Collection complete")
