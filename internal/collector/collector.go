@@ -12,6 +12,12 @@ import (
 type Collector struct {
 	config      Config
 	tokenSource *aws.GitHubOIDCTokenSource // Cached token source for OIDC mode
+	warnings    []string                   // Service-level warnings accumulated during collection
+}
+
+// warn records a service-level warning for diagnostics.
+func (c *Collector) warn(format string, args ...interface{}) {
+	c.warnings = append(c.warnings, fmt.Sprintf(format, args...))
 }
 
 // status reports an indeterminate status update.
@@ -36,6 +42,9 @@ func New(config Config) (*Collector, error) {
 // Collect fetches and aggregates security posture metrics for all configured accounts.
 func (c *Collector) Collect(ctx context.Context) (*Output, error) {
 	output := NewOutput()
+
+	// Reset service-level warnings from any previous run
+	c.warnings = nil
 
 	// Determine which accounts to collect from
 	accounts := c.config.Accounts
@@ -72,11 +81,14 @@ func (c *Collector) Collect(ctx context.Context) (*Output, error) {
 		output.Accounts = append(output.Accounts, *posture)
 	}
 
+	// Combine all warnings (auth warnings + service-level warnings)
+	allWarnings := append(warnings, c.warnings...)
+
 	// Add diagnostics if there were any errors or warnings
-	if len(accountErrors) > 0 || len(warnings) > 0 {
+	if len(accountErrors) > 0 || len(allWarnings) > 0 {
 		output.Diagnostics = &Diagnostics{
 			AccountErrors: accountErrors,
-			Warnings:      warnings,
+			Warnings:      allWarnings,
 		}
 	}
 
@@ -117,7 +129,7 @@ func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig
 	c.collectGlobalMetrics(ctx, client, accountID, posture)
 
 	// Collect regional metrics (RDS, Network)
-	rdsMetrics, networkMetrics := c.collectRegionalMetrics(ctx, client, regions)
+	rdsMetrics, networkMetrics := c.collectRegionalMetrics(ctx, client, regions, accountID)
 	posture.RDS = rdsMetrics.RDSMetrics
 	posture.Network = networkMetrics.NetworkMetrics
 
@@ -178,17 +190,21 @@ func (c *Collector) collectGlobalMetrics(ctx context.Context, client *aws.AWSCli
 	c.status("Collecting IAM metrics...")
 	if iamMetrics, err := c.collectIAMMetrics(ctx, client, accountID); err == nil {
 		posture.IAM = *iamMetrics
+	} else {
+		c.warn("account %s: failed to collect IAM metrics: %v", accountID, err)
 	}
 
 	// S3 metrics (global bucket list)
 	c.status("Collecting S3 metrics...")
 	if s3Metrics, err := c.collectS3Metrics(ctx, client, accountID); err == nil {
 		posture.S3 = *s3Metrics
+	} else {
+		c.warn("account %s: failed to collect S3 metrics: %v", accountID, err)
 	}
 }
 
 // collectRegionalMetrics collects RDS and network metrics across all regions.
-func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSClient, regions []string) (rdsMetricsWithCounts, networkMetricsWithCounts) {
+func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSClient, regions []string, accountID string) (rdsMetricsWithCounts, networkMetricsWithCounts) {
 	var rdsMetrics rdsMetricsWithCounts
 	var networkMetrics networkMetricsWithCounts
 
@@ -198,10 +214,14 @@ func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSC
 
 		if rds, err := c.collectRDSMetrics(ctx, client, region); err == nil {
 			rdsMetrics = mergeRDSMetrics(rdsMetrics, *rds)
+		} else {
+			c.warn("account %s region %s: failed to collect RDS metrics: %v", accountID, region, err)
 		}
 
 		if network, err := c.collectNetworkMetrics(ctx, client, region); err == nil {
 			networkMetrics = mergeNetworkMetrics(networkMetrics, *network)
+		} else {
+			c.warn("account %s region %s: failed to collect network metrics: %v", accountID, region, err)
 		}
 	}
 
@@ -215,7 +235,9 @@ func (c *Collector) collectSecurityServices(ctx context.Context, client *aws.AWS
 		primaryRegion = regions[0]
 	}
 
-	if acctSec, err := c.collectAccountSecurity(ctx, client, primaryRegion, regions); err == nil {
+	// collectAccountSecurity handles per-service warnings internally
+	acctSec, _ := c.collectAccountSecurity(ctx, client, primaryRegion, regions, posture.AccountID)
+	if acctSec != nil {
 		posture.AccountSecurity = *acctSec
 	}
 }

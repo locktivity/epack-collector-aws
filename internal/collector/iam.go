@@ -44,7 +44,7 @@ func (c *Collector) processCredentialReport(report *aws.CredentialReport, metric
 
 	// Calculate percentages
 	metrics.IAMUsersPresent = stats.totalUsers > 0
-	metrics.MFAEnabled = percent(stats.mfaEnabled, stats.totalUsers)
+	metrics.MFAEnabled = mfaEnabledPercent(stats.mfaEnabled, stats.totalUsers)
 	metrics.HardwareMFAEnabled = 0 // Would need additional API calls
 	metrics.AccessKeysRotated = accessKeyRotationPercent(stats.keysRotated, stats.usersWithKeys)
 }
@@ -92,6 +92,15 @@ func hasRotatedKeys(user aws.CredentialReportUser, threshold time.Time) bool {
 		}
 	}
 	return true
+}
+
+// mfaEnabledPercent treats accounts with no IAM users as fully compliant.
+// MFA requirements only apply when console users exist.
+func mfaEnabledPercent(mfaEnabled, totalUsers int) int {
+	if totalUsers == 0 {
+		return MaxPercentage
+	}
+	return percent(mfaEnabled, totalUsers)
 }
 
 // accessKeyRotationPercent treats accounts with no active access keys as fully compliant.

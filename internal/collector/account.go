@@ -8,31 +8,32 @@ import (
 )
 
 // collectAccountSecurity collects account-level security service status.
-func (c *Collector) collectAccountSecurity(ctx context.Context, client *aws.AWSClient, primaryRegion string, regions []string) (*AccountSecurity, error) {
+func (c *Collector) collectAccountSecurity(ctx context.Context, client *aws.AWSClient, primaryRegion string, regions []string, accountID string) (*AccountSecurity, error) {
 	security := &AccountSecurity{}
 
 	c.status("Checking CloudTrail...")
-	c.collectCloudTrailStatus(ctx, client, &security.CloudTrail)
+	c.collectCloudTrailStatus(ctx, client, accountID, &security.CloudTrail)
 
 	c.status("Checking AWS Config...")
-	c.collectConfigStatus(ctx, client, primaryRegion, &security.Config)
+	c.collectConfigStatus(ctx, client, primaryRegion, accountID, &security.Config)
 
 	c.status("Checking GuardDuty...")
-	c.collectGuardDutyStatus(ctx, client, regions, &security.GuardDuty)
+	c.collectGuardDutyStatus(ctx, client, regions, accountID, &security.GuardDuty)
 
 	c.status("Checking Security Hub...")
-	c.collectSecurityHubStatus(ctx, client, primaryRegion, &security.SecurityHub)
+	c.collectSecurityHubStatus(ctx, client, primaryRegion, accountID, &security.SecurityHub)
 
 	c.status("Checking Inspector...")
-	c.collectInspectorStatus(ctx, client, primaryRegion, &security.Inspector)
+	c.collectInspectorStatus(ctx, client, primaryRegion, accountID, &security.Inspector)
 
 	return security, nil
 }
 
 // collectCloudTrailStatus collects CloudTrail configuration status.
-func (c *Collector) collectCloudTrailStatus(ctx context.Context, client *aws.AWSClient, status *CloudTrailStatus) {
+func (c *Collector) collectCloudTrailStatus(ctx context.Context, client *aws.AWSClient, accountID string, status *CloudTrailStatus) {
 	trails, err := client.DescribeTrails(ctx)
 	if err != nil {
+		c.warn("account %s: failed to collect CloudTrail status: %v", accountID, err)
 		return
 	}
 
@@ -47,9 +48,13 @@ func (c *Collector) collectCloudTrailStatus(ctx context.Context, client *aws.AWS
 }
 
 // collectConfigStatus collects AWS Config status.
-func (c *Collector) collectConfigStatus(ctx context.Context, client *aws.AWSClient, region string, status *ConfigStatus) {
+func (c *Collector) collectConfigStatus(ctx context.Context, client *aws.AWSClient, region string, accountID string, status *ConfigStatus) {
 	recorders, err := client.DescribeConfigRecorders(ctx, region)
-	if err != nil || len(recorders) == 0 {
+	if err != nil {
+		c.warn("account %s: failed to collect AWS Config status: %v", accountID, err)
+		return
+	}
+	if len(recorders) == 0 {
 		return
 	}
 
@@ -62,10 +67,14 @@ func (c *Collector) collectConfigStatus(ctx context.Context, client *aws.AWSClie
 }
 
 // collectGuardDutyStatus collects GuardDuty status across all regions.
-func (c *Collector) collectGuardDutyStatus(ctx context.Context, client *aws.AWSClient, regions []string, status *GuardDutyStatus) {
+func (c *Collector) collectGuardDutyStatus(ctx context.Context, client *aws.AWSClient, regions []string, accountID string, status *GuardDutyStatus) {
 	for _, region := range regions {
 		detectors, err := client.ListGuardDutyDetectors(ctx, region)
-		if err != nil || len(detectors) == 0 {
+		if err != nil {
+			c.warn("account %s region %s: failed to collect GuardDuty status: %v", accountID, region, err)
+			continue
+		}
+		if len(detectors) == 0 {
 			continue
 		}
 
@@ -77,9 +86,13 @@ func (c *Collector) collectGuardDutyStatus(ctx context.Context, client *aws.AWSC
 }
 
 // collectSecurityHubStatus collects Security Hub status.
-func (c *Collector) collectSecurityHubStatus(ctx context.Context, client *aws.AWSClient, region string, status *SecurityHubStatus) {
+func (c *Collector) collectSecurityHubStatus(ctx context.Context, client *aws.AWSClient, region string, accountID string, status *SecurityHubStatus) {
 	hubConfig, err := client.GetSecurityHubConfig(ctx, region)
-	if err != nil || hubConfig == nil {
+	if err != nil {
+		c.warn("account %s: failed to collect Security Hub status: %v", accountID, err)
+		return
+	}
+	if hubConfig == nil {
 		return
 	}
 
@@ -96,7 +109,11 @@ func (c *Collector) collectSecurityHubStatus(ctx context.Context, client *aws.AW
 		}
 
 		complianceByLevel, err := client.GetSecurityHubCISComplianceByLevel(ctx, region, standardID)
-		if err != nil || complianceByLevel == nil {
+		if err != nil {
+			c.warn("account %s: failed to collect CIS compliance for %s: %v", accountID, standardID, err)
+			continue
+		}
+		if complianceByLevel == nil {
 			continue
 		}
 
@@ -110,9 +127,13 @@ func (c *Collector) collectSecurityHubStatus(ctx context.Context, client *aws.AW
 }
 
 // collectInspectorStatus collects Inspector vulnerability posture from Security Hub findings.
-func (c *Collector) collectInspectorStatus(ctx context.Context, client *aws.AWSClient, region string, status *InspectorStatus) {
+func (c *Collector) collectInspectorStatus(ctx context.Context, client *aws.AWSClient, region string, accountID string, status *InspectorStatus) {
 	summary, err := client.GetInspectorSummaryFromSecurityHub(ctx, region)
-	if err != nil || summary == nil {
+	if err != nil {
+		c.warn("account %s: failed to collect Inspector status: %v", accountID, err)
+		return
+	}
+	if summary == nil {
 		return
 	}
 

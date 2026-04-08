@@ -114,6 +114,56 @@ func TestProcessCredentialReport_NoActiveAccessKeys(t *testing.T) {
 	}
 }
 
+func TestMFAEnabledPercent(t *testing.T) {
+	// No users = 100% (vacuously compliant)
+	if got := mfaEnabledPercent(0, 0); got != 100 {
+		t.Fatalf("expected 100%% for no users, got %d", got)
+	}
+
+	// All users have MFA
+	if got := mfaEnabledPercent(5, 5); got != 100 {
+		t.Fatalf("expected 100%% when all users have MFA, got %d", got)
+	}
+
+	// Half users have MFA
+	if got := mfaEnabledPercent(2, 4); got != 50 {
+		t.Fatalf("expected 50%% when half users have MFA, got %d", got)
+	}
+
+	// No users have MFA
+	if got := mfaEnabledPercent(0, 5); got != 0 {
+		t.Fatalf("expected 0%% when no users have MFA, got %d", got)
+	}
+}
+
+func TestProcessCredentialReportNoUsers(t *testing.T) {
+	// Root-only account (no IAM users)
+	report := &aws.CredentialReport{
+		Users: []aws.CredentialReportUser{
+			{
+				User:             "<root_account>",
+				MFAActive:        true,
+				AccessKey1Active: false,
+				AccessKey2Active: false,
+			},
+		},
+	}
+
+	c := &Collector{}
+	metrics := &IAMMetrics{}
+	c.processCredentialReport(report, metrics)
+
+	if metrics.IAMUsersPresent {
+		t.Fatalf("expected IAMUsersPresent=false for root-only account")
+	}
+	if metrics.MFAEnabled != 100 {
+		t.Fatalf("expected MFAEnabled=100 when no IAM users exist, got %d", metrics.MFAEnabled)
+	}
+	if metrics.AccessKeysRotated != 100 {
+		t.Fatalf("expected AccessKeysRotated=100 when no IAM users with keys exist, got %d", metrics.AccessKeysRotated)
+	}
+}
+
 func TestHasExternalTrust(t *testing.T) {
 	current := "203984714075"
 
