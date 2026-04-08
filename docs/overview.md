@@ -10,7 +10,7 @@ The AWS collector gathers security posture metrics from AWS accounts, providing 
 |--------|-------------|
 | `iam_users_present` | Whether at least one IAM user (excluding root) exists in the account |
 | `mfa_enabled` | Percentage of IAM users with MFA enabled |
-| `hardware_mfa_enabled` | Percentage of IAM users with hardware MFA (currently reported as 0) |
+| `hardware_mfa_enabled` | Percentage of IAM users with hardware MFA (physical OTP devices or FIDO/U2F security keys) |
 | `access_keys_rotated` | Percentage of access keys rotated within 90 days |
 | `root_mfa_enabled` | Whether the root account has MFA enabled |
 | `root_access_keys_exist` | Whether root has access keys (should be false) |

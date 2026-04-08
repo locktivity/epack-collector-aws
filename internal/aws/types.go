@@ -63,6 +63,13 @@ type PasswordPolicy struct {
 	HardExpiry                 bool
 }
 
+// MFADevice represents an MFA device assigned to an IAM user.
+type MFADevice struct {
+	UserName     string
+	SerialNumber string
+	EnableDate   time.Time
+}
+
 // Role represents an IAM role with trust policy info.
 type Role struct {
 	RoleName                 string

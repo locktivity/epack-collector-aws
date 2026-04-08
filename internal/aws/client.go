@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/securityhub"
 	securityhubtypes "github.com/aws/aws-sdk-go-v2/service/securityhub/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/smithy-go"
 )
 
 // Client provides access to AWS APIs.
@@ -43,6 +45,7 @@ type Client interface {
 
 	// IAM
 	GetCredentialReport(ctx context.Context) (*CredentialReport, error)
+	ListMFADevices(ctx context.Context, userName string) ([]MFADevice, error)
 	GetPasswordPolicy(ctx context.Context) (*PasswordPolicy, error)
 	ListRoles(ctx context.Context, callback func([]Role) error) error
 
@@ -336,6 +339,32 @@ func (c *AWSClient) GetCredentialReport(ctx context.Context) (*CredentialReport,
 	return nil, fmt.Errorf("credential report generation timed out")
 }
 
+// ListMFADevices returns MFA devices assigned to a specific IAM user.
+func (c *AWSClient) ListMFADevices(ctx context.Context, userName string) ([]MFADevice, error) {
+	iamClient := iam.NewFromConfig(c.cfg)
+	paginator := iam.NewListMFADevicesPaginator(iamClient, &iam.ListMFADevicesInput{
+		UserName: aws.String(userName),
+	})
+
+	var devices []MFADevice
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing MFA devices for %s: %w", userName, err)
+		}
+
+		for _, device := range output.MFADevices {
+			devices = append(devices, MFADevice{
+				UserName:     aws.ToString(device.UserName),
+				SerialNumber: aws.ToString(device.SerialNumber),
+				EnableDate:   aws.ToTime(device.EnableDate),
+			})
+		}
+	}
+
+	return devices, nil
+}
+
 // parseCredentialReport parses the CSV credential report.
 func parseCredentialReport(content []byte) (*CredentialReport, error) {
 	reader := csv.NewReader(strings.NewReader(string(content)))
@@ -572,8 +601,10 @@ func (c *AWSClient) GetAccountPublicAccessBlock(ctx context.Context, accountID s
 		AccountId: aws.String(accountID),
 	})
 	if err != nil {
-		// No configuration means not enabled
-		return false, nil
+		if isAPIErrorCode(err, "NoSuchPublicAccessBlockConfiguration") {
+			return false, nil
+		}
+		return false, fmt.Errorf("getting account public access block: %w", err)
 	}
 
 	if output.PublicAccessBlockConfiguration == nil {
@@ -758,9 +789,10 @@ func (c *AWSClient) DescribeTrails(ctx context.Context) ([]Trail, error) {
 		status, err := ctClient.GetTrailStatus(ctx, &cloudtrail.GetTrailStatusInput{
 			Name: t.Name,
 		})
-		if err == nil {
-			trail.IsLogging = aws.ToBool(status.IsLogging)
+		if err != nil {
+			return nil, fmt.Errorf("getting trail status for %s: %w", aws.ToString(t.Name), err)
 		}
+		trail.IsLogging = aws.ToBool(status.IsLogging)
 
 		trails = append(trails, trail)
 	}
@@ -778,14 +810,18 @@ func (c *AWSClient) DescribeConfigRecorders(ctx context.Context, region string) 
 	if err != nil {
 		return nil, fmt.Errorf("describing config recorders: %w", err)
 	}
+	if len(output.ConfigurationRecorders) == 0 {
+		return []ConfigRecorder{}, nil
+	}
 
 	// Get recorder status
 	statusOutput, err := configClient.DescribeConfigurationRecorderStatus(ctx, &configservice.DescribeConfigurationRecorderStatusInput{})
+	if err != nil {
+		return nil, fmt.Errorf("describing config recorder status: %w", err)
+	}
 	statusMap := make(map[string]bool)
-	if err == nil {
-		for _, s := range statusOutput.ConfigurationRecordersStatus {
-			statusMap[aws.ToString(s.Name)] = s.Recording
-		}
+	for _, s := range statusOutput.ConfigurationRecordersStatus {
+		statusMap[aws.ToString(s.Name)] = s.Recording
 	}
 
 	recorders := make([]ConfigRecorder, 0, len(output.ConfigurationRecorders))
@@ -909,8 +945,10 @@ func (c *AWSClient) GetSecurityHubConfig(ctx context.Context, region string) (*S
 
 	hubOutput, err := shClient.DescribeHub(ctx, &securityhub.DescribeHubInput{})
 	if err != nil {
-		// Security Hub not enabled
-		return nil, nil
+		if isAPIErrorCode(err, "ResourceNotFoundException") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("describing Security Hub: %w", err)
 	}
 
 	config := &SecurityHubConfig{
@@ -920,10 +958,11 @@ func (c *AWSClient) GetSecurityHubConfig(ctx context.Context, region string) (*S
 
 	// Get enabled standards
 	standardsOutput, err := shClient.GetEnabledStandards(ctx, &securityhub.GetEnabledStandardsInput{})
-	if err == nil {
-		for _, s := range standardsOutput.StandardsSubscriptions {
-			config.StandardsARNs = append(config.StandardsARNs, aws.ToString(s.StandardsArn))
-		}
+	if err != nil {
+		return nil, fmt.Errorf("getting enabled Security Hub standards: %w", err)
+	}
+	for _, s := range standardsOutput.StandardsSubscriptions {
+		config.StandardsARNs = append(config.StandardsARNs, aws.ToString(s.StandardsArn))
 	}
 
 	// Get integrations
@@ -967,7 +1006,7 @@ func (c *AWSClient) GetSecurityHubCISComplianceByLevel(ctx context.Context, regi
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("getting Security Hub findings for %s: %w", standardID, err)
 		}
 
 		for _, finding := range output.Findings {
@@ -1117,7 +1156,7 @@ func (c *AWSClient) GetInspectorSummaryFromSecurityHub(ctx context.Context, regi
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("getting Inspector findings from Security Hub: %w", err)
 		}
 
 		for _, finding := range output.Findings {
@@ -1179,7 +1218,7 @@ func (c *AWSClient) ListAccessAnalyzers(ctx context.Context, region string) ([]A
 
 	listOutput, err := aaClient.ListAnalyzers(ctx, &accessanalyzer.ListAnalyzersInput{})
 	if err != nil {
-		return nil, nil // Access Analyzer might not be available
+		return nil, fmt.Errorf("listing access analyzers: %w", err)
 	}
 
 	analyzers := make([]AccessAnalyzer, 0, len(listOutput.Analyzers))
@@ -1203,4 +1242,9 @@ func (c *AWSClient) ListAccessAnalyzers(ctx context.Context, region string) ([]A
 	}
 
 	return analyzers, nil
+}
+
+func isAPIErrorCode(err error, code string) bool {
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == code
 }

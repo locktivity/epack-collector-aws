@@ -1,12 +1,26 @@
 package collector
 
 import (
+	"context"
+	"errors"
 	"net/url"
 	"testing"
 	"time"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 )
+
+type fakeMFADeviceLister struct {
+	devices map[string][]aws.MFADevice
+	errs    map[string]error
+}
+
+func (f fakeMFADeviceLister) ListMFADevices(_ context.Context, userName string) ([]aws.MFADevice, error) {
+	if err, ok := f.errs[userName]; ok {
+		return nil, err
+	}
+	return f.devices[userName], nil
+}
 
 func TestHasRotatedKeys(t *testing.T) {
 	now := time.Now()
@@ -133,6 +147,114 @@ func TestMFAEnabledPercent(t *testing.T) {
 	// No users have MFA
 	if got := mfaEnabledPercent(0, 5); got != 0 {
 		t.Fatalf("expected 0%% when no users have MFA, got %d", got)
+	}
+}
+
+func TestHardwareMFAEnabledPercent(t *testing.T) {
+	if got := hardwareMFAEnabledPercent(0, 0); got != 100 {
+		t.Fatalf("expected 100%% for no users, got %d", got)
+	}
+
+	if got := hardwareMFAEnabledPercent(4, 4); got != 100 {
+		t.Fatalf("expected 100%% when all users have hardware MFA, got %d", got)
+	}
+
+	if got := hardwareMFAEnabledPercent(1, 4); got != 25 {
+		t.Fatalf("expected 25%% when one of four users has hardware MFA, got %d", got)
+	}
+
+	if got := hardwareMFAEnabledPercent(0, 4); got != 0 {
+		t.Fatalf("expected 0%% when no users have hardware MFA, got %d", got)
+	}
+}
+
+func TestIsHardwareMFASerial(t *testing.T) {
+	testCases := []struct {
+		name   string
+		serial string
+		want   bool
+	}{
+		{
+			name:   "virtual MFA arn",
+			serial: "arn:aws:iam::123456789012:mfa/alice",
+			want:   false,
+		},
+		{
+			name:   "hardware OTP serial",
+			serial: "GAKT12345678",
+			want:   true,
+		},
+		{
+			name:   "fido security key arn",
+			serial: "arn:aws:iam::123456789012:u2f/user/alice/fidosecuritykey1-EXAMPLE",
+			want:   true,
+		},
+		{
+			name:   "empty serial",
+			serial: "",
+			want:   false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isHardwareMFASerial(tc.serial); got != tc.want {
+				t.Fatalf("isHardwareMFASerial(%q) = %v, want %v", tc.serial, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCollectHardwareMFAMetrics(t *testing.T) {
+	report := &aws.CredentialReport{
+		Users: []aws.CredentialReportUser{
+			{User: "<root_account>", MFAActive: true},
+			{User: "alice", MFAActive: true},
+			{User: "bob", MFAActive: true},
+			{User: "carol", MFAActive: false},
+		},
+	}
+
+	lister := fakeMFADeviceLister{
+		devices: map[string][]aws.MFADevice{
+			"alice": {
+				{UserName: "alice", SerialNumber: "arn:aws:iam::123456789012:mfa/alice"},
+			},
+			"bob": {
+				{UserName: "bob", SerialNumber: "arn:aws:iam::123456789012:u2f/user/bob/security-key"},
+			},
+		},
+	}
+
+	c := &Collector{}
+	got := c.collectHardwareMFAMetrics(context.Background(), lister, report, "123456789012")
+
+	if got != 33 {
+		t.Fatalf("expected HardwareMFAEnabled=33, got %d", got)
+	}
+}
+
+func TestCollectHardwareMFAMetricsWarnsOnDeviceLookupFailure(t *testing.T) {
+	report := &aws.CredentialReport{
+		Users: []aws.CredentialReportUser{
+			{User: "alice", MFAActive: true},
+		},
+	}
+
+	lister := fakeMFADeviceLister{
+		errs: map[string]error{
+			"alice": errors.New("permission denied"),
+		},
+	}
+
+	c := &Collector{}
+	got := c.collectHardwareMFAMetrics(context.Background(), lister, report, "123456789012")
+
+	if got != 0 {
+		t.Fatalf("expected HardwareMFAEnabled=0 on lookup failure, got %d", got)
+	}
+	if len(c.warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(c.warnings))
 	}
 }
 

@@ -1,12 +1,14 @@
 package aws
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	securityhubtypes "github.com/aws/aws-sdk-go-v2/service/securityhub/types"
+	"github.com/aws/smithy-go"
 )
 
 func TestRegionForRoleARN(t *testing.T) {
@@ -191,6 +193,29 @@ func TestCISStatusSeverity(t *testing.T) {
 	}
 	if cisStatusSeverity(securityhubtypes.ComplianceStatusPassed) <= cisStatusSeverity(securityhubtypes.ComplianceStatusNotAvailable) {
 		t.Fatalf("expected PASSED to outrank NOT_AVAILABLE")
+	}
+}
+
+func TestIsAPIErrorCode(t *testing.T) {
+	err := &smithy.GenericAPIError{
+		Code:    "ResourceNotFoundException",
+		Message: "not found",
+	}
+
+	if !isAPIErrorCode(err, "ResourceNotFoundException") {
+		t.Fatalf("expected matching API error code")
+	}
+	if isAPIErrorCode(err, "InvalidAccessException") {
+		t.Fatalf("did not expect non-matching API error code")
+	}
+
+	wrapped := fmt.Errorf("wrapped: %w", err)
+	if !isAPIErrorCode(wrapped, "ResourceNotFoundException") {
+		t.Fatalf("expected wrapped API error code to match")
+	}
+
+	if isAPIErrorCode(fmt.Errorf("plain error"), "ResourceNotFoundException") {
+		t.Fatalf("did not expect plain error to match API error code")
 	}
 }
 

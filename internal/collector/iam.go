@@ -11,8 +11,12 @@ import (
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 )
 
+type mfaDeviceLister interface {
+	ListMFADevices(ctx context.Context, userName string) ([]aws.MFADevice, error)
+}
+
 // collectIAMMetrics collects IAM-related security metrics.
-func (c *Collector) collectIAMMetrics(ctx context.Context, client *aws.AWSClient, _ string) (*IAMMetrics, error) {
+func (c *Collector) collectIAMMetrics(ctx context.Context, client *aws.AWSClient, accountID string) (*IAMMetrics, error) {
 	metrics := &IAMMetrics{}
 
 	// Get credential report
@@ -23,6 +27,7 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client *aws.AWSClient
 
 	// Process credential report
 	c.processCredentialReport(report, metrics)
+	metrics.HardwareMFAEnabled = c.collectHardwareMFAMetrics(ctx, client, report, accountID)
 
 	return metrics, nil
 }
@@ -45,8 +50,37 @@ func (c *Collector) processCredentialReport(report *aws.CredentialReport, metric
 	// Calculate percentages
 	metrics.IAMUsersPresent = stats.totalUsers > 0
 	metrics.MFAEnabled = mfaEnabledPercent(stats.mfaEnabled, stats.totalUsers)
-	metrics.HardwareMFAEnabled = 0 // Would need additional API calls
 	metrics.AccessKeysRotated = accessKeyRotationPercent(stats.keysRotated, stats.usersWithKeys)
+}
+
+// collectHardwareMFAMetrics checks each IAM user's MFA device type.
+// Hardware MFA includes physical OTP devices and FIDO/U2F security keys.
+func (c *Collector) collectHardwareMFAMetrics(ctx context.Context, client mfaDeviceLister, report *aws.CredentialReport, accountID string) int {
+	totalUsers := 0
+	hardwareMFAUsers := 0
+
+	for _, user := range report.Users {
+		if user.IsRootUser() {
+			continue
+		}
+
+		totalUsers++
+		if !user.MFAActive {
+			continue
+		}
+
+		devices, err := client.ListMFADevices(ctx, user.User)
+		if err != nil {
+			c.warn("account %s: failed to list MFA devices for IAM user %s: %v", accountID, user.User, err)
+			continue
+		}
+
+		if hasHardwareMFADevice(devices) {
+			hardwareMFAUsers++
+		}
+	}
+
+	return hardwareMFAEnabledPercent(hardwareMFAUsers, totalUsers)
 }
 
 // userStats tracks counts during credential report processing.
@@ -110,6 +144,34 @@ func accessKeyRotationPercent(keysRotated, usersWithKeys int) int {
 		return MaxPercentage
 	}
 	return percent(keysRotated, usersWithKeys)
+}
+
+// hardwareMFAEnabledPercent treats accounts with no IAM users as fully compliant.
+func hardwareMFAEnabledPercent(hardwareMFAUsers, totalUsers int) int {
+	if totalUsers == 0 {
+		return MaxPercentage
+	}
+	return percent(hardwareMFAUsers, totalUsers)
+}
+
+// hasHardwareMFADevice returns true if any assigned device is a hardware MFA device.
+func hasHardwareMFADevice(devices []aws.MFADevice) bool {
+	for _, device := range devices {
+		if isHardwareMFASerial(device.SerialNumber) {
+			return true
+		}
+	}
+	return false
+}
+
+// isHardwareMFASerial classifies IAM MFA device serials.
+// Virtual MFA devices use the IAM :mfa/ ARN prefix; hardware OTP devices use
+// vendor serials, and FIDO/U2F devices use the IAM :u2f/ ARN prefix.
+func isHardwareMFASerial(serial string) bool {
+	if serial == "" {
+		return false
+	}
+	return !strings.Contains(serial, ":mfa/")
 }
 
 // hasExternalTrust checks if a role's trust policy allows external accounts.

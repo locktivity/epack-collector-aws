@@ -12,8 +12,12 @@ func (c *Collector) collectS3Metrics(ctx context.Context, client *aws.AWSClient,
 	metrics := &S3Metrics{}
 
 	// Get account-level public access block
-	accountBlocked, _ := client.GetAccountPublicAccessBlock(ctx, accountID)
-	metrics.AccountPublicAccessBlockEnabled = accountBlocked
+	accountBlocked, err := client.GetAccountPublicAccessBlock(ctx, accountID)
+	if err != nil {
+		c.warn("account %s: failed to collect account-level S3 public access block: %v", accountID, err)
+	} else {
+		metrics.AccountPublicAccessBlockEnabled = accountBlocked
+	}
 
 	// List buckets and get their settings
 	buckets, err := client.ListBuckets(ctx)
