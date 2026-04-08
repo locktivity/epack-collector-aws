@@ -5,6 +5,8 @@
 package main
 
 import (
+	"time"
+
 	"github.com/locktivity/epack-collector-aws/internal/collector"
 	"github.com/locktivity/epack/componentsdk"
 )
@@ -21,6 +23,7 @@ func main() {
 		Version:     Version,
 		Commit:      Commit,
 		Description: "Collects AWS account security posture metrics",
+		Timeout:     10 * time.Minute,
 	}, run)
 }
 
