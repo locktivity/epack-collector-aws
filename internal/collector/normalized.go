@@ -7,21 +7,21 @@ import "time"
 // This follows the evidencepack/cloud-posture@v1 schema specification.
 // Fields are designed to be vendor-agnostic (works for AWS, GCP, Azure).
 type CloudPosture struct {
-	SchemaVersion string                 `json:"schema_version"`
-	CollectedAt   string                 `json:"collected_at"`
-	Provider      string                 `json:"provider"`
-	Accounts      []CloudPostureAccount  `json:"accounts"`
+	SchemaVersion string                `json:"schema_version"`
+	CollectedAt   string                `json:"collected_at"`
+	Provider      string                `json:"provider"`
+	Accounts      []CloudPostureAccount `json:"accounts"`
 }
 
 // CloudPostureAccount contains normalized metrics for a single cloud account.
 type CloudPostureAccount struct {
-	AccountID    string                    `json:"account_id"`
-	IAM          CloudPostureIAM           `json:"iam"`
-	Storage      CloudPostureStorage       `json:"storage"`
-	Logging      CloudPostureLogging       `json:"logging"`
-	Network      CloudPostureNetwork       `json:"network"`
-	Backup       CloudPostureBackup        `json:"backup"`
-	VulnScanning CloudPostureVulnScanning  `json:"vuln_scanning"`
+	AccountID    string                   `json:"account_id"`
+	IAM          CloudPostureIAM          `json:"iam"`
+	Storage      CloudPostureStorage      `json:"storage"`
+	Logging      CloudPostureLogging      `json:"logging"`
+	Network      CloudPostureNetwork      `json:"network"`
+	Backup       CloudPostureBackup       `json:"backup"`
+	VulnScanning CloudPostureVulnScanning `json:"vuln_scanning"`
 }
 
 // CloudPostureIAM contains normalized IAM metrics.
@@ -33,14 +33,14 @@ type CloudPostureIAM struct {
 
 // CloudPostureStorage contains normalized storage security metrics.
 type CloudPostureStorage struct {
-	EncryptionPct         float64 `json:"encryption_pct"`
+	EncryptionPct          float64 `json:"encryption_pct"`
 	PublicAccessBlockedPct float64 `json:"public_access_blocked_pct"`
 }
 
 // CloudPostureLogging contains normalized logging configuration.
 type CloudPostureLogging struct {
-	CloudTrailEnabled     bool `json:"cloudtrail_enabled"`
-	CloudTrailMultiregion bool `json:"cloudtrail_multiregion"`
+	CloudTrailEnabled     bool    `json:"cloudtrail_enabled"`
+	CloudTrailMultiregion bool    `json:"cloudtrail_multiregion"`
 	FlowLogsPct           float64 `json:"flow_logs_pct"`
 }
 

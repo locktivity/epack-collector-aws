@@ -1,6 +1,47 @@
 package collector
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/locktivity/epack-collector-aws/internal/aws"
+	"github.com/locktivity/epack/componentsdk"
+)
+
+func TestDBInstanceToRow_TrustOmitsRestorableTime(t *testing.T) {
+	restorable := time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)
+	inst := aws.DBInstance{
+		DBInstanceIdentifier: "i-prod",
+		Engine:               "postgres",
+		EngineVersion:        "15.4",
+		LatestRestorableTime: &restorable,
+	}
+	row := dbInstanceToRow(inst, "us-west-2", componentsdk.LevelAudit)
+	if row.LatestRestorableTime != "" {
+		t.Errorf("audit-only row should omit LatestRestorableTime, got %q", row.LatestRestorableTime)
+	}
+	if row.Region != "us-west-2" || row.Identifier != "i-prod" {
+		t.Errorf("base audit fields mis-projected: %+v", row)
+	}
+}
+
+func TestDBInstanceToRow_InternalPopulatesRestorableTime(t *testing.T) {
+	restorable := time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)
+	inst := aws.DBInstance{DBInstanceIdentifier: "i-prod", LatestRestorableTime: &restorable}
+	row := dbInstanceToRow(inst, "us-east-1", componentsdk.LevelInternal)
+	if row.LatestRestorableTime != "2026-05-14T10:00:00Z" {
+		t.Errorf("internal row should have RFC3339 restorable time, got %q", row.LatestRestorableTime)
+	}
+}
+
+func TestDBClusterToRow_InternalPopulatesRestorableTime(t *testing.T) {
+	restorable := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	cl := aws.DBCluster{DBClusterIdentifier: "c-prod", LatestRestorableTime: &restorable}
+	row := dbClusterToRow(cl, "us-east-1", componentsdk.LevelInternal)
+	if row.LatestRestorableTime != "2026-04-01T00:00:00Z" {
+		t.Errorf("internal cluster row should have RFC3339 restorable time, got %q", row.LatestRestorableTime)
+	}
+}
 
 func TestMergeRDSMetrics(t *testing.T) {
 	a := rdsMetricsWithCounts{
@@ -54,5 +95,48 @@ func TestMergeRDSMetricsZeroCounts(t *testing.T) {
 	got := mergeRDSMetrics(rdsMetricsWithCounts{}, rdsMetricsWithCounts{})
 	if got.EncryptedAtRest != 0 || got.PubliclyAccessible != 0 || got.MultiAZEnabled != 0 {
 		t.Fatalf("expected zero metrics, got %+v", got.RDSMetrics)
+	}
+}
+
+func TestMergeRDSMetrics_ConcatenatesAuditInventories(t *testing.T) {
+	a := rdsMetricsWithCounts{
+		RDSMetrics: RDSMetrics{
+			Instances: []RDSInstance{{Identifier: "i-east", Region: "us-east-1"}},
+			Clusters:  []RDSCluster{{Identifier: "c-east", Region: "us-east-1"}},
+		},
+		instanceCount: 1,
+		clusterCount:  1,
+	}
+	b := rdsMetricsWithCounts{
+		RDSMetrics: RDSMetrics{
+			Instances: []RDSInstance{
+				{Identifier: "i-west-1", Region: "us-west-2"},
+				{Identifier: "i-west-2", Region: "us-west-2"},
+			},
+		},
+		instanceCount: 2,
+		clusterCount:  0,
+	}
+
+	got := mergeRDSMetrics(a, b)
+	if len(got.Instances) != 3 {
+		t.Fatalf("expected 3 instances after merge, got %d", len(got.Instances))
+	}
+	if got.Instances[0].Region != "us-east-1" || got.Instances[1].Region != "us-west-2" || got.Instances[2].Region != "us-west-2" {
+		t.Errorf("merge did not preserve insertion order: %+v", got.Instances)
+	}
+	if len(got.Clusters) != 1 {
+		t.Errorf("expected 1 cluster (no clusters in b), got %d", len(got.Clusters))
+	}
+}
+
+func TestMergeRDSMetrics_EmptyAuditSlicesStayEmpty(t *testing.T) {
+	// Trust-only collection: no Instances/Clusters populated.
+	a := rdsMetricsWithCounts{instanceCount: 5}
+	b := rdsMetricsWithCounts{instanceCount: 3}
+
+	got := mergeRDSMetrics(a, b)
+	if len(got.Instances) != 0 || len(got.Clusters) != 0 {
+		t.Errorf("trust-only merge should not populate audit slices, got %+v / %+v", got.Instances, got.Clusters)
 	}
 }

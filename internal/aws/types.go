@@ -101,6 +101,11 @@ type DBInstance struct {
 	BackupRetentionPeriod   int
 	MultiAZ                 bool
 	AutoMinorVersionUpgrade bool
+
+	// LatestRestorableTime is the most recent point-in-time recovery target
+	// (PITR). Nil for instances without PITR support or when AWS has not yet
+	// computed a restorable time for a newly-created instance.
+	LatestRestorableTime *time.Time
 }
 
 // DBCluster represents an RDS cluster with security settings.
@@ -112,6 +117,52 @@ type DBCluster struct {
 	DeletionProtection    bool
 	BackupRetentionPeriod int
 	MultiAZ               bool // Inferred from cluster type
+
+	// LatestRestorableTime is the most recent point-in-time recovery target.
+	// Nil semantics match DBInstance above.
+	LatestRestorableTime *time.Time
+}
+
+// BucketPolicy is a raw S3 bucket policy document. Nil means no policy
+// (NoSuchBucketPolicy from the API), distinct from an empty document.
+type BucketPolicy struct {
+	Document string
+}
+
+// BucketACL is the parsed ACL for an S3 bucket. HasPublicGrant is true if
+// any grant targets the AllUsers or AuthenticatedUsers canonical groups.
+type BucketACL struct {
+	OwnerID        string
+	Grants         []BucketACLGrant
+	HasPublicGrant bool
+}
+
+// BucketACLGrant is a single grant entry. For canonical-user grantees,
+// GranteeID is populated. For group grantees (AllUsers, AuthenticatedUsers,
+// LogDelivery), GranteeURI is populated. The two are mutually exclusive.
+type BucketACLGrant struct {
+	GranteeType string // "CanonicalUser", "Group", "AmazonCustomerByEmail"
+	GranteeURI  string
+	GranteeID   string
+	Permission  string // FULL_CONTROL, WRITE, WRITE_ACP, READ, READ_ACP
+}
+
+// BucketLifecycle is the parsed lifecycle configuration. Nil means no
+// lifecycle config (NoSuchLifecycleConfiguration from the API).
+type BucketLifecycle struct {
+	Rules []BucketLifecycleRule
+}
+
+// BucketLifecycleRule is one rule from a lifecycle configuration. Transitions
+// and Expiration are normalized to human-readable strings (e.g., "30d→STANDARD_IA",
+// "365d") rather than the SDK's raw nested types, since the consumer use case
+// is forensic / audit-trail not lifecycle-rule editing.
+type BucketLifecycleRule struct {
+	ID          string
+	Status      string // Enabled / Disabled
+	Prefix      string
+	Transitions []string
+	Expiration  string
 }
 
 // VPC represents a VPC with security settings.
@@ -131,11 +182,17 @@ type SecurityGroup struct {
 }
 
 // SecurityGroupRule represents a security group ingress rule.
+//
+// CIDRBlocks captures IPv4/IPv6 ingress sources. SourceSGIDs captures rules
+// that allow ingress from other security groups (the common pattern in default
+// SGs and tier-to-tier rules). A rule can have either, both, or neither
+// populated; an empty rule (both nil) is a degenerate config worth flagging.
 type SecurityGroupRule struct {
-	Protocol   string // "tcp", "udp", "icmp", "-1" (all)
-	FromPort   int
-	ToPort     int
-	CIDRBlocks []string
+	Protocol    string // "tcp", "udp", "icmp", "-1" (all)
+	FromPort    int
+	ToPort      int
+	CIDRBlocks  []string
+	SourceSGIDs []string
 }
 
 // IsOpenToWorld returns true if the rule allows traffic from 0.0.0.0/0 or ::/0.
@@ -183,6 +240,19 @@ type ConfigRecorder struct {
 	Recording     bool
 }
 
+// ConfigRule represents a single AWS Config rule and its most recent
+// evaluation state. Compliance state is intentionally a string (rather than a
+// typed enum) so that future AWS-side additions surface as-is instead of
+// being silently downgraded to an "unknown" bucket.
+type ConfigRule struct {
+	Name             string
+	ARN              string
+	SourceOwner      string
+	SourceIdentifier string
+	ComplianceState  string
+	LastEvaluated    *time.Time
+}
+
 // GuardDutyDetector represents a GuardDuty detector.
 type GuardDutyDetector struct {
 	DetectorID                             string
@@ -193,6 +263,21 @@ type GuardDutyDetector struct {
 	MalwareScanEnabled                     bool
 	HighOrCriticalFindings                 int
 	HighOrCriticalFindingsOlderThan48Hours int
+}
+
+// GuardDutyFinding is a single unarchived high-or-critical GuardDuty finding,
+// stripped to the fields useful for a breach-investigation triage list.
+// Severity follows AWS's 0.1-8.9 scale; 7+ is the high/critical band we filter on.
+type GuardDutyFinding struct {
+	ID           string
+	DetectorID   string
+	Severity     float64
+	Type         string
+	Title        string
+	ResourceType string
+	ResourceID   string
+	CreatedAt    *time.Time
+	UpdatedAt    *time.Time
 }
 
 // SecurityHubConfig represents Security Hub configuration.
@@ -236,4 +321,204 @@ type AccessAnalyzer struct {
 	Type          string // ACCOUNT or ORGANIZATION
 	Status        string
 	FindingsCount int
+}
+
+// IdentityCenterInstance is a single AWS IAM Identity Center (formerly AWS SSO)
+// instance. There is at most one instance per account, deployed in one home
+// region.
+type IdentityCenterInstance struct {
+	InstanceARN     string
+	IdentityStoreID string
+	Region          string
+}
+
+// IdentityCenterPermissionSet is one permission set provisioned to the
+// instance. ManagedPolicyARNs is empty unless the caller requested internal-
+// level enrichment; HasInlinePolicy is similarly populated at internal level
+// (presence only, not contents — the policy document may encode tenant-specific
+// authorization logic).
+type IdentityCenterPermissionSet struct {
+	ARN                    string
+	Name                   string
+	Description            string
+	SessionDurationISO8601 string
+	ManagedPoliciesCount   int
+	AccountsAssignedCount  int
+	ManagedPolicyARNs      []string
+	HasInlinePolicy        bool
+}
+
+// IdentityStoreUser is one user in the identity store. PrimaryEmail is the
+// email marked Primary on the user; Status is "ENABLED" / "DISABLED" as
+// reported by the identity store.
+type IdentityStoreUser struct {
+	UserID       string
+	UserName     string
+	DisplayName  string
+	PrimaryEmail string
+	Status       string
+}
+
+// IdentityStoreGroup is one group in the identity store. MemberCount is
+// populated only at internal level (requires an extra paginated call per group).
+type IdentityStoreGroup struct {
+	GroupID     string
+	DisplayName string
+	Description string
+	MemberCount int
+}
+
+// SSMParameter is a single Parameter Store parameter's posture-relevant
+// metadata. Parameter VALUES are never collected — only the metadata returned
+// by DescribeParameters. The forbidden-API lint enforces this at build time.
+//
+// KMSKeyARN is only meaningful for SecureString parameters; String and
+// StringList types aren't encrypted (their values are stored as plaintext).
+// For SecureString, an empty KMSKeyARN means the parameter uses the AWS-managed
+// `aws/ssm` key (still encrypted, but no customer key control).
+type SSMParameter struct {
+	Name             string
+	Type             string // String / StringList / SecureString
+	DataType         string // text / aws:ec2:image / aws:ssm:integration
+	Version          int64
+	Tier             string // Standard / Advanced / Intelligent-Tiering
+	Description      string
+	KMSKeyARN        string
+	LastModifiedDate *time.Time
+	LastModifiedUser string
+}
+
+// SecretsManagerSecret is a single Secrets Manager secret's posture-relevant
+// metadata. Secret VALUES are never collected — this type intentionally has
+// no fields that could carry SecretString or SecretBinary, and the surface's
+// AWS client never invokes value-reading APIs (enforced structurally by this
+// type and at build time by the forbidden-API lint).
+//
+// KMSKeyARN is the customer-managed key ARN when the secret encrypts with one;
+// empty when the secret uses the default `aws/secretsmanager` AWS-managed key.
+//
+// DeletionDate is set only when the secret is scheduled for deletion (the
+// AWS recovery-window state).
+type SecretsManagerSecret struct {
+	Name              string
+	ARN               string
+	Description       string
+	KMSKeyARN         string
+	RotationEnabled   bool
+	RotationLambdaARN string
+	RotationDays      int64
+	NextRotationDate  *time.Time
+	CreatedDate       *time.Time
+	LastChangedDate   *time.Time
+	LastAccessedDate  *time.Time
+	DeletionDate      *time.Time
+	PrimaryRegion     string
+	OwningService     string
+	Tags              map[string]string
+}
+
+// KMSKey is a single CUSTOMER-managed KMS key's posture-relevant metadata.
+// AWS-managed keys are intentionally excluded — the customer has no posture
+// lever over them. KeyManager will always be "CUSTOMER" here.
+//
+// RotationEnabled is only meaningful for symmetric CMKs (KeySpec
+// SYMMETRIC_DEFAULT); asymmetric keys don't support rotation. Callers that
+// compute the "rotation disabled" trust aggregate must filter on KeySpec.
+//
+// DeletionDate is set only when KeyState is "PendingDeletion".
+type KMSKey struct {
+	KeyID           string
+	ARN             string
+	KeyState        string
+	KeyUsage        string
+	KeySpec         string
+	Origin          string
+	MultiRegion     bool
+	CreationDate    *time.Time
+	DeletionDate    *time.Time
+	RotationEnabled bool
+	Description     string
+	Aliases         []string
+}
+
+// CloudWatchLogGroup is a single CloudWatch Logs log group's posture-relevant
+// metadata. RetentionInDays of 0 represents "Never expire" — log groups
+// without a retention policy. KMSKeyARN is the customer-managed key when set;
+// empty means the group uses AWS-managed encryption (still encrypted, but
+// without customer key control).
+type CloudWatchLogGroup struct {
+	Name            string
+	ARN             string
+	CreationTime    *time.Time
+	RetentionInDays int32
+	StoredBytes     int64
+	KMSKeyARN       string
+}
+
+// EC2Instance is a single EC2 instance's posture-relevant metadata.
+//
+// HTTPTokens carries the raw IMDS enforcement value ("required" for IMDSv2,
+// "optional" otherwise). The collector exposes this as a typed boolean trust
+// aggregate plus the raw string at audit so reviewers can verify the source.
+//
+// Tags and AttachedVolumeIDs are populated only at internal level (extracted
+// from the same DescribeInstances response, no extra API calls). IAMInstanceProfileARN
+// likewise comes from the base call but is internal-only because it pairs an
+// instance with the role that can act on its behalf.
+type EC2Instance struct {
+	InstanceID   string
+	InstanceType string
+	State        string
+	LaunchTime   *time.Time
+	ImageID      string
+
+	VPCID       string
+	SubnetID    string
+	HasPublicIP bool
+	PublicIP    string
+
+	HTTPTokens   string
+	HTTPHopLimit int
+
+	SecurityGroupIDs      []string
+	IAMInstanceProfileARN string
+	KeyName               string
+
+	// AttachedVolumeIDs is populated from BlockDeviceMappings; the corresponding
+	// encryption flags come from a separate DescribeVolumes call joined in the
+	// collector. RootVolumeID is the volume backing the root device, used to
+	// surface root-volume encryption specifically (vs any-attached).
+	AttachedVolumeIDs []string
+	RootVolumeID      string
+	Tags              map[string]string
+}
+
+// LambdaFunction is a single Lambda function's posture-relevant metadata.
+//
+// EnvVarNames carries the environment variable KEYS only; values are dropped
+// at the SDK boundary so they cannot leak into the artifact. This is the only
+// safe answer for env vars: keys reveal which integrations a function is wired
+// to (useful for posture review) without exposing the secret material that
+// values typically hold.
+//
+// HasResourcePolicy, HasFunctionURL, and FunctionURLAuthType are not populated
+// by ListFunctions; they require per-function follow-up calls and are filled
+// in by the collector at audit level or higher.
+type LambdaFunction struct {
+	Name          string
+	ARN           string
+	Runtime       string
+	Architectures []string
+	LastModified  *time.Time
+	MemorySize    int
+	Timeout       int
+	PackageType   string // "Zip" or "Image"
+	CodeSize      int64
+
+	RoleARN       string
+	KMSKeyARN     string // env var encryption key (only set when customer KMS is in use)
+	LayerARNs     []string
+	HasVPCConfig  bool
+	DeadLetterARN string
+	EnvVarNames   []string
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -341,5 +342,211 @@ func TestHasExternalPrincipal(t *testing.T) {
 	}
 	if !hasExternalPrincipal("*", current) {
 		t.Fatalf("expected wildcard principal to be treated as external")
+	}
+}
+
+// fakeRoleLister is a minimal in-memory roleLister for collector tests.
+type fakeRoleLister struct {
+	roles []aws.Role
+	err   error
+}
+
+func (f fakeRoleLister) ListRoles(_ context.Context, callback func([]aws.Role) error) error {
+	if f.err != nil {
+		return f.err
+	}
+	return callback(f.roles)
+}
+
+func TestIAMUsersFromReport_ExcludesRoot(t *testing.T) {
+	report := &aws.CredentialReport{
+		Users: []aws.CredentialReportUser{
+			{
+				User:             "<root_account>",
+				MFAActive:        true,
+				AccessKey1Active: false,
+			},
+			{
+				User:             "alice",
+				ARN:              "arn:aws:iam::123:user/alice",
+				MFAActive:        true,
+				PasswordEnabled:  true,
+				AccessKey1Active: false,
+			},
+			{
+				User:             "bob",
+				ARN:              "arn:aws:iam::123:user/bob",
+				MFAActive:        false,
+				PasswordEnabled:  false,
+				AccessKey1Active: true,
+			},
+		},
+	}
+
+	c := &Collector{}
+	users := c.iamUsersFromReport(report)
+
+	if len(users) != 2 {
+		t.Fatalf("expected 2 users (root excluded), got %d", len(users))
+	}
+	if users[0].UserName != "alice" {
+		t.Errorf("expected first user alice, got %q", users[0].UserName)
+	}
+	if !users[0].MFAActive || !users[0].HasConsoleAccess || users[0].HasAccessKeys {
+		t.Errorf("alice: unexpected per-user flags %+v", users[0])
+	}
+	if users[1].UserName != "bob" {
+		t.Errorf("expected second user bob, got %q", users[1].UserName)
+	}
+	if users[1].MFAActive || users[1].HasConsoleAccess || !users[1].HasAccessKeys {
+		t.Errorf("bob: unexpected per-user flags %+v", users[1])
+	}
+}
+
+func TestCollectIAMRoles_PopulatesRolesWithTrustFlag(t *testing.T) {
+	const accountID = "111111111111"
+	const externalTrust = `{"Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::999999999999:root"}}]}`
+	const internalTrust = `{"Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::111111111111:root"}}]}`
+
+	client := fakeRoleLister{roles: []aws.Role{
+		{RoleName: "external-role", ARN: "arn:aws:iam::111111111111:role/external-role", AssumeRolePolicyDocument: url.QueryEscape(externalTrust)},
+		{RoleName: "internal-role", ARN: "arn:aws:iam::111111111111:role/internal-role", AssumeRolePolicyDocument: url.QueryEscape(internalTrust)},
+	}}
+
+	c := &Collector{}
+	roles := c.collectIAMRoles(context.Background(), client, accountID)
+
+	if len(roles) != 2 {
+		t.Fatalf("expected 2 roles, got %d", len(roles))
+	}
+	if !roles[0].HasExternalTrust {
+		t.Errorf("external-role: expected HasExternalTrust=true")
+	}
+	if roles[1].HasExternalTrust {
+		t.Errorf("internal-role: expected HasExternalTrust=false")
+	}
+}
+
+func TestCollectIAMRoles_AccessDeniedEmitsDiagnostic(t *testing.T) {
+	const accountID = "111111111111"
+
+	// smithy.APIError isn't trivial to construct without importing a service package;
+	// fall back to a substring-match path covered by isAccessDeniedErr.
+	client := fakeRoleLister{err: errors.New("operation error IAM: ListRoles, https response error: AccessDenied: User is not authorized")}
+
+	c := &Collector{}
+	roles := c.collectIAMRoles(context.Background(), client, accountID)
+
+	if roles != nil {
+		t.Errorf("expected nil roles on AccessDenied, got %v", roles)
+	}
+	if len(c.warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d (%v)", len(c.warnings), c.warnings)
+	}
+	if !strings.Contains(c.warnings[0], "iam_roles") || !strings.Contains(c.warnings[0], "iam:ListRoles") {
+		t.Errorf("warning text missing structured fields: %q", c.warnings[0])
+	}
+}
+
+func TestCollectIAMRoles_OtherErrorEmitsGenericWarning(t *testing.T) {
+	const accountID = "111111111111"
+	client := fakeRoleLister{err: errors.New("connection refused")}
+
+	c := &Collector{}
+	roles := c.collectIAMRoles(context.Background(), client, accountID)
+
+	if roles != nil {
+		t.Errorf("expected nil roles on error, got %v", roles)
+	}
+	if len(c.warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d (%v)", len(c.warnings), c.warnings)
+	}
+	if strings.Contains(c.warnings[0], "access denied") {
+		t.Errorf("non-AccessDenied error should not produce access-denied warning text: %q", c.warnings[0])
+	}
+}
+
+func TestCredentialReportToInternal_OmitsNilTimestamps(t *testing.T) {
+	used := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	report := &aws.CredentialReport{
+		Users: []aws.CredentialReportUser{
+			{
+				User:                   "alice",
+				UserCreationTime:       time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+				PasswordEnabled:        true,
+				PasswordLastUsed:       &used,
+				MFAActive:              true,
+				AccessKey1Active:       true,
+				AccessKey1LastUsedDate: &used,
+				// PasswordLastChanged, AccessKey1LastRotated, AccessKey2* all nil.
+			},
+		},
+	}
+
+	out := credentialReportToInternal(report)
+	if len(out.Users) != 1 {
+		t.Fatalf("expected 1 user, got %d", len(out.Users))
+	}
+	u := out.Users[0]
+	if u.PasswordLastUsed != used.Format(time.RFC3339) {
+		t.Errorf("PasswordLastUsed=%q, want %q", u.PasswordLastUsed, used.Format(time.RFC3339))
+	}
+	if u.PasswordLastChanged != "" {
+		t.Errorf("PasswordLastChanged should be empty when nil, got %q", u.PasswordLastChanged)
+	}
+	if u.AccessKey1LastRotated != "" {
+		t.Errorf("AccessKey1LastRotated should be empty when nil, got %q", u.AccessKey1LastRotated)
+	}
+	if u.AccessKey2Active {
+		t.Errorf("AccessKey2Active should be false")
+	}
+}
+
+func TestCredentialReportToInternal_NormalizesNASentinel(t *testing.T) {
+	// AWS credential-report CSV uses "N/A" for region/service of keys that
+	// have never been used. The projection must drop these so omitempty keeps
+	// the artifact clean (no "N/A" literals leaking out).
+	report := &aws.CredentialReport{
+		Users: []aws.CredentialReportUser{
+			{
+				User:                      "alice",
+				AccessKey1Active:          false,
+				AccessKey1LastUsedRegion:  "N/A",
+				AccessKey1LastUsedService: "N/A",
+				AccessKey2Active:          true,
+				AccessKey2LastUsedRegion:  "us-east-1",
+				AccessKey2LastUsedService: "s3",
+			},
+		},
+	}
+	out := credentialReportToInternal(report)
+	u := out.Users[0]
+	if u.AccessKey1LastUsedRegion != "" {
+		t.Errorf("expected empty region for unused key (was 'N/A' from CSV), got %q", u.AccessKey1LastUsedRegion)
+	}
+	if u.AccessKey1LastUsedService != "" {
+		t.Errorf("expected empty service for unused key, got %q", u.AccessKey1LastUsedService)
+	}
+	if u.AccessKey2LastUsedRegion != "us-east-1" {
+		t.Errorf("real value should pass through, got %q", u.AccessKey2LastUsedRegion)
+	}
+	if u.AccessKey2LastUsedService != "s3" {
+		t.Errorf("real value should pass through, got %q", u.AccessKey2LastUsedService)
+	}
+}
+
+func TestCredentialReportToInternal_PreservesRootRow(t *testing.T) {
+	report := &aws.CredentialReport{
+		Users: []aws.CredentialReportUser{
+			{User: "<root_account>", MFAActive: true},
+			{User: "alice"},
+		},
+	}
+	out := credentialReportToInternal(report)
+	if len(out.Users) != 2 {
+		t.Fatalf("expected 2 users (root included for internal-level forensic value), got %d", len(out.Users))
+	}
+	if out.Users[0].UserName != "<root_account>" {
+		t.Errorf("root account should be first (preserves credential-report ordering), got %q", out.Users[0].UserName)
 	}
 }

@@ -19,12 +19,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/accessanalyzer"
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 	configservice "github.com/aws/aws-sdk-go-v2/service/configservice"
+	configtypes "github.com/aws/aws-sdk-go-v2/service/configservice/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/guardduty"
 	guarddutytypes "github.com/aws/aws-sdk-go-v2/service/guardduty/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
 	"github.com/aws/aws-sdk-go-v2/service/securityhub"
 	securityhubtypes "github.com/aws/aws-sdk-go-v2/service/securityhub/types"
@@ -52,6 +54,9 @@ type Client interface {
 	// S3
 	ListBuckets(ctx context.Context) ([]Bucket, error)
 	GetAccountPublicAccessBlock(ctx context.Context, accountID string) (bool, error)
+	GetBucketPolicy(ctx context.Context, region, bucket string) (*BucketPolicy, error)
+	GetBucketACL(ctx context.Context, region, bucket string) (*BucketACL, error)
+	GetBucketLifecycle(ctx context.Context, region, bucket string) (*BucketLifecycle, error)
 
 	// RDS (regional)
 	ListDBInstances(ctx context.Context, region string) ([]DBInstance, error)
@@ -64,11 +69,53 @@ type Client interface {
 	// Account Security (regional for some)
 	DescribeTrails(ctx context.Context) ([]Trail, error)
 	DescribeConfigRecorders(ctx context.Context, region string) ([]ConfigRecorder, error)
+	ListConfigRules(ctx context.Context, region string) ([]ConfigRule, error)
 	ListGuardDutyDetectors(ctx context.Context, region string) ([]GuardDutyDetector, error)
+	ListGuardDutyFindings(ctx context.Context, region, detectorID string, maxFindings int) ([]GuardDutyFinding, bool, error)
 	GetSecurityHubConfig(ctx context.Context, region string) (*SecurityHubConfig, error)
 	GetSecurityHubCISComplianceByLevel(ctx context.Context, region, standardID string) (*SecurityHubCISComplianceByLevel, error)
 	GetInspectorSummaryFromSecurityHub(ctx context.Context, region string) (*InspectorSummary, error)
 	ListAccessAnalyzers(ctx context.Context, region string) ([]AccessAnalyzer, error)
+
+	// IAM Identity Center (one instance per account, regional). Caller is
+	// expected to pass the home region; ListIdentityCenterInstances returns nil
+	// for accounts where IdC is not enabled in that region.
+	ListIdentityCenterInstances(ctx context.Context, region string) ([]IdentityCenterInstance, error)
+	ListIdentityCenterPermissionSets(ctx context.Context, region, instanceARN string, withInternalEnrichment bool) ([]IdentityCenterPermissionSet, error)
+	ListIdentityStoreUsers(ctx context.Context, region, identityStoreID string) ([]IdentityStoreUser, error)
+	ListIdentityStoreGroups(ctx context.Context, region, identityStoreID string, withMemberCounts bool) ([]IdentityStoreGroup, error)
+
+	// Lambda (regional). Base list returns posture metadata for every function;
+	// per-function follow-up calls supply resource-policy presence and function-URL
+	// auth-type, both of which require dedicated API calls.
+	ListLambdaFunctions(ctx context.Context, region string) ([]LambdaFunction, error)
+	LambdaFunctionHasResourcePolicy(ctx context.Context, region, functionName string) (bool, error)
+	LambdaFunctionURLAuthType(ctx context.Context, region, functionName string) (hasURL bool, authType string, err error)
+
+	// EC2 instances (regional). ListEC2Volumes returns a volumeID→encrypted
+	// lookup so callers can enrich instances without holding the full Volume
+	// objects (encryption is the only volume-level posture signal we use).
+	ListEC2Instances(ctx context.Context, region string) ([]EC2Instance, error)
+	ListEC2Volumes(ctx context.Context, region string) (map[string]bool, error)
+
+	// CloudWatch Logs (regional). All posture-relevant metadata comes from the
+	// single paginated DescribeLogGroups response; no per-group follow-up calls.
+	ListCloudWatchLogGroups(ctx context.Context, region string) ([]CloudWatchLogGroup, error)
+
+	// KMS (regional). Returns only CUSTOMER-managed keys; AWS-managed keys are
+	// filtered out (no customer posture lever). Aliases come from a single
+	// per-region ListAliases call, joined into the per-key metadata.
+	ListKMSCustomerKeys(ctx context.Context, region string) ([]KMSKey, error)
+
+	// Secrets Manager (regional). All posture-relevant metadata comes from
+	// the single paginated ListSecrets call; secret VALUES are never read.
+	ListSecretsManagerSecrets(ctx context.Context, region string) ([]SecretsManagerSecret, error)
+
+	// SSM Parameter Store (regional). Paginated DescribeParameters returns all
+	// metadata we need; parameter VALUES are never read (the value-reading APIs
+	// GetParameter / GetParameters / GetParametersByPath are blocked by the
+	// forbidden-API lint).
+	ListSSMParameters(ctx context.Context, region string) ([]SSMParameter, error)
 }
 
 // AWSClient implements the Client interface using AWS SDK v2.
@@ -594,6 +641,128 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 	return buckets, nil
 }
 
+// GetBucketPolicy returns the bucket's policy document. Returns nil with no
+// error when no policy is attached (NoSuchBucketPolicy).
+func (c *AWSClient) GetBucketPolicy(ctx context.Context, region, bucket string) (*BucketPolicy, error) {
+	s3Client := s3.NewFromConfig(c.s3ConfigForRegion(region))
+	out, err := s3Client.GetBucketPolicy(ctx, &s3.GetBucketPolicyInput{Bucket: aws.String(bucket)})
+	if err != nil {
+		if isAPIErrorCode(err, "NoSuchBucketPolicy") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting bucket policy for %s: %w", bucket, err)
+	}
+	if out.Policy == nil {
+		return nil, nil
+	}
+	return &BucketPolicy{Document: *out.Policy}, nil
+}
+
+// GetBucketACL returns the bucket's ACL. HasPublicGrant is computed from the
+// grants list (any grant whose grantee URI is AllUsers or AuthenticatedUsers).
+func (c *AWSClient) GetBucketACL(ctx context.Context, region, bucket string) (*BucketACL, error) {
+	s3Client := s3.NewFromConfig(c.s3ConfigForRegion(region))
+	out, err := s3Client.GetBucketAcl(ctx, &s3.GetBucketAclInput{Bucket: aws.String(bucket)})
+	if err != nil {
+		return nil, fmt.Errorf("getting bucket ACL for %s: %w", bucket, err)
+	}
+
+	acl := &BucketACL{}
+	if out.Owner != nil {
+		acl.OwnerID = aws.ToString(out.Owner.ID)
+	}
+	for _, g := range out.Grants {
+		grant := BucketACLGrant{Permission: string(g.Permission)}
+		if g.Grantee != nil {
+			grant.GranteeType = string(g.Grantee.Type)
+			grant.GranteeURI = aws.ToString(g.Grantee.URI)
+			grant.GranteeID = aws.ToString(g.Grantee.ID)
+			if isPublicGranteeURI(grant.GranteeURI) {
+				acl.HasPublicGrant = true
+			}
+		}
+		acl.Grants = append(acl.Grants, grant)
+	}
+	return acl, nil
+}
+
+// GetBucketLifecycle returns the bucket's lifecycle configuration. Returns nil
+// with no error when no lifecycle config is attached (NoSuchLifecycleConfiguration).
+func (c *AWSClient) GetBucketLifecycle(ctx context.Context, region, bucket string) (*BucketLifecycle, error) {
+	s3Client := s3.NewFromConfig(c.s3ConfigForRegion(region))
+	out, err := s3Client.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{Bucket: aws.String(bucket)})
+	if err != nil {
+		if isAPIErrorCode(err, "NoSuchLifecycleConfiguration") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting bucket lifecycle for %s: %w", bucket, err)
+	}
+	if len(out.Rules) == 0 {
+		return &BucketLifecycle{}, nil
+	}
+
+	lc := &BucketLifecycle{Rules: make([]BucketLifecycleRule, 0, len(out.Rules))}
+	for _, r := range out.Rules {
+		lc.Rules = append(lc.Rules, toLifecycleRule(r))
+	}
+	return lc, nil
+}
+
+// toLifecycleRule projects an SDK lifecycle rule onto our normalized shape.
+// Transitions and expirations are flattened to human-readable strings
+// ("30d→STANDARD_IA", "365d", "2027-01-01") rather than the SDK's nested
+// pointer types — consumers want forensic visibility, not editing primitives.
+func toLifecycleRule(r s3types.LifecycleRule) BucketLifecycleRule {
+	rule := BucketLifecycleRule{
+		ID:     aws.ToString(r.ID),
+		Status: string(r.Status),
+	}
+	if r.Filter != nil && r.Filter.Prefix != nil {
+		rule.Prefix = aws.ToString(r.Filter.Prefix)
+	}
+	for _, tr := range r.Transitions {
+		if s := formatLifecycleTransition(tr); s != "" {
+			rule.Transitions = append(rule.Transitions, s)
+		}
+	}
+	rule.Expiration = formatLifecycleExpiration(r.Expiration)
+	return rule
+}
+
+func formatLifecycleTransition(tr s3types.Transition) string {
+	if tr.Days != nil {
+		return fmt.Sprintf("%dd→%s", *tr.Days, string(tr.StorageClass))
+	}
+	if tr.Date != nil {
+		return fmt.Sprintf("%s→%s", tr.Date.Format("2006-01-02"), string(tr.StorageClass))
+	}
+	return ""
+}
+
+func formatLifecycleExpiration(exp *s3types.LifecycleExpiration) string {
+	if exp == nil {
+		return ""
+	}
+	if exp.Days != nil {
+		return fmt.Sprintf("%dd", *exp.Days)
+	}
+	if exp.Date != nil {
+		return exp.Date.Format("2006-01-02")
+	}
+	return ""
+}
+
+// isPublicGranteeURI returns true if the grantee URI targets one of S3's
+// canonical "public" groups (AllUsers or AuthenticatedUsers).
+func isPublicGranteeURI(uri string) bool {
+	switch uri {
+	case "http://acs.amazonaws.com/groups/global/AllUsers",
+		"http://acs.amazonaws.com/groups/global/AuthenticatedUsers":
+		return true
+	}
+	return false
+}
+
 // GetAccountPublicAccessBlock checks if account-level public access block is enabled.
 func (c *AWSClient) GetAccountPublicAccessBlock(ctx context.Context, accountID string) (bool, error) {
 	s3ControlClient := s3control.NewFromConfig(c.cfg)
@@ -644,6 +813,7 @@ func (c *AWSClient) ListDBInstances(ctx context.Context, region string) ([]DBIns
 				BackupRetentionPeriod:   int(aws.ToInt32(db.BackupRetentionPeriod)),
 				MultiAZ:                 aws.ToBool(db.MultiAZ),
 				AutoMinorVersionUpgrade: aws.ToBool(db.AutoMinorVersionUpgrade),
+				LatestRestorableTime:    db.LatestRestorableTime,
 			})
 		}
 	}
@@ -679,6 +849,7 @@ func (c *AWSClient) ListDBClusters(ctx context.Context, region string) ([]DBClus
 				DeletionProtection:    aws.ToBool(db.DeletionProtection),
 				BackupRetentionPeriod: int(aws.ToInt32(db.BackupRetentionPeriod)),
 				MultiAZ:               aws.ToBool(db.MultiAZ),
+				LatestRestorableTime:  db.LatestRestorableTime,
 			})
 		}
 	}
@@ -755,6 +926,11 @@ func (c *AWSClient) ListSecurityGroups(ctx context.Context, region string) ([]Se
 				}
 				for _, ip := range perm.Ipv6Ranges {
 					rule.CIDRBlocks = append(rule.CIDRBlocks, aws.ToString(ip.CidrIpv6))
+				}
+				for _, src := range perm.UserIdGroupPairs {
+					if src.GroupId != nil {
+						rule.SourceSGIDs = append(rule.SourceSGIDs, aws.ToString(src.GroupId))
+					}
 				}
 				group.IngressRules = append(group.IngressRules, rule)
 			}
@@ -839,6 +1015,112 @@ func (c *AWSClient) DescribeConfigRecorders(ctx context.Context, region string) 
 	}
 
 	return recorders, nil
+}
+
+// ListConfigRules returns AWS Config rules in the specified region paired with
+// their most recent compliance state. Returns an empty slice if Config is not
+// enabled in the region.
+func (c *AWSClient) ListConfigRules(ctx context.Context, region string) ([]ConfigRule, error) {
+	cfg := c.cfg.Copy()
+	cfg.Region = region
+	client := configservice.NewFromConfig(cfg)
+
+	rules, err := describeAllConfigRules(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	if len(rules) == 0 {
+		return []ConfigRule{}, nil
+	}
+
+	complianceByRule, err := describeComplianceByConfigRule(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	lastEvalByRule, err := describeLastEvaluationByConfigRule(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]ConfigRule, 0, len(rules))
+	for _, r := range rules {
+		name := aws.ToString(r.ConfigRuleName)
+		row := ConfigRule{
+			Name:            name,
+			ARN:             aws.ToString(r.ConfigRuleArn),
+			ComplianceState: complianceByRule[name],
+			LastEvaluated:   lastEvalByRule[name],
+		}
+		if r.Source != nil {
+			row.SourceOwner = string(r.Source.Owner)
+			row.SourceIdentifier = aws.ToString(r.Source.SourceIdentifier)
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func describeAllConfigRules(ctx context.Context, client *configservice.Client) ([]configtypes.ConfigRule, error) {
+	var rules []configtypes.ConfigRule
+	var nextToken *string
+	for {
+		out, err := client.DescribeConfigRules(ctx, &configservice.DescribeConfigRulesInput{NextToken: nextToken})
+		if err != nil {
+			return nil, fmt.Errorf("describing config rules: %w", err)
+		}
+		rules = append(rules, out.ConfigRules...)
+		if out.NextToken == nil || *out.NextToken == "" {
+			return rules, nil
+		}
+		nextToken = out.NextToken
+	}
+}
+
+func describeComplianceByConfigRule(ctx context.Context, client *configservice.Client) (map[string]string, error) {
+	out := map[string]string{}
+	var nextToken *string
+	for {
+		resp, err := client.DescribeComplianceByConfigRule(ctx, &configservice.DescribeComplianceByConfigRuleInput{NextToken: nextToken})
+		if err != nil {
+			return nil, fmt.Errorf("describing config rule compliance: %w", err)
+		}
+		for _, c := range resp.ComplianceByConfigRules {
+			name := aws.ToString(c.ConfigRuleName)
+			if c.Compliance != nil {
+				out[name] = string(c.Compliance.ComplianceType)
+			}
+		}
+		if resp.NextToken == nil || *resp.NextToken == "" {
+			return out, nil
+		}
+		nextToken = resp.NextToken
+	}
+}
+
+// describeLastEvaluationByConfigRule returns the most recent evaluation
+// timestamp per rule, preferring success over failure when both exist.
+func describeLastEvaluationByConfigRule(ctx context.Context, client *configservice.Client) (map[string]*time.Time, error) {
+	out := map[string]*time.Time{}
+	var nextToken *string
+	for {
+		resp, err := client.DescribeConfigRuleEvaluationStatus(ctx, &configservice.DescribeConfigRuleEvaluationStatusInput{NextToken: nextToken})
+		if err != nil {
+			return nil, fmt.Errorf("describing config rule evaluation status: %w", err)
+		}
+		for _, s := range resp.ConfigRulesEvaluationStatus {
+			name := aws.ToString(s.ConfigRuleName)
+			switch {
+			case s.LastSuccessfulEvaluationTime != nil:
+				out[name] = s.LastSuccessfulEvaluationTime
+			case s.LastFailedEvaluationTime != nil:
+				out[name] = s.LastFailedEvaluationTime
+			}
+		}
+		if resp.NextToken == nil || *resp.NextToken == "" {
+			return out, nil
+		}
+		nextToken = resp.NextToken
+	}
 }
 
 // ListGuardDutyDetectors returns GuardDuty detectors in the specified region.
@@ -935,6 +1217,150 @@ func (c *AWSClient) countGuardDutyFindings(ctx context.Context, gdClient *guardd
 	}
 
 	return count, nil
+}
+
+// ListGuardDutyFindings returns up to maxFindings unarchived high-or-critical
+// (severity >= 7) findings for the given detector. The boolean return is true
+// when more findings exist than maxFindings (the caller should record a
+// truncation warning). Sorted by severity DESC then updatedAt DESC so a
+// truncated result keeps the most actionable findings.
+func (c *AWSClient) ListGuardDutyFindings(ctx context.Context, region, detectorID string, maxFindings int) ([]GuardDutyFinding, bool, error) {
+	cfg := c.cfg.Copy()
+	cfg.Region = region
+	gdClient := guardduty.NewFromConfig(cfg)
+
+	criterion := map[string]guarddutytypes.Condition{
+		"severity":         {GreaterThanOrEqual: aws.Int64(7)},
+		"service.archived": {Equals: []string{"false"}},
+	}
+
+	ids, truncated, err := listGuardDutyFindingIDs(ctx, gdClient, detectorID, criterion, maxFindings)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(ids) == 0 {
+		return []GuardDutyFinding{}, false, nil
+	}
+
+	findings, err := getGuardDutyFindings(ctx, gdClient, detectorID, ids)
+	if err != nil {
+		return nil, false, err
+	}
+	return findings, truncated, nil
+}
+
+func listGuardDutyFindingIDs(ctx context.Context, gdClient *guardduty.Client, detectorID string, criterion map[string]guarddutytypes.Condition, max int) ([]string, bool, error) {
+	var ids []string
+	var nextToken *string
+	for {
+		output, err := gdClient.ListFindings(ctx, &guardduty.ListFindingsInput{
+			DetectorId: aws.String(detectorID),
+			FindingCriteria: &guarddutytypes.FindingCriteria{
+				Criterion: criterion,
+			},
+			SortCriteria: &guarddutytypes.SortCriteria{
+				AttributeName: aws.String("severity"),
+				OrderBy:       guarddutytypes.OrderByDesc,
+			},
+			MaxResults: aws.Int32(50),
+			NextToken:  nextToken,
+		})
+		if err != nil {
+			return nil, false, err
+		}
+		ids = append(ids, output.FindingIds...)
+		if len(ids) >= max {
+			return ids[:max], output.NextToken != nil && *output.NextToken != "", nil
+		}
+		if output.NextToken == nil || *output.NextToken == "" {
+			return ids, false, nil
+		}
+		nextToken = output.NextToken
+	}
+}
+
+func getGuardDutyFindings(ctx context.Context, gdClient *guardduty.Client, detectorID string, ids []string) ([]GuardDutyFinding, error) {
+	const batch = 50
+	out := make([]GuardDutyFinding, 0, len(ids))
+	for start := 0; start < len(ids); start += batch {
+		end := start + batch
+		if end > len(ids) {
+			end = len(ids)
+		}
+		resp, err := gdClient.GetFindings(ctx, &guardduty.GetFindingsInput{
+			DetectorId: aws.String(detectorID),
+			FindingIds: ids[start:end],
+		})
+		if err != nil {
+			return nil, fmt.Errorf("getting GuardDuty findings: %w", err)
+		}
+		for _, f := range resp.Findings {
+			out = append(out, projectGuardDutyFinding(f, detectorID))
+		}
+	}
+	return out, nil
+}
+
+func projectGuardDutyFinding(f guarddutytypes.Finding, detectorID string) GuardDutyFinding {
+	row := GuardDutyFinding{
+		ID:         aws.ToString(f.Id),
+		DetectorID: detectorID,
+		Severity:   aws.ToFloat64(f.Severity),
+		Type:       aws.ToString(f.Type),
+		Title:      aws.ToString(f.Title),
+	}
+	if f.Resource != nil {
+		row.ResourceType = aws.ToString(f.Resource.ResourceType)
+		if id := guardDutyResourceID(f.Resource); id != "" {
+			row.ResourceID = id
+		}
+	}
+	if ts := parseGuardDutyTime(aws.ToString(f.CreatedAt)); ts != nil {
+		row.CreatedAt = ts
+	}
+	if ts := parseGuardDutyTime(aws.ToString(f.UpdatedAt)); ts != nil {
+		row.UpdatedAt = ts
+	}
+	return row
+}
+
+// guardDutyResourceID extracts the most identifying ID from a finding's
+// Resource block. GuardDuty's schema varies per resource type, so this picks
+// the field most operators expect to see in a triage row.
+func guardDutyResourceID(r *guarddutytypes.Resource) string {
+	if r.InstanceDetails != nil && r.InstanceDetails.InstanceId != nil {
+		return aws.ToString(r.InstanceDetails.InstanceId)
+	}
+	if r.AccessKeyDetails != nil && r.AccessKeyDetails.UserName != nil {
+		return aws.ToString(r.AccessKeyDetails.UserName)
+	}
+	if len(r.S3BucketDetails) > 0 && r.S3BucketDetails[0].Name != nil {
+		return aws.ToString(r.S3BucketDetails[0].Name)
+	}
+	if r.EksClusterDetails != nil && r.EksClusterDetails.Name != nil {
+		return aws.ToString(r.EksClusterDetails.Name)
+	}
+	if r.KubernetesDetails != nil && r.KubernetesDetails.KubernetesWorkloadDetails != nil {
+		return aws.ToString(r.KubernetesDetails.KubernetesWorkloadDetails.Name)
+	}
+	return ""
+}
+
+// parseGuardDutyTime parses the ISO8601 timestamps GuardDuty returns as
+// strings (not native time.Time). Returns nil on unparseable input so callers
+// can omit the field entirely rather than emit a zero-valued timestamp.
+func parseGuardDutyTime(s string) *time.Time {
+	if s == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, s)
+		if err != nil {
+			return nil
+		}
+	}
+	return &t
 }
 
 // GetSecurityHubConfig returns Security Hub configuration in the specified region.

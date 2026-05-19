@@ -9,14 +9,24 @@ import (
 	"time"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
+	"github.com/locktivity/epack/componentsdk"
 )
 
 type mfaDeviceLister interface {
 	ListMFADevices(ctx context.Context, userName string) ([]aws.MFADevice, error)
 }
 
+type roleLister interface {
+	ListRoles(ctx context.Context, callback func([]aws.Role) error) error
+}
+
 // collectIAMMetrics collects IAM-related security metrics.
-func (c *Collector) collectIAMMetrics(ctx context.Context, client *aws.AWSClient, accountID string) (*IAMMetrics, error) {
+//
+// At trust, only aggregates and root-account flags are populated.
+// At audit, per-user and per-role inventory rows are populated from the same
+// credential report (no extra API calls for users) plus ListRoles for the role
+// inventory.
+func (c *Collector) collectIAMMetrics(ctx context.Context, client *aws.AWSClient, accountID string, level componentsdk.Level) (*IAMMetrics, error) {
 	metrics := &IAMMetrics{}
 
 	// Get credential report
@@ -25,11 +35,133 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client *aws.AWSClient
 		return metrics, fmt.Errorf("getting credential report: %w", err)
 	}
 
-	// Process credential report
+	// Process credential report (always produces trust-level aggregates)
 	c.processCredentialReport(report, metrics)
 	metrics.HardwareMFAEnabled = c.collectHardwareMFAMetrics(ctx, client, report, accountID)
 
+	if level.AtLeast(componentsdk.LevelAudit) {
+		metrics.Users = c.iamUsersFromReport(report)
+		metrics.Roles = c.collectIAMRoles(ctx, client, accountID)
+	}
+
+	if level.AtLeast(componentsdk.LevelInternal) {
+		metrics.CredentialReport = credentialReportToInternal(report)
+	}
+
 	return metrics, nil
+}
+
+// credentialReportToInternal projects the credential report onto the
+// internal-level per-user inventory. Per-user details (timestamp formatting,
+// N/A sentinel handling) live in credentialReportUserToInternal so they can
+// be unit-tested directly without iterating the report.
+func credentialReportToInternal(report *aws.CredentialReport) *IAMCredentialReport {
+	out := &IAMCredentialReport{
+		Users: make([]IAMCredentialReportUser, 0, len(report.Users)),
+	}
+	for _, u := range report.Users {
+		out.Users = append(out.Users, credentialReportUserToInternal(u))
+	}
+	return out
+}
+
+// credentialReportUserToInternal projects one user row. Timestamps that are
+// nil are omitted via empty strings (omitempty in the struct tag drops them
+// from the artifact), preserving the AWS-side semantic "never" for
+// keys/passwords that haven't been used. The AWS credential-report CSV uses
+// the literal string "N/A" as a sentinel for fields that don't apply (e.g.,
+// region/service on a key that has never been used); normalizeNA collapses
+// those to empty strings so omitempty drops them from the artifact too,
+// leaving the absence semantic clean.
+func credentialReportUserToInternal(u aws.CredentialReportUser) IAMCredentialReportUser {
+	return IAMCredentialReportUser{
+		UserName:                  u.User,
+		UserCreationTime:          formatRFC3339(&u.UserCreationTime),
+		PasswordEnabled:           u.PasswordEnabled,
+		PasswordLastUsed:          formatRFC3339(u.PasswordLastUsed),
+		PasswordLastChanged:       formatRFC3339(u.PasswordLastChanged),
+		PasswordNextRotation:      formatRFC3339(u.PasswordNextRotation),
+		MFAActive:                 u.MFAActive,
+		AccessKey1Active:          u.AccessKey1Active,
+		AccessKey1LastRotated:     formatRFC3339(u.AccessKey1LastRotated),
+		AccessKey1LastUsedDate:    formatRFC3339(u.AccessKey1LastUsedDate),
+		AccessKey1LastUsedRegion:  normalizeNA(u.AccessKey1LastUsedRegion),
+		AccessKey1LastUsedService: normalizeNA(u.AccessKey1LastUsedService),
+		AccessKey2Active:          u.AccessKey2Active,
+		AccessKey2LastRotated:     formatRFC3339(u.AccessKey2LastRotated),
+		AccessKey2LastUsedDate:    formatRFC3339(u.AccessKey2LastUsedDate),
+		AccessKey2LastUsedRegion:  normalizeNA(u.AccessKey2LastUsedRegion),
+		AccessKey2LastUsedService: normalizeNA(u.AccessKey2LastUsedService),
+	}
+}
+
+func formatRFC3339(t *time.Time) string {
+	if t == nil || t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// normalizeNA collapses the credential-report "N/A" sentinel to an empty
+// string. Paired with omitempty struct tags this drops the field from the
+// artifact entirely, so the absence semantic is clean ("this key has never
+// been used" reads as "no field" rather than 'field present with value N/A').
+func normalizeNA(s string) string {
+	if s == "N/A" {
+		return ""
+	}
+	return s
+}
+
+// iamUsersFromReport projects the credential report onto audit-level per-user
+// rows. The report is already fetched for the trust-level aggregates; no extra
+// API calls are needed. The root account is excluded; its state is captured in
+// the trust-level Root* fields.
+func (c *Collector) iamUsersFromReport(report *aws.CredentialReport) []IAMUser {
+	users := make([]IAMUser, 0, len(report.Users))
+	for _, u := range report.Users {
+		if u.IsRootUser() {
+			continue
+		}
+		users = append(users, IAMUser{
+			UserName:         u.User,
+			ARN:              u.ARN,
+			MFAActive:        u.MFAActive,
+			HasConsoleAccess: u.HasConsoleAccess(),
+			HasAccessKeys:    u.HasAccessKeys(),
+		})
+	}
+	return users
+}
+
+// collectIAMRoles fetches the per-role audit-level inventory. HasExternalTrust
+// is derived from each role's trust policy document (cross-account principals
+// or wildcards). AccessDenied skips the role inventory and emits a diagnostic;
+// the trust-level aggregates are unaffected. Returns an empty (non-nil) slice
+// on success-with-no-roles so the audit artifact emits `[]` not `null`; returns
+// nil on collection failure so the artifact emits `null` (paired with a
+// diagnostic warning) — null and `[]` are intentionally distinguishable.
+func (c *Collector) collectIAMRoles(ctx context.Context, client roleLister, accountID string) []IAMRole {
+	roles := []IAMRole{}
+	err := client.ListRoles(ctx, func(batch []aws.Role) error {
+		for _, r := range batch {
+			roles = append(roles, IAMRole{
+				RoleName:         r.RoleName,
+				ARN:              r.ARN,
+				HasExternalTrust: hasExternalTrust(r.AssumeRolePolicyDocument, accountID),
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		if isAccessDeniedErr(err) {
+			c.warnAccessDenied(accountID, "iam_roles", "iam:ListRoles")
+			return nil
+		}
+		c.warn("account %s: failed to list IAM roles: %v", accountID, err)
+		return nil
+	}
+	return roles
 }
 
 // processCredentialReport analyzes the credential report and populates user metrics.

@@ -10,7 +10,25 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/locktivity/epack/componentsdk"
 )
+
+// e2eLevel selects which collection level the e2e suite runs at. Defaults to
+// LevelTrust so the existing e2e assertions (which only check trust-level
+// fields and percent-range bounds) continue to pass unchanged. Override via
+// AWS_E2E_LEVEL=audit or AWS_E2E_LEVEL=internal to exercise the gated surfaces
+// in a sandbox account.
+func e2eLevel() componentsdk.Level {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AWS_E2E_LEVEL"))) {
+	case "audit":
+		return componentsdk.LevelAudit
+	case "internal":
+		return componentsdk.LevelInternal
+	default:
+		return componentsdk.LevelTrust
+	}
+}
 
 // E2E tests run against real AWS APIs.
 //
@@ -70,7 +88,7 @@ func TestE2E_RealAWSCollection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	output, err := collector.Collect(ctx)
+	output, err := collector.Collect(ctx, e2eLevel())
 	if err != nil {
 		t.Fatalf("failed to collect: %v", err)
 	}
@@ -139,7 +157,7 @@ func TestE2E_OutputValidJSON(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	output, err := collector.Collect(ctx)
+	output, err := collector.Collect(ctx, e2eLevel())
 	if err != nil {
 		t.Fatalf("failed to collect: %v", err)
 	}
@@ -181,7 +199,7 @@ func TestE2E_RespectsConfiguredRegions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	output, err := collector.Collect(ctx)
+	output, err := collector.Collect(ctx, e2eLevel())
 	if err != nil {
 		t.Fatalf("failed to collect: %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
+	"github.com/locktivity/epack/componentsdk"
 )
 
 // Collector collects AWS account security posture.
@@ -40,8 +41,12 @@ func New(config Config) (*Collector, error) {
 }
 
 // Collect fetches and aggregates security posture metrics for all configured accounts.
-func (c *Collector) Collect(ctx context.Context) (*Output, error) {
+// level controls the depth of collection (trust / audit / internal). Unknown or empty
+// levels are treated as LevelTrust by the SDK reader; callers should not pre-validate.
+// See the README for the per-surface field availability per level.
+func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Output, error) {
 	output := NewOutput()
+	output.CollectedAtLevel = string(level)
 
 	// Reset service-level warnings from any previous run
 	c.warnings = nil
@@ -71,7 +76,7 @@ func (c *Collector) Collect(ctx context.Context) (*Output, error) {
 	for i, acct := range accounts {
 		c.progress(int64(i+1), total, fmt.Sprintf("Collecting account %d of %d", i+1, len(accounts)))
 
-		posture, err := c.collectAccount(ctx, acct, authMode)
+		posture, err := c.collectAccount(ctx, acct, authMode, level)
 		if err != nil {
 			errMsg := formatAccountError(acct, err)
 			accountErrors = append(accountErrors, errMsg)
@@ -97,7 +102,7 @@ func (c *Collector) Collect(ctx context.Context) (*Output, error) {
 }
 
 // collectAccount collects posture for a single AWS account.
-func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig, authMode string) (*AccountPosture, error) {
+func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig, authMode string, level componentsdk.Level) (*AccountPosture, error) {
 	// Create client for this account
 	c.status("Connecting to AWS...")
 	client, err := c.createClient(ctx, acctConfig, authMode)
@@ -126,15 +131,27 @@ func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig
 	posture.AccountAlias = alias
 
 	// Collect global metrics (IAM, S3)
-	c.collectGlobalMetrics(ctx, client, accountID, posture)
+	c.collectGlobalMetrics(ctx, client, accountID, posture, level)
 
-	// Collect regional metrics (RDS, Network)
-	rdsMetrics, networkMetrics := c.collectRegionalMetrics(ctx, client, regions, accountID)
+	// Collect regional metrics (RDS, Network, Lambda, EC2, CloudWatch Logs, KMS, Secrets Manager, SSM)
+	rdsMetrics, networkMetrics, lambdaMetrics, ec2Metrics, cwLogsMetrics, kmsMetrics, secretsMetrics, ssmMetrics := c.collectRegionalMetrics(ctx, client, regions, accountID, level)
 	posture.RDS = rdsMetrics.RDSMetrics
 	posture.Network = networkMetrics.NetworkMetrics
+	posture.Lambda = lambdaMetrics
+	posture.EC2 = ec2Metrics
+	posture.CloudWatchLogs = cwLogsMetrics
+	posture.KMS = kmsMetrics
+	posture.SecretsManager = secretsMetrics
+	posture.SSMParameters = ssmMetrics
 
 	// Collect account security services
-	c.collectSecurityServices(ctx, client, regions, posture)
+	c.collectSecurityServices(ctx, client, regions, posture, level)
+
+	// Strict-superset normalization: at audit+, every level-gated array is
+	// non-nil so consumers can rely on []  vs `null` to distinguish "fleet
+	// empty" from "field not collected at this level" without consulting
+	// collected_at_level.
+	normalizeForLevel(posture, level)
 
 	return posture, nil
 }
@@ -185,10 +202,11 @@ func (c *Collector) getRegions(ctx context.Context, client *aws.AWSClient) ([]st
 }
 
 // collectGlobalMetrics collects IAM and S3 metrics (global services).
-func (c *Collector) collectGlobalMetrics(ctx context.Context, client *aws.AWSClient, accountID string, posture *AccountPosture) {
+// level is passed through to per-surface collectors that gate audit / internal fields.
+func (c *Collector) collectGlobalMetrics(ctx context.Context, client *aws.AWSClient, accountID string, posture *AccountPosture, level componentsdk.Level) {
 	// IAM metrics (global)
 	c.status("Collecting IAM metrics...")
-	if iamMetrics, err := c.collectIAMMetrics(ctx, client, accountID); err == nil {
+	if iamMetrics, err := c.collectIAMMetrics(ctx, client, accountID, level); err == nil {
 		posture.IAM = *iamMetrics
 	} else {
 		c.warn("account %s: failed to collect IAM metrics: %v", accountID, err)
@@ -196,50 +214,171 @@ func (c *Collector) collectGlobalMetrics(ctx context.Context, client *aws.AWSCli
 
 	// S3 metrics (global bucket list)
 	c.status("Collecting S3 metrics...")
-	if s3Metrics, err := c.collectS3Metrics(ctx, client, accountID); err == nil {
+	if s3Metrics, err := c.collectS3Metrics(ctx, client, accountID, level); err == nil {
 		posture.S3 = *s3Metrics
 	} else {
 		c.warn("account %s: failed to collect S3 metrics: %v", accountID, err)
 	}
 }
 
-// collectRegionalMetrics collects RDS and network metrics across all regions.
-func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSClient, regions []string, accountID string) (rdsMetricsWithCounts, networkMetricsWithCounts) {
+// collectRegionalMetrics collects RDS, network, Lambda, EC2, CloudWatch Logs,
+// KMS, Secrets Manager, and SSM Parameter Store metrics across all regions.
+// level is passed through to per-surface collectors that gate audit / internal
+// fields.
+func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSClient, regions []string, accountID string, level componentsdk.Level) (rdsMetricsWithCounts, networkMetricsWithCounts, LambdaMetrics, EC2Metrics, CloudWatchLogsMetrics, KMSMetrics, SecretsManagerMetrics, SSMParametersMetrics) {
 	var rdsMetrics rdsMetricsWithCounts
 	var networkMetrics networkMetricsWithCounts
+	var lambdaMetrics LambdaMetrics
+	var ec2Metrics EC2Metrics
+	var cwLogsMetrics CloudWatchLogsMetrics
+	var kmsMetrics KMSMetrics
+	var secretsMetrics SecretsManagerMetrics
+	var ssmMetrics SSMParametersMetrics
 
 	total := int64(len(regions))
 	for i, region := range regions {
 		c.progress(int64(i+1), total, fmt.Sprintf("Scanning region %s", region))
 
-		if rds, err := c.collectRDSMetrics(ctx, client, region); err == nil {
+		if rds, err := c.collectRDSMetrics(ctx, client, region, level); err == nil {
 			rdsMetrics = mergeRDSMetrics(rdsMetrics, *rds)
 		} else {
 			c.warn("account %s region %s: failed to collect RDS metrics: %v", accountID, region, err)
 		}
 
-		if network, err := c.collectNetworkMetrics(ctx, client, region); err == nil {
+		if network, err := c.collectNetworkMetrics(ctx, client, region, level); err == nil {
 			networkMetrics = mergeNetworkMetrics(networkMetrics, *network)
 		} else {
 			c.warn("account %s region %s: failed to collect network metrics: %v", accountID, region, err)
 		}
+
+		if lambda, err := c.collectLambdaMetrics(ctx, client, region, accountID, level); err == nil {
+			lambdaMetrics = mergeLambdaMetrics(lambdaMetrics, *lambda)
+		} else {
+			c.warn("account %s region %s: failed to collect Lambda metrics: %v", accountID, region, err)
+		}
+
+		if ec2, err := c.collectEC2Metrics(ctx, client, region, accountID, level); err == nil {
+			ec2Metrics = mergeEC2Metrics(ec2Metrics, *ec2)
+		} else {
+			c.warn("account %s region %s: failed to collect EC2 metrics: %v", accountID, region, err)
+		}
+
+		if cw, err := c.collectCloudWatchLogsMetrics(ctx, client, region, accountID, level); err == nil {
+			cwLogsMetrics = mergeCloudWatchLogsMetrics(cwLogsMetrics, *cw)
+		} else {
+			c.warn("account %s region %s: failed to collect CloudWatch Logs metrics: %v", accountID, region, err)
+		}
+
+		if k, err := c.collectKMSMetrics(ctx, client, region, accountID, level); err == nil {
+			kmsMetrics = mergeKMSMetrics(kmsMetrics, *k)
+		} else {
+			c.warn("account %s region %s: failed to collect KMS metrics: %v", accountID, region, err)
+		}
+
+		if s, err := c.collectSecretsManagerMetrics(ctx, client, region, accountID, level); err == nil {
+			secretsMetrics = mergeSecretsManagerMetrics(secretsMetrics, *s)
+		} else {
+			c.warn("account %s region %s: failed to collect Secrets Manager metrics: %v", accountID, region, err)
+		}
+
+		if p, err := c.collectSSMParameters(ctx, client, region, accountID, level); err == nil {
+			ssmMetrics = mergeSSMParametersMetrics(ssmMetrics, *p)
+		} else {
+			c.warn("account %s region %s: failed to collect SSM parameters: %v", accountID, region, err)
+		}
 	}
 
-	return rdsMetrics, networkMetrics
+	if len(lambdaMetrics.Functions) > 0 {
+		kept, dropped, truncated := Truncate(lambdaMetrics.Functions, LambdaFunctionsCap, func(a, b LambdaFunctionRow) bool {
+			return a.LastModified > b.LastModified
+		})
+		lambdaMetrics.Functions = kept
+		lambdaMetrics.FunctionsTruncated = truncated
+		lambdaMetrics.FunctionsDroppedCount = dropped
+		if truncated {
+			c.warn("account %s: Lambda function inventory truncated to %d (dropped %d)", accountID, LambdaFunctionsCap, dropped)
+		}
+	}
+
+	if len(ec2Metrics.Instances) > 0 {
+		kept, dropped, truncated := Truncate(ec2Metrics.Instances, EC2InstancesCap, func(a, b EC2InstanceRow) bool {
+			return a.LaunchTime > b.LaunchTime
+		})
+		ec2Metrics.Instances = kept
+		ec2Metrics.InstancesTruncated = truncated
+		ec2Metrics.InstancesDroppedCount = dropped
+		if truncated {
+			c.warn("account %s: EC2 instance inventory truncated to %d (dropped %d)", accountID, EC2InstancesCap, dropped)
+		}
+	}
+
+	if len(cwLogsMetrics.LogGroups) > 0 {
+		kept, dropped, truncated := Truncate(cwLogsMetrics.LogGroups, CloudWatchLogGroupsCap, func(a, b CloudWatchLogGroupRow) bool {
+			return a.StoredBytes > b.StoredBytes
+		})
+		cwLogsMetrics.LogGroups = kept
+		cwLogsMetrics.LogGroupsTruncated = truncated
+		cwLogsMetrics.LogGroupsDroppedCount = dropped
+		if truncated {
+			c.warn("account %s: CloudWatch log groups inventory truncated to %d (dropped %d)", accountID, CloudWatchLogGroupsCap, dropped)
+		}
+	}
+
+	if len(kmsMetrics.Keys) > 0 {
+		kept, dropped, truncated := Truncate(kmsMetrics.Keys, KMSKeysCap, func(a, b KMSKeyRow) bool {
+			return a.CreationDate > b.CreationDate
+		})
+		kmsMetrics.Keys = kept
+		kmsMetrics.KeysTruncated = truncated
+		kmsMetrics.KeysDroppedCount = dropped
+		if truncated {
+			c.warn("account %s: KMS key inventory truncated to %d (dropped %d)", accountID, KMSKeysCap, dropped)
+		}
+	}
+
+	if len(secretsMetrics.Secrets) > 0 {
+		kept, dropped, truncated := Truncate(secretsMetrics.Secrets, SecretsManagerSecretsCap, func(a, b SecretsManagerSecretRow) bool {
+			return a.LastChangedDate > b.LastChangedDate
+		})
+		secretsMetrics.Secrets = kept
+		secretsMetrics.SecretsTruncated = truncated
+		secretsMetrics.SecretsDroppedCount = dropped
+		if truncated {
+			c.warn("account %s: Secrets Manager inventory truncated to %d (dropped %d)", accountID, SecretsManagerSecretsCap, dropped)
+		}
+	}
+
+	if len(ssmMetrics.Parameters) > 0 {
+		kept, dropped, truncated := Truncate(ssmMetrics.Parameters, SSMParametersCap, func(a, b SSMParameterRow) bool {
+			return a.LastModifiedDate > b.LastModifiedDate
+		})
+		ssmMetrics.Parameters = kept
+		ssmMetrics.ParametersTruncated = truncated
+		ssmMetrics.ParametersDroppedCount = dropped
+		if truncated {
+			c.warn("account %s: SSM parameter inventory truncated to %d (dropped %d)", accountID, SSMParametersCap, dropped)
+		}
+	}
+
+	return rdsMetrics, networkMetrics, lambdaMetrics, ec2Metrics, cwLogsMetrics, kmsMetrics, secretsMetrics, ssmMetrics
 }
 
 // collectSecurityServices collects account-level security service status.
-func (c *Collector) collectSecurityServices(ctx context.Context, client *aws.AWSClient, regions []string, posture *AccountPosture) {
+// level is passed through to per-surface collectors that gate audit / internal fields.
+func (c *Collector) collectSecurityServices(ctx context.Context, client *aws.AWSClient, regions []string, posture *AccountPosture, level componentsdk.Level) {
 	primaryRegion := DefaultPrimaryRegion
 	if len(regions) > 0 {
 		primaryRegion = regions[0]
 	}
 
 	// collectAccountSecurity handles per-service warnings internally
-	acctSec, _ := c.collectAccountSecurity(ctx, client, primaryRegion, regions, posture.AccountID)
+	acctSec, _ := c.collectAccountSecurity(ctx, client, primaryRegion, regions, posture.AccountID, level)
 	if acctSec != nil {
 		posture.AccountSecurity = *acctSec
 	}
+
+	c.status("Checking IAM Identity Center...")
+	posture.IdentityCenter = c.collectIdentityCenter(ctx, client, primaryRegion, posture.AccountID, level)
 }
 
 // resolveAuthMode determines the effective authentication mode based on config.

@@ -98,3 +98,109 @@ func TestMergeNetworkMetrics(t *testing.T) {
 		t.Fatalf("expected securityGroupCount=4, got %d", got.securityGroupCount)
 	}
 }
+
+func TestMergeNetworkMetrics_ConcatenatesAuditInventories(t *testing.T) {
+	a := networkMetricsWithCounts{
+		NetworkMetrics: NetworkMetrics{
+			VPCs:           []VPCSummary{{VPCID: "vpc-east", Region: "us-east-1"}},
+			SecurityGroups: []SecurityGroupSummary{{GroupID: "sg-east-1", Region: "us-east-1"}},
+		},
+		vpcCount:           1,
+		securityGroupCount: 1,
+	}
+	b := networkMetricsWithCounts{
+		NetworkMetrics: NetworkMetrics{
+			VPCs: []VPCSummary{
+				{VPCID: "vpc-west-1", Region: "us-west-2"},
+				{VPCID: "vpc-west-2", Region: "us-west-2"},
+			},
+			SecurityGroups: []SecurityGroupSummary{
+				{GroupID: "sg-west-1", Region: "us-west-2"},
+				{GroupID: "sg-west-2", Region: "us-west-2"},
+				{GroupID: "sg-west-3", Region: "us-west-2"},
+			},
+		},
+		vpcCount:           2,
+		securityGroupCount: 3,
+	}
+
+	got := mergeNetworkMetrics(a, b)
+	if len(got.VPCs) != 3 {
+		t.Fatalf("expected 3 VPCs after merge, got %d", len(got.VPCs))
+	}
+	if len(got.SecurityGroups) != 4 {
+		t.Fatalf("expected 4 SGs after merge, got %d", len(got.SecurityGroups))
+	}
+	if got.VPCs[0].VPCID != "vpc-east" || got.VPCs[1].VPCID != "vpc-west-1" {
+		t.Errorf("merge did not preserve insertion order: %+v", got.VPCs)
+	}
+}
+
+func TestMergeNetworkMetrics_EmptyAuditSlicesStayEmpty(t *testing.T) {
+	a := networkMetricsWithCounts{vpcCount: 3}
+	b := networkMetricsWithCounts{vpcCount: 2}
+
+	got := mergeNetworkMetrics(a, b)
+	if len(got.VPCs) != 0 || len(got.SecurityGroups) != 0 {
+		t.Errorf("trust-only merge should not populate audit slices, got VPCs=%+v SGs=%+v", got.VPCs, got.SecurityGroups)
+	}
+}
+
+func TestSGIngressRulesToInternal_ProjectsAllFields(t *testing.T) {
+	in := []aws.SecurityGroupRule{
+		{Protocol: "tcp", FromPort: 22, ToPort: 22, CIDRBlocks: []string{"0.0.0.0/0"}},
+		{Protocol: "tcp", FromPort: 443, ToPort: 443, CIDRBlocks: []string{"10.0.0.0/8", "192.168.0.0/16"}},
+		{Protocol: "-1", FromPort: 0, ToPort: 0, CIDRBlocks: nil}, // all-protocols rule with no CIDR (source-SG only — surfaces with empty CIDRs)
+	}
+	out := sgIngressRulesToInternal(in)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 rules, got %d", len(out))
+	}
+	if out[0].Protocol != "tcp" || out[0].FromPort != 22 || len(out[0].CIDRBlocks) != 1 {
+		t.Errorf("rule 0 mis-projected: %+v", out[0])
+	}
+	if len(out[1].CIDRBlocks) != 2 || out[1].CIDRBlocks[0] != "10.0.0.0/8" {
+		t.Errorf("rule 1 CIDRs mis-projected: %+v", out[1].CIDRBlocks)
+	}
+	if out[2].Protocol != "-1" || len(out[2].CIDRBlocks) != 0 {
+		t.Errorf("rule 2 (all-protocols, no CIDR) mis-projected: %+v", out[2])
+	}
+}
+
+func TestSGIngressRulesToInternal_NilInputReturnsNil(t *testing.T) {
+	if out := sgIngressRulesToInternal(nil); out != nil {
+		t.Errorf("expected nil for nil input (omitempty drops the field), got %v", out)
+	}
+}
+
+func TestSGIngressRulesToInternal_DefensiveCopyCIDRs(t *testing.T) {
+	// Mutating the input slice's CIDRBlocks after projection must not affect
+	// the projected output (defensive copy via append(nil, ...)).
+	cidrs := []string{"10.0.0.0/8"}
+	in := []aws.SecurityGroupRule{{Protocol: "tcp", FromPort: 80, ToPort: 80, CIDRBlocks: cidrs}}
+	out := sgIngressRulesToInternal(in)
+	cidrs[0] = "MUTATED"
+	if out[0].CIDRBlocks[0] != "10.0.0.0/8" {
+		t.Errorf("projected CIDRs aliased input slice; got %q after mutation", out[0].CIDRBlocks[0])
+	}
+}
+
+func TestSGIngressRulesToInternal_SurfacesSourceSGIDs(t *testing.T) {
+	in := []aws.SecurityGroupRule{
+		{Protocol: "-1", FromPort: 0, ToPort: 0, SourceSGIDs: []string{"sg-aaa", "sg-bbb"}},
+		{Protocol: "tcp", FromPort: 443, ToPort: 443, CIDRBlocks: []string{"10.0.0.0/8"}, SourceSGIDs: []string{"sg-ccc"}},
+	}
+	out := sgIngressRulesToInternal(in)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(out))
+	}
+	if len(out[0].SourceSGIDs) != 2 || out[0].SourceSGIDs[0] != "sg-aaa" {
+		t.Errorf("rule 0 SourceSGIDs mis-projected: %+v", out[0].SourceSGIDs)
+	}
+	if len(out[0].CIDRBlocks) != 0 {
+		t.Errorf("rule 0 should have no CIDRBlocks (source-SG-only rule), got %v", out[0].CIDRBlocks)
+	}
+	if len(out[1].SourceSGIDs) != 1 || len(out[1].CIDRBlocks) != 1 {
+		t.Errorf("rule 1 should have both CIDRs and SourceSGIDs, got %+v", out[1])
+	}
+}

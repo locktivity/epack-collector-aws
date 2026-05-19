@@ -1,9 +1,9 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "AWS Collector Output",
-  "description": "Security posture output from the epack AWS collector. Metrics include percentages (0-100), booleans, and counts.",
+  "description": "Security posture output from the epack AWS collector. The `collected_at_level` field indicates how much detail this artifact contains. Level-gated arrays emit `null` when not collected at the active level, `[]` when collected with no rows, and `[...]` when populated. See docs/levels.md for the artifact contract.",
   "type": "object",
-  "required": ["schema_version", "collected_at", "accounts"],
+  "required": ["schema_version", "collected_at", "collected_at_level", "accounts"],
   "properties": {
     "schema_version": {
       "type": "string",
@@ -15,180 +15,328 @@
       "format": "date-time",
       "description": "RFC3339 timestamp of collection"
     },
+    "collected_at_level": {
+      "type": "string",
+      "enum": ["trust", "audit", "internal"],
+      "description": "Collection level the artifact was produced at. See docs/levels.md."
+    },
     "accounts": {
       "type": "array",
       "description": "Posture data for each collected account",
       "items": {
         "$ref": "#/definitions/AccountPosture"
       }
+    },
+    "diagnostics": {
+      "type": ["object", "null"],
+      "description": "Per-account errors and surface-level warnings encountered during collection. Absent when there were none.",
+      "properties": {
+        "account_errors": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
     }
   },
   "definitions": {
     "AccountPosture": {
       "type": "object",
-      "required": ["account_id", "regions", "iam", "s3", "rds", "network", "account_security"],
+      "required": [
+        "account_id", "regions",
+        "iam", "s3", "rds", "network", "account_security",
+        "identity_center", "lambda", "ec2", "cloudwatch_logs", "kms", "secrets_manager", "ssm_parameters"
+      ],
       "properties": {
-        "account_id": {
-          "type": "string",
-          "pattern": "^[0-9]{12}$",
-          "description": "AWS account ID"
-        },
-        "account_alias": {
-          "type": ["string", "null"],
-          "description": "AWS account alias if set"
-        },
-        "regions": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "Regions included in collection"
-        },
-        "iam": {
-          "$ref": "#/definitions/IAMMetrics"
-        },
-        "s3": {
-          "$ref": "#/definitions/S3Metrics"
-        },
-        "rds": {
-          "$ref": "#/definitions/RDSMetrics"
-        },
-        "network": {
-          "$ref": "#/definitions/NetworkMetrics"
-        },
-        "account_security": {
-          "$ref": "#/definitions/AccountSecurity"
+        "account_id": { "type": "string", "pattern": "^[0-9]{12}$" },
+        "account_alias": { "type": ["string", "null"] },
+        "regions": { "type": "array", "items": { "type": "string" } },
+        "iam": { "$ref": "#/definitions/IAMMetrics" },
+        "s3": { "$ref": "#/definitions/S3Metrics" },
+        "rds": { "$ref": "#/definitions/RDSMetrics" },
+        "network": { "$ref": "#/definitions/NetworkMetrics" },
+        "account_security": { "$ref": "#/definitions/AccountSecurity" },
+        "identity_center": { "$ref": "#/definitions/IdentityCenterStatus" },
+        "lambda": { "$ref": "#/definitions/LambdaMetrics" },
+        "ec2": { "$ref": "#/definitions/EC2Metrics" },
+        "cloudwatch_logs": { "$ref": "#/definitions/CloudWatchLogsMetrics" },
+        "kms": { "$ref": "#/definitions/KMSMetrics" },
+        "secrets_manager": { "$ref": "#/definitions/SecretsManagerMetrics" },
+        "ssm_parameters": { "$ref": "#/definitions/SSMParametersMetrics" }
+      }
+    },
+
+    "LevelGatedArray": {
+      "description": "A level-gated inventory array. Null when not collected at the active level; an array (possibly empty) otherwise. See docs/levels.md.",
+      "oneOf": [
+        { "type": "null" },
+        { "type": "array" }
+      ]
+    },
+
+    "IAMMetrics": {
+      "type": "object",
+      "required": [
+        "iam_users_present", "mfa_enabled", "hardware_mfa_enabled", "access_keys_rotated",
+        "root_mfa_enabled", "root_access_keys_exist",
+        "users", "roles", "credential_report"
+      ],
+      "properties": {
+        "iam_users_present": { "type": "boolean" },
+        "mfa_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "hardware_mfa_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "access_keys_rotated": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "root_mfa_enabled": { "type": "boolean" },
+        "root_access_keys_exist": { "type": "boolean" },
+        "users": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-user rows. Null at trust." },
+        "roles": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-role rows. Null at trust." },
+        "credential_report": {
+          "description": "Internal: full IAM credential report with per-user activity. Null when not collected at internal.",
+          "oneOf": [
+            { "type": "null" },
+            { "type": "object", "required": ["users"], "properties": { "users": { "type": "array" } } }
+          ]
         }
       }
     },
-    "IAMMetrics": {
-      "type": "object",
-      "description": "IAM security metrics.",
-      "required": ["iam_users_present", "mfa_enabled", "hardware_mfa_enabled", "access_keys_rotated", "root_mfa_enabled", "root_access_keys_exist"],
-      "properties": {
-        "iam_users_present": { "type": "boolean", "description": "Whether the account has at least one IAM user (excluding root)" },
-        "mfa_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of IAM users with MFA enabled" },
-        "hardware_mfa_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of IAM users with hardware MFA" },
-        "access_keys_rotated": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of access keys rotated within 90 days" },
-        "root_mfa_enabled": { "type": "boolean", "description": "Whether root account has MFA enabled" },
-        "root_access_keys_exist": { "type": "boolean", "description": "Whether root account has access keys (should be false)" }
-      }
-    },
+
     "S3Metrics": {
       "type": "object",
-      "description": "S3 security metrics.",
-      "required": ["public_access_blocked", "default_encryption_enabled", "versioning_enabled", "logging_enabled", "account_public_access_block_enabled"],
+      "required": [
+        "public_access_blocked", "default_encryption_enabled", "versioning_enabled",
+        "logging_enabled", "account_public_access_block_enabled",
+        "buckets"
+      ],
       "properties": {
-        "public_access_blocked": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets with public access blocked" },
-        "default_encryption_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets with default encryption" },
-        "versioning_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets with versioning enabled" },
-        "logging_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets with access logging" },
-        "account_public_access_block_enabled": { "type": "boolean", "description": "Whether account-level public access block is enabled" }
+        "public_access_blocked": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "default_encryption_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "versioning_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "logging_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "account_public_access_block_enabled": { "type": "boolean" },
+        "buckets": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-bucket rows. Per-bucket policy/acl/lifecycle attached at internal." }
       }
     },
+
     "RDSMetrics": {
       "type": "object",
-      "description": "RDS security metrics.",
-      "required": [],
+      "required": ["instances", "clusters"],
       "properties": {
-        "encrypted_at_rest": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage with storage encryption" },
-        "publicly_accessible": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage publicly accessible (should be 0)" },
-        "deletion_protection": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage with deletion protection" },
-        "backup_retention_adequate": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage with backup retention >= 7 days" },
-        "multi_az_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage with Multi-AZ deployment" }
+        "encrypted_at_rest": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "publicly_accessible": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "deletion_protection": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "backup_retention_adequate": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "backup_retention_min": { "type": "integer", "minimum": 0 },
+        "multi_az_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "instances": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-instance rows; internal adds latest_restorable_time." },
+        "clusters": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-cluster rows; internal adds latest_restorable_time." }
       }
     },
+
     "NetworkMetrics": {
       "type": "object",
-      "description": "Network security metrics.",
-      "required": [],
+      "required": ["vpcs", "security_groups"],
       "properties": {
-        "open_to_world_ssh": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of SGs allowing SSH from 0.0.0.0/0" },
-        "open_to_world_rdp": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage allowing RDP from 0.0.0.0/0" },
-        "flow_logs_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of VPCs with flow logs" }
+        "open_to_world_ssh": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "open_to_world_rdp": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "flow_logs_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "vpcs": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-VPC rows." },
+        "security_groups": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-SG rows; internal adds ingress_rules." }
       }
     },
+
     "AccountSecurity": {
       "type": "object",
-      "description": "Account-level security service status and vulnerability posture.",
       "required": ["cloudtrail", "config", "guardduty", "security_hub", "inspector"],
       "properties": {
         "cloudtrail": {
           "type": "object",
-          "required": ["enabled", "multi_region_enabled"],
+          "required": ["enabled", "multi_region_enabled", "trails"],
           "properties": {
-            "enabled": { "type": "boolean", "description": "Whether CloudTrail is enabled and logging" },
-            "multi_region_enabled": { "type": "boolean", "description": "Whether multi-region trail exists" }
+            "enabled": { "type": "boolean" },
+            "multi_region_enabled": { "type": "boolean" },
+            "trails": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-trail rows; internal adds kms_key_arn and cloudwatch_logs_arn." }
           }
         },
         "config": {
           "type": "object",
-          "required": ["enabled", "recorder_running"],
+          "required": ["enabled", "recorder_running", "recorders", "rules", "rules_truncated", "rules_dropped_count"],
           "properties": {
-            "enabled": { "type": "boolean", "description": "Whether AWS Config is enabled" },
-            "recorder_running": { "type": "boolean", "description": "Whether configuration recorder is running" }
+            "enabled": { "type": "boolean" },
+            "recorder_running": { "type": "boolean" },
+            "recorders": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-recorder rows." },
+            "rules": { "$ref": "#/definitions/LevelGatedArray", "description": "Internal: per-rule compliance state. Capped at 1000 per region." },
+            "rules_truncated": { "type": "boolean" },
+            "rules_dropped_count": { "type": "integer", "minimum": 0 }
           }
         },
         "guardduty": {
           "type": "object",
-          "required": ["enabled", "unremediated_findings_over_48h"],
+          "required": ["enabled", "unremediated_findings_over_48h", "detectors", "findings", "findings_truncated", "findings_dropped_count"],
           "properties": {
-            "enabled": { "type": "boolean", "description": "Whether GuardDuty is enabled" },
-            "unremediated_findings_over_48h": { "type": "integer", "minimum": 0, "description": "Count of unarchived severity >= 7 findings with last update older than 48 hours" }
+            "enabled": { "type": "boolean" },
+            "unremediated_findings_over_48h": { "type": "integer", "minimum": 0 },
+            "detectors": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-region detector rows." },
+            "findings": { "$ref": "#/definitions/LevelGatedArray", "description": "Internal: unarchived high-or-critical finding rows. Capped at 5000 per detector." },
+            "findings_truncated": { "type": "boolean" },
+            "findings_dropped_count": { "type": "integer", "minimum": 0 }
           }
         },
         "security_hub": {
           "type": "object",
-          "required": ["enabled"],
+          "required": ["enabled", "standards_arns", "product_subscriptions"],
           "properties": {
-            "enabled": { "type": "boolean", "description": "Whether Security Hub is enabled" },
-            "cis_aws_foundations_benchmark_level_1": {
-              "type": "object",
-              "required": ["enabled", "compliance_percent", "compliance_state"],
-              "properties": {
-                "enabled": { "type": "boolean", "description": "Whether CIS AWS Foundations Benchmark level 1 data is available" },
-                "compliance_percent": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of level 1 controls in PASSED status over PASSED/FAILED/WARNING controls" },
-                "compliance_state": { "type": "string", "description": "Aggregate level 1 compliance state (PASSED, WARNING, FAILED, NOT_AVAILABLE, UNKNOWN)" },
-                "passed_controls": { "type": "integer", "minimum": 0, "description": "Number of level 1 controls in PASSED status" },
-                "failed_controls": { "type": "integer", "minimum": 0, "description": "Number of level 1 controls in FAILED status" },
-                "warning_controls": { "type": "integer", "minimum": 0, "description": "Number of level 1 controls in WARNING status" },
-                "not_available_controls": { "type": "integer", "minimum": 0, "description": "Number of level 1 controls in NOT_AVAILABLE status" }
-              }
-            },
-            "cis_aws_foundations_benchmark_level_2": {
-              "type": "object",
-              "required": ["enabled", "compliance_percent", "compliance_state"],
-              "properties": {
-                "enabled": { "type": "boolean", "description": "Whether CIS AWS Foundations Benchmark level 2 data is available" },
-                "compliance_percent": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of level 2 controls in PASSED status over PASSED/FAILED/WARNING controls" },
-                "compliance_state": { "type": "string", "description": "Aggregate level 2 compliance state (PASSED, WARNING, FAILED, NOT_AVAILABLE, UNKNOWN)" },
-                "passed_controls": { "type": "integer", "minimum": 0, "description": "Number of level 2 controls in PASSED status" },
-                "failed_controls": { "type": "integer", "minimum": 0, "description": "Number of level 2 controls in FAILED status" },
-                "warning_controls": { "type": "integer", "minimum": 0, "description": "Number of level 2 controls in WARNING status" },
-                "not_available_controls": { "type": "integer", "minimum": 0, "description": "Number of level 2 controls in NOT_AVAILABLE status" }
-              }
-            },
-            "cis_aws_foundations_benchmark_unknown_level": {
-              "type": "object",
-              "required": ["enabled", "compliance_percent", "compliance_state"],
-              "properties": {
-                "enabled": { "type": "boolean", "description": "Whether CIS controls without explicit level tags are present" },
-                "compliance_percent": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of unknown-level controls in PASSED status over PASSED/FAILED/WARNING controls" },
-                "compliance_state": { "type": "string", "description": "Aggregate unknown-level compliance state (PASSED, WARNING, FAILED, NOT_AVAILABLE, UNKNOWN)" },
-                "passed_controls": { "type": "integer", "minimum": 0, "description": "Number of unknown-level controls in PASSED status" },
-                "failed_controls": { "type": "integer", "minimum": 0, "description": "Number of unknown-level controls in FAILED status" },
-                "warning_controls": { "type": "integer", "minimum": 0, "description": "Number of unknown-level controls in WARNING status" },
-                "not_available_controls": { "type": "integer", "minimum": 0, "description": "Number of unknown-level controls in NOT_AVAILABLE status" }
-              }
-            }
+            "enabled": { "type": "boolean" },
+            "auto_enable_controls": { "type": "boolean" },
+            "integration_count": { "type": "integer", "minimum": 0 },
+            "standards_arns": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: enabled standards ARNs." },
+            "product_subscriptions": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: integration product ARNs." },
+            "cis_aws_foundations_benchmark_level_1": { "$ref": "#/definitions/CISComplianceByLevel" },
+            "cis_aws_foundations_benchmark_level_2": { "$ref": "#/definitions/CISComplianceByLevel" },
+            "cis_aws_foundations_benchmark_unknown_level": { "$ref": "#/definitions/CISComplianceByLevel" }
           }
         },
         "inspector": {
           "type": "object",
           "required": ["enabled", "unpatched_server_percent"],
           "properties": {
-            "enabled": { "type": "boolean", "description": "Whether Inspector is enabled" },
-            "unpatched_server_percent": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of affected servers with unresolved Inspector findings" }
+            "enabled": { "type": "boolean" },
+            "unpatched_server_percent": { "type": "integer", "minimum": 0, "maximum": 100 },
+            "total_findings": { "type": "integer", "minimum": 0 },
+            "patched_findings": { "type": "integer", "minimum": 0 },
+            "unpatched_findings": { "type": "integer", "minimum": 0 },
+            "total_affected_resources": { "type": "integer", "minimum": 0 },
+            "unpatched_resources": { "type": "integer", "minimum": 0 }
           }
         }
+      }
+    },
+
+    "CISComplianceByLevel": {
+      "type": "object",
+      "required": ["enabled", "compliance_percent", "compliance_state"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "compliance_percent": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "compliance_state": { "type": "string", "enum": ["PASSED", "WARNING", "FAILED", "NOT_AVAILABLE", "UNKNOWN", ""] },
+        "passed_controls": { "type": "integer", "minimum": 0 },
+        "failed_controls": { "type": "integer", "minimum": 0 },
+        "warning_controls": { "type": "integer", "minimum": 0 },
+        "not_available_controls": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "IdentityCenterStatus": {
+      "type": "object",
+      "description": "AWS IAM Identity Center (formerly AWS SSO) posture.",
+      "required": ["enabled", "permission_sets", "users", "groups"],
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Whether an IdC instance exists in the primary region." },
+        "instance_arn": { "type": "string" },
+        "instance_region": { "type": "string" },
+        "identity_store_id": { "type": "string" },
+        "user_count": { "type": "integer", "minimum": 0 },
+        "group_count": { "type": "integer", "minimum": 0 },
+        "permission_set_count": { "type": "integer", "minimum": 0 },
+        "permission_sets": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-permission-set rows; internal adds managed_policy_arns and has_inline_policy." },
+        "users": { "$ref": "#/definitions/LevelGatedArray", "description": "Internal: per-user rows from the identity store." },
+        "groups": { "$ref": "#/definitions/LevelGatedArray", "description": "Internal: per-group rows with member counts." }
+      }
+    },
+
+    "LambdaMetrics": {
+      "type": "object",
+      "required": ["function_count", "deprecated_runtime_count", "functions", "functions_truncated", "functions_dropped_count"],
+      "properties": {
+        "function_count": { "type": "integer", "minimum": 0 },
+        "deprecated_runtime_count": { "type": "integer", "minimum": 0, "description": "Functions running on AWS-deprecated runtimes." },
+        "public_function_url_count": { "type": "integer", "minimum": 0, "description": "Audit enrichment: functions with a publicly-invokable Function URL (auth_type=NONE)." },
+        "functions": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-function rows; internal adds arn / role_arn / kms_key_arn / layer_arns / env_var_names (KEYS ONLY)." },
+        "functions_truncated": { "type": "boolean" },
+        "functions_dropped_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "EC2Metrics": {
+      "type": "object",
+      "required": [
+        "instance_count", "imdsv2_required_count", "public_ip_count",
+        "default_vpc_count", "instances_with_unencrypted_volume_count",
+        "instances", "instances_truncated", "instances_dropped_count"
+      ],
+      "properties": {
+        "instance_count": { "type": "integer", "minimum": 0, "description": "Running instances only." },
+        "imdsv2_required_count": { "type": "integer", "minimum": 0 },
+        "public_ip_count": { "type": "integer", "minimum": 0 },
+        "default_vpc_count": { "type": "integer", "minimum": 0 },
+        "instances_with_unencrypted_volume_count": { "type": "integer", "minimum": 0 },
+        "instances": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-instance rows; internal adds iam_instance_profile_arn / key_name / tags / attached_volume_ids." },
+        "instances_truncated": { "type": "boolean" },
+        "instances_dropped_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "CloudWatchLogsMetrics": {
+      "type": "object",
+      "required": [
+        "log_group_count", "log_groups_without_retention_count", "log_groups_without_customer_kms_count",
+        "log_groups", "log_groups_truncated", "log_groups_dropped_count"
+      ],
+      "properties": {
+        "log_group_count": { "type": "integer", "minimum": 0 },
+        "log_groups_without_retention_count": { "type": "integer", "minimum": 0 },
+        "log_groups_without_customer_kms_count": { "type": "integer", "minimum": 0 },
+        "log_groups": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-log-group rows; internal adds arn and kms_key_arn." },
+        "log_groups_truncated": { "type": "boolean" },
+        "log_groups_dropped_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "KMSMetrics": {
+      "type": "object",
+      "description": "KMS posture scoped to CUSTOMER-managed keys only.",
+      "required": [
+        "customer_managed_key_count", "cmks_with_rotation_disabled_count", "cmks_pending_deletion_count",
+        "keys", "keys_truncated", "keys_dropped_count"
+      ],
+      "properties": {
+        "customer_managed_key_count": { "type": "integer", "minimum": 0 },
+        "cmks_with_rotation_disabled_count": { "type": "integer", "minimum": 0, "description": "Symmetric CMKs only; asymmetric / external-origin keys don't support rotation." },
+        "cmks_pending_deletion_count": { "type": "integer", "minimum": 0 },
+        "keys": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-key rows; internal adds description." },
+        "keys_truncated": { "type": "boolean" },
+        "keys_dropped_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "SecretsManagerMetrics": {
+      "type": "object",
+      "description": "Secrets Manager metadata only. Secret VALUES are never collected.",
+      "required": [
+        "secret_count", "secrets_without_rotation_count", "secrets_without_customer_kms_count", "secrets_pending_deletion_count",
+        "secrets", "secrets_truncated", "secrets_dropped_count"
+      ],
+      "properties": {
+        "secret_count": { "type": "integer", "minimum": 0 },
+        "secrets_without_rotation_count": { "type": "integer", "minimum": 0 },
+        "secrets_without_customer_kms_count": { "type": "integer", "minimum": 0 },
+        "secrets_pending_deletion_count": { "type": "integer", "minimum": 0 },
+        "secrets": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-secret rows; internal adds description / kms_key_arn / rotation_lambda_arn / tags." },
+        "secrets_truncated": { "type": "boolean" },
+        "secrets_dropped_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "SSMParametersMetrics": {
+      "type": "object",
+      "description": "SSM Parameter Store metadata only. Parameter VALUES are never collected.",
+      "required": [
+        "parameter_count", "secure_string_count", "secure_strings_without_customer_kms_count",
+        "parameters", "parameters_truncated", "parameters_dropped_count"
+      ],
+      "properties": {
+        "parameter_count": { "type": "integer", "minimum": 0 },
+        "secure_string_count": { "type": "integer", "minimum": 0 },
+        "secure_strings_without_customer_kms_count": { "type": "integer", "minimum": 0 },
+        "parameters": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-parameter rows; internal adds description and kms_key_arn." },
+        "parameters_truncated": { "type": "boolean" },
+        "parameters_dropped_count": { "type": "integer", "minimum": 0 }
       }
     }
   }

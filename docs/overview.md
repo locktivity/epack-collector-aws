@@ -1,6 +1,14 @@
 # AWS Collector Overview
 
-The AWS collector gathers security posture metrics from AWS accounts, providing visibility into IAM, S3, RDS, network, and account-level security configurations.
+The AWS collector gathers security posture metrics from AWS accounts. The
+amount of detail it gathers is controlled by an optional `level` config knob
+with three values: `trust` (default, pass/fail posture only), `audit` (adds
+per-resource breakdowns), and `internal` (adds raw identifying detail for
+breach investigation). See [levels.md](levels.md) for the full contract.
+
+This page lists the surfaces and their trust-level signals. Per-level field
+breakdowns live in [levels.md](levels.md); the machine-readable shape lives
+in [schema/v1.0.0.json](schema/v1.0.0.json).
 
 ## What It Collects
 
@@ -61,6 +69,71 @@ Interpretation guide:
 - `level_1` and `level_2` values are only populated when findings include explicit level tags.
 - `unknown_level` captures CIS controls where Security Hub did not provide a level tag.
 
+### Identity Center (IAM Identity Center / AWS SSO)
+
+| Metric | Description |
+|--------|-------------|
+| `enabled` | Whether an IdC instance exists in the primary region |
+| `user_count` | Users in the connected identity store |
+| `group_count` | Groups in the connected identity store |
+| `permission_set_count` | Permission sets provisioned on the instance |
+
+### Lambda
+
+| Metric | Description |
+|--------|-------------|
+| `function_count` | Total Lambda functions across regions |
+| `deprecated_runtime_count` | Functions on AWS-deprecated runtimes (Node ≤16, Python ≤3.8, Ruby ≤2.7, Java 8, Go 1.x, .NET Core ≤6) |
+
+### EC2
+
+| Metric | Description |
+|--------|-------------|
+| `instance_count` | Running instances across regions |
+| `imdsv2_required_count` | Instances enforcing IMDSv2 (HttpTokens=required) |
+| `public_ip_count` | Instances with a public IP |
+| `default_vpc_count` | Instances in the default VPC (anti-pattern) |
+| `instances_with_unencrypted_volume_count` | Instances with at least one unencrypted attached EBS volume |
+
+### CloudWatch Logs
+
+| Metric | Description |
+|--------|-------------|
+| `log_group_count` | Log groups across regions |
+| `log_groups_without_retention_count` | Groups with no retention policy (logs accumulate forever) |
+| `log_groups_without_customer_kms_count` | Groups using AWS-managed (vs customer-managed) KMS |
+
+### KMS
+
+Scoped to CUSTOMER-managed keys only; AWS-managed keys offer no posture lever.
+
+| Metric | Description |
+|--------|-------------|
+| `customer_managed_key_count` | Customer-managed keys across regions |
+| `cmks_with_rotation_disabled_count` | Symmetric CMKs without automatic key rotation |
+| `cmks_pending_deletion_count` | Keys scheduled for deletion |
+
+### Secrets Manager
+
+Secret VALUES are NEVER collected — only metadata. Value-reading APIs are forbidden in collector source by build-time lint.
+
+| Metric | Description |
+|--------|-------------|
+| `secret_count` | Secrets across regions |
+| `secrets_without_rotation_count` | Secrets without auto-rotation configured |
+| `secrets_without_customer_kms_count` | Secrets using AWS-managed (vs customer-managed) KMS |
+| `secrets_pending_deletion_count` | Secrets scheduled for deletion |
+
+### SSM Parameter Store
+
+Parameter VALUES are NEVER collected — only metadata. Value-reading APIs are forbidden in collector source by build-time lint.
+
+| Metric | Description |
+|--------|-------------|
+| `parameter_count` | Parameters across regions |
+| `secure_string_count` | SecureString-type parameters (the encrypted, sensitive ones) |
+| `secure_strings_without_customer_kms_count` | SecureStrings using `alias/aws/ssm` (vs a customer-managed key) |
+
 ## Testing
 
 - Unit tests validate collector math/aggregation and AWS helper logic:
@@ -73,7 +146,8 @@ Interpretation guide:
 The collector automatically handles AWS's regional vs global services:
 
 - **Global services** (IAM, S3 bucket listing, CloudTrail): Collected once
-- **Regional services** (RDS, EC2, GuardDuty): Collected from all configured regions
+- **Regional services** (RDS, EC2, GuardDuty, Lambda, CloudWatch Logs, KMS, Secrets Manager, SSM Parameters): Collected from all configured regions
+- **IAM Identity Center**: Probed once in the primary region; accounts with IdC deployed elsewhere should configure that region as primary
 
 Metrics from regional services are aggregated across all regions.
 

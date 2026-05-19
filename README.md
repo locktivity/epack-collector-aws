@@ -4,12 +4,19 @@ Collects AWS account security posture metrics for the epack ecosystem.
 
 ## Features
 
-- **Multi-account support**: Collect from multiple AWS accounts in a single run
-- **IAM security**: MFA coverage, password policies, access key rotation, root account security
-- **S3 security**: Encryption, public access blocks, versioning, logging
-- **RDS security**: Encryption, public accessibility, deletion protection, backups
-- **Network security**: Security group analysis, VPC flow logs
-- **Account security services**: CloudTrail, AWS Config, GuardDuty, Security Hub, Inspector
+- **Configurable collection depth**: an optional `level` config knob (`trust` / `audit` / `internal`) controls how much detail to collect. See [docs/levels.md](docs/levels.md) for the artifact contract and per-surface field breakdowns.
+- **Multi-account support**: collect from multiple AWS accounts in a single run.
+- **IAM**: MFA coverage, password policies, access-key rotation, root-account state; per-user / per-role inventory + full credential report at higher levels.
+- **S3**: encryption, public-access blocks, versioning, logging; per-bucket policy / ACL / lifecycle at higher levels.
+- **RDS**: encryption, public accessibility, deletion protection, backups, Multi-AZ; per-instance / per-cluster rows.
+- **Network**: security-group analysis, VPC flow logs; per-VPC and per-SG-rule inventory.
+- **Account security services**: CloudTrail, AWS Config (with per-rule compliance), GuardDuty (with per-finding triage), Security Hub, Inspector.
+- **Identity Center (IAM Identity Center / AWS SSO)**: instance + user / group / permission-set inventory.
+- **Lambda**: deprecated runtime detection, public Function URL detection, per-function metadata (env var KEYS only — values never collected).
+- **EC2**: IMDSv2 enforcement, public-IP exposure, default-VPC residency, unencrypted-volume detection.
+- **CloudWatch Logs**: retention + customer-KMS coverage, per-log-group inventory.
+- **KMS**: customer-managed key rotation, pending-deletion detection.
+- **Secrets Manager + SSM Parameter Store**: rotation + customer-KMS coverage; metadata only — secret values are never read (enforced by build-time lint).
 
 ## Installation
 
@@ -26,6 +33,26 @@ make build
 ```
 
 ## Configuration
+
+### Collection Level
+
+An optional `level` config field controls how much detail the collector gathers.
+Three values: `trust` (default — pass/fail posture only), `audit` (adds
+per-resource breakdowns), `internal` (adds raw identifying detail for breach
+investigation). Levels are cumulative — `internal` ⊃ `audit` ⊃ `trust`.
+
+```yaml
+collectors:
+  aws:
+    source: "locktivity/epack-collector-aws@^1"
+    config:
+      level: audit       # optional; defaults to trust
+      role_arn: arn:aws:iam::123456789012:role/EpackCollectorRole
+```
+
+Unrecognized values downgrade to `trust` with a stderr warning. The active
+level appears in the output as the top-level `collected_at_level` field. See
+[docs/levels.md](docs/levels.md) for the per-surface field breakdown.
 
 ### Authentication Modes
 
@@ -91,7 +118,15 @@ If no `role_arn` or `accounts` specified, the collector uses the default AWS cre
 
 ## Required IAM Permissions
 
-Create a role with the following read-only permissions in each target account:
+The collector needs read-only AWS permissions in each target account. The minimum set depends on the `level` config (see [Collection Level](#collection-level) above). Levels are cumulative: audit needs the trust set plus more; internal needs the audit set plus more.
+
+All actions are List, Describe, or Get. Value-reading APIs (`secretsmanager:GetSecretValue`, `ssm:GetParameter`, etc.) are intentionally absent and are forbidden in collector source by a build-time lint.
+
+If a surface is missing its required permissions, the collector emits a per-surface AccessDenied diagnostic warning and continues; it does not fail the whole run.
+
+### Trust level (default)
+
+The minimum policy. Required for every collection level.
 
 ```json
 {
@@ -100,40 +135,67 @@ Create a role with the following read-only permissions in each target account:
     {
       "Effect": "Allow",
       "Action": [
+        "sts:GetCallerIdentity",
+
+        "iam:GenerateCredentialReport",
         "iam:GetAccountPasswordPolicy",
         "iam:GetCredentialReport",
-        "iam:GenerateCredentialReport",
-        "iam:ListUsers",
-        "iam:ListMFADevices",
-        "iam:ListRoles",
         "iam:GetRole",
         "iam:ListAccountAliases",
-        "s3:ListAllMyBuckets",
-        "s3:GetBucketPublicAccessBlock",
+        "iam:ListMFADevices",
+        "iam:ListRoles",
+        "iam:ListUsers",
+
+        "s3:GetAccountPublicAccessBlock",
         "s3:GetBucketEncryption",
-        "s3:GetBucketVersioning",
+        "s3:GetBucketLocation",
         "s3:GetBucketLogging",
         "s3:GetBucketPolicy",
-        "s3:GetBucketLocation",
-        "s3:GetAccountPublicAccessBlock",
-        "rds:DescribeDBInstances",
-        "rds:DescribeDBClusters",
-        "ec2:DescribeVpcs",
-        "ec2:DescribeSecurityGroups",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetBucketVersioning",
+        "s3:ListAllMyBuckets",
+
         "ec2:DescribeFlowLogs",
+        "ec2:DescribeInstances",
         "ec2:DescribeRegions",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeVpcs",
+
+        "rds:DescribeDBClusters",
+        "rds:DescribeDBInstances",
+
         "cloudtrail:DescribeTrails",
         "cloudtrail:GetTrailStatus",
+
         "config:DescribeConfigurationRecorders",
         "config:DescribeConfigurationRecorderStatus",
-        "guardduty:ListDetectors",
+
         "guardduty:GetDetector",
+        "guardduty:ListDetectors",
         "guardduty:ListFindings",
+
         "securityhub:DescribeHub",
         "securityhub:GetEnabledStandards",
-        "securityhub:ListEnabledProductsForImport",
         "securityhub:GetFindings",
-        "sts:GetCallerIdentity"
+        "securityhub:ListEnabledProductsForImport",
+
+        "access-analyzer:ListAnalyzers",
+
+        "sso:ListInstances",
+        "sso:ListPermissionSets",
+        "identitystore:ListGroups",
+        "identitystore:ListUsers",
+
+        "lambda:ListFunctions",
+        "logs:DescribeLogGroups",
+
+        "kms:DescribeKey",
+        "kms:GetKeyRotationStatus",
+        "kms:ListKeys",
+
+        "secretsmanager:ListSecrets",
+        "ssm:DescribeParameters"
       ],
       "Resource": "*"
     }
@@ -141,14 +203,55 @@ Create a role with the following read-only permissions in each target account:
 }
 ```
 
+### Audit level
+
+Add these actions to the trust-level policy above. They surface per-permission-set Identity Center detail, per-function Lambda configuration, and KMS alias enrichment.
+
+```json
+[
+  "sso:DescribePermissionSet",
+  "sso:ListAccountsForProvisionedPermissionSet",
+  "sso:ListManagedPoliciesInPermissionSet",
+  "sso:GetInlinePolicyForPermissionSet",
+
+  "lambda:GetPolicy",
+  "lambda:ListFunctionUrlConfigs",
+
+  "kms:ListAliases"
+]
+```
+
+### Internal level
+
+Add these actions on top of the audit-level set. They surface per-user Identity Center group memberships, per-rule Config compliance, GuardDuty finding payloads, and per-bucket S3 ACL and lifecycle configuration.
+
+```json
+[
+  "identitystore:ListGroupMemberships",
+
+  "config:DescribeConfigRules",
+  "config:DescribeComplianceByConfigRule",
+  "config:DescribeConfigRuleEvaluationStatus",
+
+  "guardduty:GetFindings",
+
+  "s3:GetBucketAcl",
+  "s3:GetLifecycleConfiguration"
+]
+```
+
 ## Output
 
-The collector outputs JSON with posture metrics for each account:
+The collector outputs JSON with posture metrics for each account. The example
+below shows the trust-level shape; audit and internal levels add per-resource
+inventory arrays inside each surface (see [docs/levels.md](docs/levels.md)).
+The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0.0.json).
 
 ```json
 {
   "schema_version": "1.0.0",
   "collected_at": "2024-01-15T10:30:00Z",
+  "collected_at_level": "trust",
   "accounts": [
     {
       "account_id": "123456789012",
@@ -228,11 +331,84 @@ The collector outputs JSON with posture metrics for each account:
           "enabled": true,
           "unpatched_server_percent": 25
         }
+      },
+      "identity_center": {
+        "enabled": true,
+        "user_count": 47,
+        "group_count": 12,
+        "permission_set_count": 8
+      },
+      "lambda": {
+        "function_count": 23,
+        "deprecated_runtime_count": 2
+      },
+      "ec2": {
+        "instance_count": 14,
+        "imdsv2_required_count": 14,
+        "public_ip_count": 1,
+        "default_vpc_count": 0,
+        "instances_with_unencrypted_volume_count": 0
+      },
+      "cloudwatch_logs": {
+        "log_group_count": 87,
+        "log_groups_without_retention_count": 5,
+        "log_groups_without_customer_kms_count": 80
+      },
+      "kms": {
+        "customer_managed_key_count": 3,
+        "cmks_with_rotation_disabled_count": 0,
+        "cmks_pending_deletion_count": 0
+      },
+      "secrets_manager": {
+        "secret_count": 12,
+        "secrets_without_rotation_count": 3,
+        "secrets_without_customer_kms_count": 12,
+        "secrets_pending_deletion_count": 0
+      },
+      "ssm_parameters": {
+        "parameter_count": 156,
+        "secure_string_count": 24,
+        "secure_strings_without_customer_kms_count": 24
       }
     }
   ]
 }
 ```
+
+Trust-level fields are always present. Audit and internal levels add
+`<surface>.<inventory_array>` fields (e.g., `lambda.functions`, `ec2.instances`)
+inside each surface — see [docs/levels.md](docs/levels.md) for the
+artifact contract and per-surface field breakdowns.
+
+## Upgrading from v0.1.x
+
+The v0.2.x line is backward-compatible at the schema layer: all new fields
+are additive and the schema version stays at `1.0.0`. A consumer written
+against a v0.1.x pack still reads the same trust-level signals it always
+did.
+
+What's new:
+
+- **`collected_at_level`** is a new top-level field on the output. Always
+  present; one of `"trust"`, `"audit"`, `"internal"`.
+- **Seven new top-level surfaces** appear under each `AccountPosture`:
+  `identity_center`, `lambda`, `ec2`, `cloudwatch_logs`, `kms`,
+  `secrets_manager`, `ssm_parameters`. Their trust-level aggregates are
+  populated by default (no config change needed).
+- **`level` config knob** is added; default is `trust` (zero behavior change
+  from v0.1.x if omitted).
+- **Existing surfaces gain inventory arrays** at audit/internal level
+  (`iam.users`, `s3.buckets`, etc.). At trust level these emit as `null`
+  for the "collected vs not collected" contract — see
+  [docs/levels.md](docs/levels.md#artifact-contract-null-vs--vs-).
+
+What you may need to do:
+
+- **Update your IAM role** to include the new permissions if you want to
+  run at `audit` or `internal` level (see the
+  [Required IAM Permissions](#required-iam-permissions) section). Without
+  them the new surfaces emit zeros with an AccessDenied diagnostic warning.
+- **No code change** needed for consumers that ignore unknown fields.
 
 ## Development
 

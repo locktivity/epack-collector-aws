@@ -5,10 +5,15 @@ import (
 	"fmt"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
+	"github.com/locktivity/epack/componentsdk"
 )
 
 // collectS3Metrics collects S3 security metrics.
-func (c *Collector) collectS3Metrics(ctx context.Context, client *aws.AWSClient, accountID string) (*S3Metrics, error) {
+//
+// At trust, only aggregate percentages and the account-level PAB flag are
+// populated. At audit, per-bucket rows are also surfaced from the same
+// ListBuckets iteration (no extra API calls).
+func (c *Collector) collectS3Metrics(ctx context.Context, client *aws.AWSClient, accountID string, level componentsdk.Level) (*S3Metrics, error) {
 	metrics := &S3Metrics{}
 
 	// Get account-level public access block
@@ -47,5 +52,153 @@ func (c *Collector) collectS3Metrics(ctx context.Context, client *aws.AWSClient,
 	metrics.VersioningEnabled = percent(versioned, len(buckets))
 	metrics.LoggingEnabled = percent(logging, len(buckets))
 
+	if level.AtLeast(componentsdk.LevelAudit) {
+		inventory := s3BucketsToInventory(buckets)
+		// 10,000-bucket cap. Sort by name for stable truncation.
+		kept, dropped, truncated := Truncate(inventory, S3BucketsCap, func(a, b S3Bucket) bool {
+			return a.Name < b.Name
+		})
+		metrics.Buckets = kept
+		if truncated {
+			c.warn("account %s: S3 bucket inventory truncated to %d (dropped %d)", accountID, S3BucketsCap, dropped)
+		}
+
+		if level.AtLeast(componentsdk.LevelInternal) {
+			c.enrichS3BucketsForInternal(ctx, client, accountID, metrics.Buckets)
+		}
+	}
+
 	return metrics, nil
+}
+
+// s3BucketsToInventory projects the bucket list onto audit-level per-bucket
+// rows. The same iteration produced the trust-level aggregates; this just
+// surfaces the rows.
+func s3BucketsToInventory(buckets []aws.Bucket) []S3Bucket {
+	out := make([]S3Bucket, 0, len(buckets))
+	for _, b := range buckets {
+		out = append(out, S3Bucket{
+			Name:                     b.Name,
+			Region:                   b.Region,
+			PublicAccessBlocked:      b.PublicAccessBlocked,
+			DefaultEncryptionEnabled: b.DefaultEncryptionEnabled,
+			VersioningEnabled:        b.VersioningEnabled,
+			LoggingEnabled:           b.LoggingEnabled,
+		})
+	}
+	return out
+}
+
+// s3BucketEnricher is the focused interface enrichS3BucketsForInternal needs.
+// *aws.AWSClient satisfies it; tests substitute a fake.
+type s3BucketEnricher interface {
+	GetBucketPolicy(ctx context.Context, region, bucket string) (*aws.BucketPolicy, error)
+	GetBucketACL(ctx context.Context, region, bucket string) (*aws.BucketACL, error)
+	GetBucketLifecycle(ctx context.Context, region, bucket string) (*aws.BucketLifecycle, error)
+}
+
+// enrichS3BucketsForInternal populates Policy / ACL / Lifecycle on each bucket
+// in place. Per-bucket per-field failures emit warnings and skip just that
+// field without affecting the rest of the inventory.
+func (c *Collector) enrichS3BucketsForInternal(ctx context.Context, client s3BucketEnricher, accountID string, buckets []S3Bucket) {
+	for i := range buckets {
+		b := &buckets[i]
+		region := bucketRegion(b)
+		c.fetchBucketPolicy(ctx, client, accountID, region, b)
+		c.fetchBucketACL(ctx, client, accountID, region, b)
+		c.fetchBucketLifecycle(ctx, client, accountID, region, b)
+	}
+}
+
+// bucketRegion returns the bucket's region, defaulting to us-east-1 if unset.
+// Buckets created via the legacy S3 API report an empty location constraint,
+// which AWS treats as us-east-1 — we mirror that.
+func bucketRegion(b *S3Bucket) string {
+	if b.Region != "" {
+		return b.Region
+	}
+	return "us-east-1"
+}
+
+func (c *Collector) fetchBucketPolicy(ctx context.Context, client s3BucketEnricher, accountID, region string, b *S3Bucket) {
+	policy, err := client.GetBucketPolicy(ctx, region, b.Name)
+	if err != nil {
+		c.warnBucketError(accountID, b.Name, "policy", "s3:GetBucketPolicy", err)
+		return
+	}
+	if policy == nil {
+		return
+	}
+	b.Policy = &S3BucketPolicy{Document: policy.Document}
+}
+
+func (c *Collector) fetchBucketACL(ctx context.Context, client s3BucketEnricher, accountID, region string, b *S3Bucket) {
+	acl, err := client.GetBucketACL(ctx, region, b.Name)
+	if err != nil {
+		c.warnBucketError(accountID, b.Name, "acl", "s3:GetBucketAcl", err)
+		return
+	}
+	if acl == nil {
+		return
+	}
+	b.ACL = &S3BucketACL{
+		OwnerID:        acl.OwnerID,
+		HasPublicGrant: acl.HasPublicGrant,
+		Grants:         convertACLGrants(acl.Grants),
+	}
+}
+
+func (c *Collector) fetchBucketLifecycle(ctx context.Context, client s3BucketEnricher, accountID, region string, b *S3Bucket) {
+	lc, err := client.GetBucketLifecycle(ctx, region, b.Name)
+	if err != nil {
+		c.warnBucketError(accountID, b.Name, "lifecycle", "s3:GetLifecycleConfiguration", err)
+		return
+	}
+	if lc == nil {
+		return
+	}
+	b.Lifecycle = &S3BucketLifecycle{Rules: convertLifecycleRules(lc.Rules)}
+}
+
+// warnBucketError routes per-bucket fetch errors to the structured
+// access-denied diagnostic if applicable, or a generic warning otherwise.
+func (c *Collector) warnBucketError(accountID, bucketName, fieldName, permission string, err error) {
+	if isAccessDeniedErr(err) {
+		c.warnAccessDenied(accountID, fmt.Sprintf("s3_bucket_%s:%s", fieldName, bucketName), permission)
+		return
+	}
+	c.warn("account %s: bucket %s: failed to get %s: %v", accountID, bucketName, fieldName, err)
+}
+
+func convertACLGrants(in []aws.BucketACLGrant) []S3BucketACLGrant {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]S3BucketACLGrant, 0, len(in))
+	for _, g := range in {
+		out = append(out, S3BucketACLGrant{
+			GranteeType: g.GranteeType,
+			GranteeURI:  g.GranteeURI,
+			GranteeID:   g.GranteeID,
+			Permission:  g.Permission,
+		})
+	}
+	return out
+}
+
+func convertLifecycleRules(in []aws.BucketLifecycleRule) []S3LifecycleRule {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]S3LifecycleRule, 0, len(in))
+	for _, r := range in {
+		out = append(out, S3LifecycleRule{
+			ID:          r.ID,
+			Status:      r.Status,
+			Prefix:      r.Prefix,
+			Transitions: r.Transitions,
+			Expiration:  r.Expiration,
+		})
+	}
+	return out
 }

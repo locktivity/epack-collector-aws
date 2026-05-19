@@ -65,7 +65,7 @@ func run(ctx componentsdk.CollectorContext) error {
 		return componentsdk.NewConfigError("creating collector: %v", err)
 	}
 
-	output, err := c.Collect(ctx.Context())
+	output, err := c.Collect(ctx.Context(), ctx.Level())
 	if err != nil {
 		return componentsdk.NewNetworkError("collecting posture: %v", err)
 	}
