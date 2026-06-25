@@ -20,15 +20,27 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 | `mfa_enabled` | Percentage of IAM users with MFA enabled |
 | `hardware_mfa_enabled` | Percentage of IAM users with hardware MFA (physical OTP devices or FIDO/U2F security keys) |
 | `access_keys_rotated` | Percentage of access keys rotated within 90 days |
-| `root_mfa_enabled` | Whether the root account has MFA enabled |
+| `root_mfa_enabled` | Whether root MFA is active |
+| `root_credentials_present` | Whether root has any password, access key, or signing certificate present |
+| `root_password_present` | Whether root has a password present |
 | `root_access_keys_exist` | Whether root has access keys (should be false) |
+| `root_signing_certificates_present` | Whether root has signing certificates present |
+| `root_access_protected` | Whether root MFA is active or no long-term root credentials are present |
+| `root_organizations_features_evaluated` | Whether centralized root access features were read from IAM |
+| `root_organization_id` | Organization ID returned by IAM when centralized root access features were read |
+| `root_credentials_management_feature_enabled` | Whether IAM reported the `RootCredentialsManagement` centralized root access feature |
+| `root_sessions_feature_enabled` | Whether IAM reported the `RootSessions` centralized root access feature |
+| `root_organizations_features_error_code` | Error code when centralized root access features could not be read |
 
 ### S3 Security
 
 | Metric | Description |
 |--------|-------------|
 | `public_access_blocked` | Percentage of buckets with public access blocked |
-| `default_encryption_enabled` | Percentage of buckets with default encryption |
+| `default_encryption_enabled` | Percentage of evaluated buckets with default encryption |
+| `default_encryption_evaluated_count` | Buckets whose default encryption setting was evaluated |
+| `default_encryption_inferred_count` | Evaluated buckets counted from the documented AWS SSE-S3 baseline rather than a readable encryption rule |
+| `default_encryption_unknown_count` | Buckets whose default encryption setting could not be evaluated |
 | `versioning_enabled` | Percentage of buckets with versioning enabled |
 | `logging_enabled` | Percentage of buckets with access logging |
 | `account_public_access_block_enabled` | Whether account-level public access block is enabled |
@@ -49,13 +61,15 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 |--------|-------------|
 | `open_to_world_ssh` | Percentage of security groups allowing SSH from 0.0.0.0/0 |
 | `open_to_world_rdp` | Percentage allowing RDP from 0.0.0.0/0 |
-| `flow_logs_enabled` | Percentage of VPCs with flow logs |
+| `vpcs[].flow_logs_enabled` | Internal-level per-VPC flow log status |
+| `vpcs[].flow_logs_evaluated` | Whether internal-level flow log status was evaluated for the VPC |
+| `vpcs[].flow_logs_error_code` | Error code when internal-level flow log status could not be read |
 
 ### Account Security Services
 
 | Service | Metrics |
 |---------|---------|
-| **CloudTrail** | Enabled, multi-region |
+| **CloudTrail** | Enabled, multi-region, organization trail coverage, trail-status evaluated / inferred / unknown counts |
 | **AWS Config** | Enabled, recorder running |
 | **GuardDuty** | Enabled, unremediated high/critical findings >48h |
 | **Security Hub** | Enabled, CIS AWS Foundations Benchmark level 1/2/unknown-level compliance |

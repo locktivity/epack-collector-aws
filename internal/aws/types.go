@@ -8,6 +8,23 @@ type CredentialReport struct {
 	Users []CredentialReportUser
 }
 
+// AccountSummary represents root-account credential presence from IAM
+// GetAccountSummary.
+type AccountSummary struct {
+	AccountMFAEnabled                 bool
+	AccountPasswordPresent            bool
+	AccountAccessKeysPresent          bool
+	AccountSigningCertificatesPresent bool
+}
+
+// OrganizationFeatures represents IAM centralized root access features enabled
+// for the AWS Organization.
+type OrganizationFeatures struct {
+	OrganizationID                          string
+	RootCredentialsManagementFeatureEnabled bool
+	RootSessionsFeatureEnabled              bool
+}
+
 // CredentialReportUser represents a single user row in the credential report.
 type CredentialReportUser struct {
 	User                      string
@@ -49,6 +66,17 @@ func (u CredentialReportUser) HasAccessKeys() bool {
 	return u.AccessKey1Active || u.AccessKey2Active
 }
 
+// HasSigningCertificates returns true if the root user has any active signing certificates.
+func (u CredentialReportUser) HasSigningCertificates() bool {
+	return u.Cert1Active || u.Cert2Active
+}
+
+// HasLongTermCredentials returns true if the root user has console, access-key,
+// or signing-certificate credentials present.
+func (u CredentialReportUser) HasLongTermCredentials() bool {
+	return u.PasswordEnabled || u.HasAccessKeys() || u.HasSigningCertificates()
+}
+
 // PasswordPolicy represents an IAM password policy.
 type PasswordPolicy struct {
 	MinimumPasswordLength      int
@@ -79,15 +107,18 @@ type Role struct {
 }
 
 // Bucket represents an S3 bucket with security settings.
+// DefaultEncryptionEnabled includes AWS's SSE-S3 baseline for new objects.
 type Bucket struct {
-	Name                     string
-	Region                   string
-	PublicAccessBlocked      bool
-	DefaultEncryptionEnabled bool
-	VersioningEnabled        bool
-	MFADeleteEnabled         bool
-	LoggingEnabled           bool
-	SSLOnlyPolicy            bool
+	Name                       string
+	Region                     string
+	PublicAccessBlocked        bool
+	DefaultEncryptionEnabled   bool
+	DefaultEncryptionEvaluated bool
+	DefaultEncryptionErrorCode string
+	VersioningEnabled          bool
+	MFADeleteEnabled           bool
+	LoggingEnabled             bool
+	SSLOnlyPolicy              bool
 }
 
 // DBInstance represents an RDS instance with security settings.
@@ -167,9 +198,11 @@ type BucketLifecycleRule struct {
 
 // VPC represents a VPC with security settings.
 type VPC struct {
-	VPCID           string
-	IsDefault       bool
-	FlowLogsEnabled bool
+	VPCID             string
+	IsDefault         bool
+	FlowLogsEnabled   bool
+	FlowLogsEvaluated bool
+	FlowLogsErrorCode string
 }
 
 // SecurityGroup represents an EC2 security group.
@@ -223,12 +256,18 @@ func (r SecurityGroupRule) IsAllPorts() bool {
 // Trail represents a CloudTrail trail.
 type Trail struct {
 	Name                      string
+	TrailARN                  string
+	HomeRegion                string
 	S3BucketName              string
 	IsMultiRegionTrail        bool
+	IsOrganizationTrail       bool
 	LogFileValidationEnabled  bool
 	CloudWatchLogsLogGroupArn *string
 	KMSKeyId                  *string
 	IsLogging                 bool
+	TrailStatusEvaluated      bool
+	TrailStatusInferred       bool
+	TrailStatusErrorCode      string
 }
 
 // ConfigRecorder represents an AWS Config recorder.

@@ -83,8 +83,17 @@
         "mfa_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
         "hardware_mfa_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
         "access_keys_rotated": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "root_mfa_enabled": { "type": "boolean" },
+        "root_mfa_enabled": { "type": "boolean", "description": "True when root MFA is active." },
+        "root_credentials_present": { "type": "boolean" },
+        "root_password_present": { "type": "boolean" },
         "root_access_keys_exist": { "type": "boolean" },
+        "root_signing_certificates_present": { "type": "boolean" },
+        "root_access_protected": { "type": "boolean", "description": "True when root MFA is active or no long-term root credentials are present." },
+        "root_organizations_features_evaluated": { "type": "boolean" },
+        "root_organization_id": { "type": "string", "pattern": "^o-[a-z0-9]{10,32}$" },
+        "root_credentials_management_feature_enabled": { "type": "boolean", "description": "True when IAM ListOrganizationsFeatures reported the RootCredentialsManagement centralized root access feature." },
+        "root_sessions_feature_enabled": { "type": "boolean", "description": "True when IAM ListOrganizationsFeatures reported the RootSessions centralized root access feature." },
+        "root_organizations_features_error_code": { "type": "string", "description": "Present when the centralized root access feature read was not evaluated." },
         "users": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-user rows. Null at trust." },
         "roles": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-role rows. Null at trust." },
         "credential_report": {
@@ -106,7 +115,10 @@
       ],
       "properties": {
         "public_access_blocked": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "default_encryption_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "default_encryption_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets whose default encryption was evaluated and enabled." },
+        "default_encryption_evaluated_count": { "type": "integer", "minimum": 0 },
+        "default_encryption_inferred_count": { "type": "integer", "minimum": 0, "description": "Evaluated buckets counted as encrypted from documented AWS SSE-S3 baseline behavior rather than a readable encryption rule." },
+        "default_encryption_unknown_count": { "type": "integer", "minimum": 0 },
         "versioning_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
         "logging_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
         "account_public_access_block_enabled": { "type": "boolean" },
@@ -135,8 +147,7 @@
       "properties": {
         "open_to_world_ssh": { "type": "integer", "minimum": 0, "maximum": 100 },
         "open_to_world_rdp": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "flow_logs_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "vpcs": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-VPC rows." },
+        "vpcs": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-VPC rows; internal adds flow_logs_enabled when evaluated, plus flow_logs_evaluated and flow_logs_error_code provenance." },
         "security_groups": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-SG rows; internal adds ingress_rules." }
       }
     },
@@ -151,7 +162,11 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "multi_region_enabled": { "type": "boolean" },
-            "trails": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-trail rows; internal adds kms_key_arn and cloudwatch_logs_arn." }
+            "organization_trail_enabled": { "type": "boolean" },
+            "trail_status_evaluated_count": { "type": "integer", "minimum": 0 },
+            "trail_status_inferred_count": { "type": "integer", "minimum": 0, "description": "Trail statuses inferred from organization shadow-trail presence when the member account could not read GetTrailStatus." },
+            "trail_status_unknown_count": { "type": "integer", "minimum": 0 },
+            "trails": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-trail rows, including organization-trail and trail-status provenance; internal adds kms_key_arn and cloudwatch_logs_arn." }
           }
         },
         "config": {

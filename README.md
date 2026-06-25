@@ -9,7 +9,7 @@ Collects AWS account security posture metrics for the epack ecosystem.
 - **IAM**: MFA coverage, password policies, access-key rotation, root-account state; per-user / per-role inventory + full credential report at higher levels.
 - **S3**: encryption, public-access blocks, versioning, logging; per-bucket policy / ACL / lifecycle at higher levels.
 - **RDS**: encryption, public accessibility, deletion protection, backups, Multi-AZ; per-instance / per-cluster rows.
-- **Network**: security-group analysis, VPC flow logs; per-VPC and per-SG-rule inventory.
+- **Network**: security-group analysis; per-VPC inventory with internal-level flow log status and per-SG-rule inventory.
 - **Account security services**: CloudTrail, AWS Config (with per-rule compliance), GuardDuty (with per-finding triage), Security Hub, Inspector.
 - **Identity Center (IAM Identity Center / AWS SSO)**: instance + user / group / permission-set inventory.
 - **Lambda**: deprecated runtime detection, public Function URL detection, per-function metadata (env var KEYS only — values never collected).
@@ -124,6 +124,8 @@ All actions are List, Describe, or Get. Value-reading APIs (`secretsmanager:GetS
 
 If a surface is missing its required permissions, the collector emits a per-surface AccessDenied diagnostic warning and continues; it does not fail the whole run.
 
+`iam:ListOrganizationsFeatures` only evaluates centralized root access from the AWS Organizations management account or an IAM delegated administrator account. Member-account roles record the AWS error code in the evidence pack instead of inferring the organization-level state.
+
 ### Trust level (default)
 
 The minimum policy. Required for every collection level.
@@ -139,23 +141,24 @@ The minimum policy. Required for every collection level.
 
         "iam:GenerateCredentialReport",
         "iam:GetAccountPasswordPolicy",
+        "iam:GetAccountSummary",
         "iam:GetCredentialReport",
         "iam:GetRole",
         "iam:ListAccountAliases",
+        "iam:ListOrganizationsFeatures",
         "iam:ListMFADevices",
         "iam:ListRoles",
         "iam:ListUsers",
 
         "s3:GetAccountPublicAccessBlock",
-        "s3:GetBucketEncryption",
         "s3:GetBucketLocation",
         "s3:GetBucketLogging",
         "s3:GetBucketPolicy",
         "s3:GetBucketPublicAccessBlock",
         "s3:GetBucketVersioning",
+        "s3:GetEncryptionConfiguration",
         "s3:ListAllMyBuckets",
 
-        "ec2:DescribeFlowLogs",
         "ec2:DescribeInstances",
         "ec2:DescribeRegions",
         "ec2:DescribeSecurityGroups",
@@ -235,6 +238,8 @@ Add these actions on top of the audit-level set. They surface per-user Identity 
 
   "guardduty:GetFindings",
 
+  "ec2:DescribeFlowLogs",
+
   "s3:GetBucketAcl",
   "s3:GetLifecycleConfiguration"
 ]
@@ -263,11 +268,22 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
         "hardware_mfa_enabled": 0,
         "access_keys_rotated": 80,
         "root_mfa_enabled": true,
-        "root_access_keys_exist": false
+        "root_credentials_present": true,
+        "root_password_present": true,
+        "root_access_keys_exist": false,
+        "root_signing_certificates_present": false,
+        "root_access_protected": true,
+        "root_organizations_features_evaluated": true,
+        "root_organization_id": "o-abc1234567",
+        "root_credentials_management_feature_enabled": true,
+        "root_sessions_feature_enabled": true
       },
       "s3": {
         "public_access_blocked": 100,
         "default_encryption_enabled": 95,
+        "default_encryption_evaluated_count": 20,
+        "default_encryption_inferred_count": 0,
+        "default_encryption_unknown_count": 0,
         "versioning_enabled": 60,
         "logging_enabled": 40,
         "account_public_access_block_enabled": true
@@ -281,13 +297,16 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
       },
       "network": {
         "open_to_world_ssh": 2,
-        "open_to_world_rdp": 0,
-        "flow_logs_enabled": 100
+        "open_to_world_rdp": 0
       },
       "account_security": {
         "cloudtrail": {
           "enabled": true,
-          "multi_region_enabled": true
+          "multi_region_enabled": true,
+          "organization_trail_enabled": true,
+          "trail_status_evaluated_count": 1,
+          "trail_status_inferred_count": 0,
+          "trail_status_unknown_count": 0
         },
         "config": {
           "enabled": true,

@@ -136,18 +136,101 @@ func TestCISStandardHelpers(t *testing.T) {
 	}
 }
 
+func TestSummarizeCloudTrailStatus_OrganizationTrailCountsAsCoverage(t *testing.T) {
+	status := &CloudTrailStatus{}
+	summarizeCloudTrailStatus(status, []aws.Trail{
+		{
+			Name:                "org-trail",
+			IsLogging:           true,
+			IsMultiRegionTrail:  true,
+			IsOrganizationTrail: true,
+		},
+	})
+
+	if !status.Enabled {
+		t.Fatalf("expected logging organization trail to enable CloudTrail")
+	}
+	if !status.MultiRegionEnabled {
+		t.Fatalf("expected logging multi-region organization trail to enable multi-region status")
+	}
+	if !status.OrganizationTrailEnabled {
+		t.Fatalf("expected organization_trail_enabled=true")
+	}
+	if status.TrailStatusEvaluatedCount != 0 || status.TrailStatusInferredCount != 0 || status.TrailStatusUnknownCount != 0 {
+		t.Fatalf("unexpected status provenance counts: %+v", status)
+	}
+}
+
+func TestSummarizeCloudTrailStatus_NonLoggingTrailDoesNotCountAsCoverage(t *testing.T) {
+	status := &CloudTrailStatus{}
+	summarizeCloudTrailStatus(status, []aws.Trail{
+		{
+			Name:                "org-trail",
+			IsMultiRegionTrail:  true,
+			IsOrganizationTrail: true,
+		},
+	})
+
+	if status.Enabled || status.MultiRegionEnabled || status.OrganizationTrailEnabled {
+		t.Fatalf("expected non-logging trail not to count as coverage: %+v", status)
+	}
+}
+
+func TestSummarizeCloudTrailStatus_InferredOrganizationTrailCountsAsCoverage(t *testing.T) {
+	status := &CloudTrailStatus{}
+	summarizeCloudTrailStatus(status, []aws.Trail{
+		{
+			Name:                 "org-trail",
+			TrailARN:             "arn:aws:cloudtrail:us-east-1:123:trail/org-trail",
+			IsLogging:            true,
+			IsMultiRegionTrail:   true,
+			IsOrganizationTrail:  true,
+			TrailStatusInferred:  true,
+			TrailStatusErrorCode: "AccessDeniedException",
+		},
+	})
+
+	if !status.Enabled || !status.MultiRegionEnabled || !status.OrganizationTrailEnabled {
+		t.Fatalf("expected inferred organization trail to count as coverage: %+v", status)
+	}
+	if status.TrailStatusInferredCount != 1 {
+		t.Fatalf("expected one inferred trail status, got %+v", status)
+	}
+}
+
+func TestSummarizeCloudTrailStatus_StatusErrorDoesNotCountAsCoverage(t *testing.T) {
+	status := &CloudTrailStatus{}
+	summarizeCloudTrailStatus(status, []aws.Trail{
+		{
+			Name:                 "local-trail",
+			TrailStatusErrorCode: "AccessDeniedException",
+		},
+	})
+
+	if status.Enabled || status.MultiRegionEnabled || status.OrganizationTrailEnabled {
+		t.Fatalf("expected unknown local trail status not to count as coverage: %+v", status)
+	}
+	if status.TrailStatusUnknownCount != 1 {
+		t.Fatalf("expected one unknown trail status, got %+v", status)
+	}
+}
+
 func TestTrailsToInventory_ProjectsFields(t *testing.T) {
 	kmsKey := "arn:aws:kms:us-east-1:123:key/abc"
 	cwLogs := "arn:aws:logs:us-east-1:123:log-group:/aws/cloudtrail/main:*"
 	in := []aws.Trail{
 		{
 			Name:                      "main-trail",
+			TrailARN:                  "arn:aws:cloudtrail:us-east-1:123:trail/main-trail",
+			HomeRegion:                "us-east-1",
 			S3BucketName:              "audit-logs",
 			IsMultiRegionTrail:        true,
+			IsOrganizationTrail:       true,
 			LogFileValidationEnabled:  true,
 			KMSKeyId:                  &kmsKey,
 			CloudWatchLogsLogGroupArn: &cwLogs,
 			IsLogging:                 true,
+			TrailStatusEvaluated:      true,
 		},
 		{
 			Name:               "second-trail",
@@ -163,11 +246,41 @@ func TestTrailsToInventory_ProjectsFields(t *testing.T) {
 	if out[0].Name != "main-trail" || !out[0].KMSEncrypted || !out[0].CloudWatchLogsEnabled {
 		t.Errorf("trail 0 mis-projected: %+v", out[0])
 	}
+	if out[0].TrailARN != "arn:aws:cloudtrail:us-east-1:123:trail/main-trail" || out[0].HomeRegion != "us-east-1" || !out[0].IsOrganizationTrail {
+		t.Errorf("trail 0 provenance mis-projected: %+v", out[0])
+	}
+	if !out[0].TrailStatusEvaluated {
+		t.Errorf("trail 0 status provenance mis-projected: %+v", out[0])
+	}
 	if out[1].KMSEncrypted || out[1].CloudWatchLogsEnabled {
 		t.Errorf("trail 1 (no KMS / no CW) should have both false: %+v", out[1])
 	}
 	if out[0].KMSKeyARN != "" || out[0].CloudWatchLogsARN != "" {
 		t.Errorf("audit level must not populate ARNs: %+v", out[0])
+	}
+}
+
+func TestTrailsToInventory_DedupesShadowTrailsByARN(t *testing.T) {
+	in := []aws.Trail{
+		{
+			Name:                 "org-trail-shadow-1",
+			TrailARN:             "arn:aws:cloudtrail:us-east-1:123:trail/org-trail",
+			TrailStatusErrorCode: "AccessDeniedException",
+		},
+		{
+			Name:                 "org-trail-shadow-2",
+			TrailARN:             "arn:aws:cloudtrail:us-east-1:123:trail/org-trail",
+			IsLogging:            true,
+			TrailStatusEvaluated: true,
+		},
+	}
+
+	out := trailsToInventory(in, componentsdk.LevelAudit)
+	if len(out) != 1 {
+		t.Fatalf("expected duplicate trail ARN to emit one row, got %d", len(out))
+	}
+	if !out[0].IsLogging || !out[0].TrailStatusEvaluated {
+		t.Fatalf("expected evaluated duplicate to win, got %+v", out[0])
 	}
 }
 

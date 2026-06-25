@@ -28,6 +28,7 @@ type CloudPostureAccount struct {
 type CloudPostureIAM struct {
 	MFACoveragePct                float64 `json:"mfa_coverage_pct"`
 	RootMFAEnabled                bool    `json:"root_mfa_enabled"`
+	RootAccessProtected           bool    `json:"root_access_protected"`
 	AccessKeyRotationCompliantPct float64 `json:"access_key_rotation_compliant_pct"`
 }
 
@@ -39,9 +40,8 @@ type CloudPostureStorage struct {
 
 // CloudPostureLogging contains normalized logging configuration.
 type CloudPostureLogging struct {
-	CloudTrailEnabled     bool    `json:"cloudtrail_enabled"`
-	CloudTrailMultiregion bool    `json:"cloudtrail_multiregion"`
-	FlowLogsPct           float64 `json:"flow_logs_pct"`
+	CloudTrailEnabled     bool `json:"cloudtrail_enabled"`
+	CloudTrailMultiregion bool `json:"cloudtrail_multiregion"`
 }
 
 // CloudPostureNetwork contains normalized network security metrics.
@@ -76,6 +76,7 @@ func (o *Output) ToCloudPosture() *CloudPosture {
 			IAM: CloudPostureIAM{
 				MFACoveragePct:                float64(acct.IAM.MFAEnabled),
 				RootMFAEnabled:                acct.IAM.RootMFAEnabled,
+				RootAccessProtected:           acct.IAM.RootAccessProtected,
 				AccessKeyRotationCompliantPct: float64(acct.IAM.AccessKeysRotated),
 			},
 			Storage: CloudPostureStorage{
@@ -85,7 +86,6 @@ func (o *Output) ToCloudPosture() *CloudPosture {
 			Logging: CloudPostureLogging{
 				CloudTrailEnabled:     acct.AccountSecurity.CloudTrail.Enabled,
 				CloudTrailMultiregion: acct.AccountSecurity.CloudTrail.MultiRegionEnabled,
-				FlowLogsPct:           float64(acct.Network.FlowLogsEnabled),
 			},
 			Network: CloudPostureNetwork{
 				SSHOpenToWorldPct: float64(acct.Network.OpenToWorldSSH),

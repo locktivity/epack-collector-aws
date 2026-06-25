@@ -30,27 +30,14 @@ func (c *Collector) collectS3Metrics(ctx context.Context, client *aws.AWSClient,
 		return metrics, fmt.Errorf("listing buckets: %w", err)
 	}
 
-	var publicBlocked, encrypted, versioned, logging int
-
-	for _, b := range buckets {
-		if b.PublicAccessBlocked {
-			publicBlocked++
-		}
-		if b.DefaultEncryptionEnabled {
-			encrypted++
-		}
-		if b.VersioningEnabled {
-			versioned++
-		}
-		if b.LoggingEnabled {
-			logging++
-		}
+	summarizeS3Buckets(metrics, buckets)
+	if metrics.DefaultEncryptionUnknownCount > 0 {
+		c.warn(
+			"account %s: failed to evaluate S3 default encryption for %d bucket(s); check s3:GetEncryptionConfiguration and per-bucket access",
+			accountID,
+			metrics.DefaultEncryptionUnknownCount,
+		)
 	}
-
-	metrics.PublicAccessBlocked = percent(publicBlocked, len(buckets))
-	metrics.DefaultEncryptionEnabled = percent(encrypted, len(buckets))
-	metrics.VersioningEnabled = percent(versioned, len(buckets))
-	metrics.LoggingEnabled = percent(logging, len(buckets))
 
 	if level.AtLeast(componentsdk.LevelAudit) {
 		inventory := s3BucketsToInventory(buckets)
@@ -71,6 +58,59 @@ func (c *Collector) collectS3Metrics(ctx context.Context, client *aws.AWSClient,
 	return metrics, nil
 }
 
+func summarizeS3Buckets(metrics *S3Metrics, buckets []aws.Bucket) {
+	var publicBlocked, encrypted, encryptionEvaluated, encryptionInferred, encryptionUnknown, versioned, logging int
+
+	for _, b := range buckets {
+		if b.PublicAccessBlocked {
+			publicBlocked++
+		}
+		if bucketDefaultEncryptionEvaluated(b) {
+			encryptionEvaluated++
+			if b.DefaultEncryptionEnabled {
+				encrypted++
+			}
+			if bucketDefaultEncryptionInferred(b) {
+				encryptionInferred++
+			}
+		} else {
+			encryptionUnknown++
+		}
+		if b.VersioningEnabled {
+			versioned++
+		}
+		if b.LoggingEnabled {
+			logging++
+		}
+	}
+
+	metrics.PublicAccessBlocked = percent(publicBlocked, len(buckets))
+	metrics.DefaultEncryptionEnabled = percent(encrypted, encryptionEvaluated)
+	metrics.DefaultEncryptionEvaluatedCount = encryptionEvaluated
+	metrics.DefaultEncryptionInferredCount = encryptionInferred
+	metrics.DefaultEncryptionUnknownCount = encryptionUnknown
+	metrics.VersioningEnabled = percent(versioned, len(buckets))
+	metrics.LoggingEnabled = percent(logging, len(buckets))
+}
+
+func bucketDefaultEncryptionEvaluated(b aws.Bucket) bool {
+	return b.DefaultEncryptionEvaluated
+}
+
+func bucketDefaultEncryptionInferred(b aws.Bucket) bool {
+	return b.DefaultEncryptionEvaluated &&
+		b.DefaultEncryptionEnabled &&
+		b.DefaultEncryptionErrorCode == "ServerSideEncryptionConfigurationNotFoundError"
+}
+
+func bucketDefaultEncryptionEnabled(b aws.Bucket) *bool {
+	if !bucketDefaultEncryptionEvaluated(b) {
+		return nil
+	}
+	enabled := b.DefaultEncryptionEnabled
+	return &enabled
+}
+
 // s3BucketsToInventory projects the bucket list onto audit-level per-bucket
 // rows. The same iteration produced the trust-level aggregates; this just
 // surfaces the rows.
@@ -78,12 +118,14 @@ func s3BucketsToInventory(buckets []aws.Bucket) []S3Bucket {
 	out := make([]S3Bucket, 0, len(buckets))
 	for _, b := range buckets {
 		out = append(out, S3Bucket{
-			Name:                     b.Name,
-			Region:                   b.Region,
-			PublicAccessBlocked:      b.PublicAccessBlocked,
-			DefaultEncryptionEnabled: b.DefaultEncryptionEnabled,
-			VersioningEnabled:        b.VersioningEnabled,
-			LoggingEnabled:           b.LoggingEnabled,
+			Name:                       b.Name,
+			Region:                     b.Region,
+			PublicAccessBlocked:        b.PublicAccessBlocked,
+			DefaultEncryptionEnabled:   bucketDefaultEncryptionEnabled(b),
+			DefaultEncryptionEvaluated: bucketDefaultEncryptionEvaluated(b),
+			DefaultEncryptionErrorCode: b.DefaultEncryptionErrorCode,
+			VersioningEnabled:          b.VersioningEnabled,
+			LoggingEnabled:             b.LoggingEnabled,
 		})
 	}
 	return out

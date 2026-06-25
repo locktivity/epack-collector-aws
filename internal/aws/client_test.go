@@ -7,6 +7,10 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	cloudtrailtypes "github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	securityhubtypes "github.com/aws/aws-sdk-go-v2/service/securityhub/types"
 	"github.com/aws/smithy-go"
 )
@@ -72,6 +76,67 @@ func TestDefaultRegionConstants(t *testing.T) {
 	}
 }
 
+func TestTrailStatusIdentifierPrefersARN(t *testing.T) {
+	name := "org-trail"
+	arn := "arn:aws:cloudtrail:us-east-1:111122223333:trail/org-trail"
+
+	got := trailStatusIdentifier(cloudtrailtypes.Trail{
+		Name:     &name,
+		TrailARN: &arn,
+	})
+
+	if got == nil || *got != arn {
+		t.Fatalf("expected trail ARN identifier, got %v", got)
+	}
+}
+
+func TestTrailStatusIdentifierFallsBackToName(t *testing.T) {
+	name := "local-trail"
+
+	got := trailStatusIdentifier(cloudtrailtypes.Trail{Name: &name})
+
+	if got == nil || *got != name {
+		t.Fatalf("expected trail name identifier, got %v", got)
+	}
+}
+
+func TestShouldInferOrganizationTrailLogging(t *testing.T) {
+	err := &smithy.GenericAPIError{Code: "AccessDeniedException"}
+
+	if !shouldInferOrganizationTrailLogging(cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(true)}, err) {
+		t.Fatalf("expected organization trail status failure to be inferable")
+	}
+	if shouldInferOrganizationTrailLogging(cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(false)}, err) {
+		t.Fatalf("did not expect local trail status failure to be inferable")
+	}
+	if shouldInferOrganizationTrailLogging(cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(true)}, nil) {
+		t.Fatalf("did not expect nil error to be inferable")
+	}
+}
+
+func TestDedupeCloudTrailSDKTrails(t *testing.T) {
+	arn := "arn:aws:cloudtrail:us-east-1:111122223333:trail/org-trail"
+	name1 := "org-trail-shadow-1"
+	name2 := "org-trail-shadow-2"
+	local := "local-trail"
+
+	got := dedupeCloudTrailSDKTrails([]cloudtrailtypes.Trail{
+		{Name: &name1, TrailARN: &arn},
+		{Name: &name2, TrailARN: &arn},
+		{Name: &local},
+	})
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 deduped trails, got %d", len(got))
+	}
+	if aws.ToString(got[0].Name) != name1 {
+		t.Fatalf("expected first copy of duplicate trail to be retained, got %q", aws.ToString(got[0].Name))
+	}
+	if aws.ToString(got[1].Name) != local {
+		t.Fatalf("expected local trail to be retained, got %q", aws.ToString(got[1].Name))
+	}
+}
+
 func TestNormalizeBucketRegion(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -134,6 +199,132 @@ func TestS3ConfigForRegion(t *testing.T) {
 			t.Fatalf("cfg.Region = %q, want %q", cfg.Region, DefaultRegionAWS)
 		}
 	})
+}
+
+func TestAccountSummaryFromMap(t *testing.T) {
+	summary := accountSummaryFromMap(map[string]int32{
+		"AccountMFAEnabled":                 1,
+		"AccountPasswordPresent":            0,
+		"AccountAccessKeysPresent":          1,
+		"AccountSigningCertificatesPresent": 0,
+	})
+
+	if !summary.AccountMFAEnabled {
+		t.Errorf("AccountMFAEnabled should be true")
+	}
+	if summary.AccountPasswordPresent {
+		t.Errorf("AccountPasswordPresent should be false")
+	}
+	if !summary.AccountAccessKeysPresent {
+		t.Errorf("AccountAccessKeysPresent should be true")
+	}
+	if summary.AccountSigningCertificatesPresent {
+		t.Errorf("AccountSigningCertificatesPresent should be false")
+	}
+}
+
+func TestOrganizationFeaturesFromList(t *testing.T) {
+	features := organizationFeaturesFromList("o-abc1234567", []iamtypes.FeatureType{
+		iamtypes.FeatureTypeRootCredentialsManagement,
+		iamtypes.FeatureTypeRootSessions,
+	})
+
+	if features.OrganizationID != "o-abc1234567" {
+		t.Errorf("OrganizationID = %q, want o-abc1234567", features.OrganizationID)
+	}
+	if !features.RootCredentialsManagementFeatureEnabled {
+		t.Errorf("RootCredentialsManagementFeatureEnabled should be true")
+	}
+	if !features.RootSessionsFeatureEnabled {
+		t.Errorf("RootSessionsFeatureEnabled should be true")
+	}
+}
+
+func TestOrganizationFeaturesFromList_MissingFeaturesAreFalse(t *testing.T) {
+	features := organizationFeaturesFromList("o-abc1234567", nil)
+
+	if features.RootCredentialsManagementFeatureEnabled {
+		t.Errorf("RootCredentialsManagementFeatureEnabled should be false")
+	}
+	if features.RootSessionsFeatureEnabled {
+		t.Errorf("RootSessionsFeatureEnabled should be false")
+	}
+}
+
+func TestS3DefaultEncryptionEvaluation(t *testing.T) {
+	tests := []struct {
+		name          string
+		output        *s3.GetBucketEncryptionOutput
+		err           error
+		wantEnabled   bool
+		wantEvaluated bool
+		wantErrorCode string
+	}{
+		{
+			name: "explicit encryption rule",
+			output: &s3.GetBucketEncryptionOutput{
+				ServerSideEncryptionConfiguration: &s3types.ServerSideEncryptionConfiguration{
+					Rules: []s3types.ServerSideEncryptionRule{
+						{
+							ApplyServerSideEncryptionByDefault: &s3types.ServerSideEncryptionByDefault{
+								SSEAlgorithm: s3types.ServerSideEncryptionAes256,
+							},
+						},
+					},
+				},
+			},
+			wantEnabled:   true,
+			wantEvaluated: true,
+		},
+		{
+			name: "implicit SSE-S3 baseline",
+			err: &smithy.GenericAPIError{
+				Code: "ServerSideEncryptionConfigurationNotFoundError",
+			},
+			wantEnabled:   true,
+			wantEvaluated: true,
+			wantErrorCode: "ServerSideEncryptionConfigurationNotFoundError",
+		},
+		{
+			name: "empty configuration is not evaluated",
+			output: &s3.GetBucketEncryptionOutput{
+				ServerSideEncryptionConfiguration: &s3types.ServerSideEncryptionConfiguration{},
+			},
+			wantErrorCode: "EmptyServerSideEncryptionRules",
+		},
+		{
+			name:          "nil output is not evaluated",
+			output:        nil,
+			wantErrorCode: "MissingGetBucketEncryptionOutput",
+		},
+		{
+			name: "access denied is not evaluated",
+			err: &smithy.GenericAPIError{
+				Code: "AccessDenied",
+			},
+			wantErrorCode: "AccessDenied",
+		},
+		{
+			name:          "non api error still has an error code",
+			err:           fmt.Errorf("network unavailable"),
+			wantErrorCode: "NonAPIError",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s3DefaultEncryptionEvaluation(tt.output, tt.err)
+			if got.Enabled != tt.wantEnabled {
+				t.Errorf("Enabled = %v, want %v", got.Enabled, tt.wantEnabled)
+			}
+			if got.Evaluated != tt.wantEvaluated {
+				t.Errorf("Evaluated = %v, want %v", got.Evaluated, tt.wantEvaluated)
+			}
+			if got.ErrorCode != tt.wantErrorCode {
+				t.Errorf("ErrorCode = %q, want %q", got.ErrorCode, tt.wantErrorCode)
+			}
+		})
+	}
 }
 
 func TestCISLevelsForFinding(t *testing.T) {

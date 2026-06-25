@@ -62,7 +62,7 @@ func (c *Collector) collectEC2Metrics(ctx context.Context, client *aws.AWSClient
 }
 
 func defaultVPCLookup(ctx context.Context, client *aws.AWSClient, region string) (map[string]bool, error) {
-	vpcs, err := client.ListVPCs(ctx, region)
+	vpcs, err := client.ListVPCs(ctx, region, false)
 	if err != nil {
 		return nil, err
 	}

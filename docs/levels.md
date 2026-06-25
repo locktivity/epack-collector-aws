@@ -41,7 +41,9 @@ The active level appears in the output artifact as the top-level
 ### IAM (`iam`)
 
 - **trust**: `iam_users_present`, MFA / hardware-MFA / access-key-rotation
-  percentages, root MFA + access-key flags.
+  percentages, literal root MFA state, root credential-presence flags, root
+  access protection, and centralized root access feature evidence when the
+  caller is the Organizations management account or delegated administrator.
 - **audit**: `users[]` (per-user MFA + access-key + console flags),
   `roles[]` (per-role ARN + external-trust flag).
 - **internal**: `credential_report` (full per-user activity from the IAM
@@ -50,9 +52,14 @@ The active level appears in the output artifact as the top-level
 ### S3 (`s3`)
 
 - **trust**: per-bucket aggregate percentages for public access blocked,
-  default encryption, versioning, logging; account-level public-access-block flag.
+  evaluated default encryption, versioning, logging; account-level
+  public-access-block flag; default-encryption evaluated, inferred, and
+  unknown counts.
 - **audit**: `buckets[]` per-bucket row (the same data the percentages were
-  computed from, plus region).
+  computed from, plus region). `default_encryption_enabled` is `null` when
+  the bucket's encryption setting could not be evaluated. A
+  `default_encryption_error_code` value records either the collection gap or a
+  documented-baseline inference.
 - **internal**: per-bucket gains `policy`, `acl`, `lifecycle` sub-objects
   fetched via per-bucket API calls.
 
@@ -66,11 +73,12 @@ The active level appears in the output artifact as the top-level
 
 ### Network (`network`)
 
-- **trust**: aggregate percentages for SSH/RDP open-to-world, VPC flow-logs
-  enabled.
+- **trust**: aggregate percentages for SSH/RDP open-to-world.
 - **audit**: `vpcs[]`, `security_groups[]` per-resource rows.
-- **internal**: SG rows gain per-rule `ingress_rules[]` with CIDR blocks
-  and source-SG references.
+- **internal**: VPC rows gain flow-log provenance: `flow_logs_evaluated`,
+  `flow_logs_enabled` when evaluated, and `flow_logs_error_code` when the
+  status read failed. SG rows gain per-rule `ingress_rules[]` with CIDR
+  blocks and source-SG references.
 
 ### Account Security (`account_security`)
 
@@ -78,8 +86,12 @@ Top-level booleans for each service (CloudTrail / Config / GuardDuty /
 Security Hub / Inspector) at trust; per-resource inventories at audit;
 per-rule / per-finding detail at internal.
 
-- **CloudTrail**: `trails[]` at audit (with KMS + log-validation flags);
-  `kms_key_arn` + `cloudwatch_logs_arn` per trail at internal.
+- **CloudTrail**: trust includes trail-status evaluated / inferred / unknown
+  counts. Organization shadow trails whose status read is blocked are counted
+  as inferred coverage and tagged in `trails[]` at audit. `trails[]` is deduped
+  by trail ARN and carries KMS, log-validation, organization-trail, and
+  trail-status provenance flags; `kms_key_arn` + `cloudwatch_logs_arn` per
+  trail land at internal.
 - **Config**: `recorders[]` at audit; `rules[]` per-rule compliance state at
   internal.
 - **GuardDuty**: `detectors[]` per-region at audit; `findings[]` per

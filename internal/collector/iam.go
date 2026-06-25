@@ -37,6 +37,21 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client *aws.AWSClient
 
 	// Process credential report (always produces trust-level aggregates)
 	c.processCredentialReport(report, metrics)
+	summary, err := client.GetAccountSummary(ctx)
+	if err != nil {
+		c.warn("account %s: failed to collect IAM account summary: %v", accountID, err)
+	} else {
+		processRootAccountSummary(summary, metrics)
+	}
+	features, err := client.ListOrganizationsFeatures(ctx)
+	if err != nil {
+		processRootOrganizationsFeatures(nil, err, metrics)
+		if shouldWarnRootOrganizationsFeaturesError(metrics.RootOrganizationsFeaturesErrorCode) {
+			c.warn("account %s: failed to collect IAM organizations root features: %v", accountID, err)
+		}
+	} else {
+		processRootOrganizationsFeatures(features, nil, metrics)
+	}
 	metrics.HardwareMFAEnabled = c.collectHardwareMFAMetrics(ctx, client, report, accountID)
 
 	if level.AtLeast(componentsdk.LevelAudit) {
@@ -225,8 +240,67 @@ type userStats struct {
 
 // processRootUser extracts root account metrics.
 func (c *Collector) processRootUser(user aws.CredentialReportUser, metrics *IAMMetrics) {
-	metrics.RootMFAEnabled = user.MFAActive
-	metrics.RootAccessKeysExist = user.HasAccessKeys()
+	processRootCredentialState(
+		metrics,
+		user.MFAActive,
+		user.PasswordEnabled,
+		user.HasAccessKeys(),
+		user.HasSigningCertificates(),
+	)
+}
+
+func processRootAccountSummary(summary *aws.AccountSummary, metrics *IAMMetrics) {
+	if summary == nil {
+		return
+	}
+	processRootCredentialState(
+		metrics,
+		summary.AccountMFAEnabled,
+		summary.AccountPasswordPresent,
+		summary.AccountAccessKeysPresent,
+		summary.AccountSigningCertificatesPresent,
+	)
+}
+
+func processRootCredentialState(metrics *IAMMetrics, mfaActive, passwordPresent, accessKeysPresent, signingCertificatesPresent bool) {
+	credentialsPresent := passwordPresent || accessKeysPresent || signingCertificatesPresent
+	metrics.RootPasswordPresent = passwordPresent
+	metrics.RootAccessKeysExist = accessKeysPresent
+	metrics.RootSigningCertificatesPresent = signingCertificatesPresent
+	metrics.RootCredentialsPresent = credentialsPresent
+	metrics.RootMFAEnabled = mfaActive
+	metrics.RootAccessProtected = mfaActive || !credentialsPresent
+}
+
+func processRootOrganizationsFeatures(features *aws.OrganizationFeatures, err error, metrics *IAMMetrics) {
+	if err != nil {
+		metrics.RootOrganizationsFeaturesErrorCode = apiErrorCode(err)
+		return
+	}
+	if features == nil {
+		metrics.RootOrganizationsFeaturesErrorCode = "MissingOrganizationsFeatures"
+		return
+	}
+	metrics.RootOrganizationsFeaturesEvaluated = true
+	metrics.RootOrganizationID = features.OrganizationID
+	metrics.RootCredentialsManagementFeatureEnabled = features.RootCredentialsManagementFeatureEnabled
+	metrics.RootSessionsFeatureEnabled = features.RootSessionsFeatureEnabled
+}
+
+func shouldWarnRootOrganizationsFeaturesError(code string) bool {
+	switch code {
+	case "AccountNotManagementOrDelegatedAdministrator",
+		"AccountNotManagementOrDelegatedAdministratorException",
+		"OrganizationNotFound",
+		"OrganizationNotFoundException",
+		"OrganizationNotInAllFeaturesMode",
+		"OrganizationNotInAllFeaturesModeException",
+		"ServiceAccessNotEnabled",
+		"ServiceAccessNotEnabledException":
+		return false
+	default:
+		return code != ""
+	}
 }
 
 // processIAMUser analyzes a single IAM user and updates stats.

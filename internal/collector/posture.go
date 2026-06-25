@@ -85,8 +85,18 @@ type IAMMetrics struct {
 	HardwareMFAEnabled int  `json:"hardware_mfa_enabled"`
 	AccessKeysRotated  int  `json:"access_keys_rotated"`
 
-	RootMFAEnabled      bool `json:"root_mfa_enabled"`
-	RootAccessKeysExist bool `json:"root_access_keys_exist"`
+	RootMFAEnabled                 bool `json:"root_mfa_enabled"`
+	RootCredentialsPresent         bool `json:"root_credentials_present"`
+	RootPasswordPresent            bool `json:"root_password_present"`
+	RootAccessKeysExist            bool `json:"root_access_keys_exist"`
+	RootSigningCertificatesPresent bool `json:"root_signing_certificates_present"`
+	RootAccessProtected            bool `json:"root_access_protected"`
+
+	RootOrganizationsFeaturesEvaluated      bool   `json:"root_organizations_features_evaluated"`
+	RootOrganizationID                      string `json:"root_organization_id,omitempty"`
+	RootCredentialsManagementFeatureEnabled bool   `json:"root_credentials_management_feature_enabled"`
+	RootSessionsFeatureEnabled              bool   `json:"root_sessions_feature_enabled"`
+	RootOrganizationsFeaturesErrorCode      string `json:"root_organizations_features_error_code,omitempty"`
 
 	// Audit: present (possibly []) when collected at audit+; null when not collected.
 	Users []IAMUser `json:"users"`
@@ -149,6 +159,7 @@ type IAMRole struct {
 }
 
 // S3Metrics contains S3 security posture.
+// DefaultEncryptionEnabled includes AWS's SSE-S3 baseline for new objects.
 //
 // Trust-level fields are aggregates. Audit-level Buckets surfaces the per-bucket
 // rows the percentages were computed from (no extra API calls; the collector
@@ -157,6 +168,9 @@ type S3Metrics struct {
 	// Trust:
 	PublicAccessBlocked             int  `json:"public_access_blocked"`
 	DefaultEncryptionEnabled        int  `json:"default_encryption_enabled"`
+	DefaultEncryptionEvaluatedCount int  `json:"default_encryption_evaluated_count"`
+	DefaultEncryptionInferredCount  int  `json:"default_encryption_inferred_count"`
+	DefaultEncryptionUnknownCount   int  `json:"default_encryption_unknown_count"`
 	VersioningEnabled               int  `json:"versioning_enabled"`
 	LoggingEnabled                  int  `json:"logging_enabled"`
 	AccountPublicAccessBlockEnabled bool `json:"account_public_access_block_enabled"`
@@ -169,12 +183,14 @@ type S3Metrics struct {
 // Policy / ACL / Lifecycle are internal-only and omitted at audit.
 type S3Bucket struct {
 	// Audit:
-	Name                     string `json:"name"`
-	Region                   string `json:"region,omitempty"`
-	PublicAccessBlocked      bool   `json:"public_access_blocked"`
-	DefaultEncryptionEnabled bool   `json:"default_encryption_enabled"`
-	VersioningEnabled        bool   `json:"versioning_enabled"`
-	LoggingEnabled           bool   `json:"logging_enabled"`
+	Name                       string `json:"name"`
+	Region                     string `json:"region,omitempty"`
+	PublicAccessBlocked        bool   `json:"public_access_blocked"`
+	DefaultEncryptionEnabled   *bool  `json:"default_encryption_enabled"`
+	DefaultEncryptionEvaluated bool   `json:"default_encryption_evaluated"`
+	DefaultEncryptionErrorCode string `json:"default_encryption_error_code,omitempty"`
+	VersioningEnabled          bool   `json:"versioning_enabled"`
+	LoggingEnabled             bool   `json:"logging_enabled"`
 
 	// Internal:
 	Policy    *S3BucketPolicy    `json:"policy,omitempty"`
@@ -278,14 +294,13 @@ type RDSCluster struct {
 
 // NetworkMetrics contains network security posture.
 //
-// Trust-level fields are aggregates across regions. Audit-level VPCs and
-// SecurityGroups surface the per-resource rows the percentages were computed
-// from. Per-SG ingress rule detail is internal-level only.
+// Trust-level fields are exposure aggregates across regions. Audit-level VPCs
+// and SecurityGroups surface per-resource rows. Per-VPC flow log status and
+// per-SG ingress rule detail are internal-level only.
 type NetworkMetrics struct {
 	// Trust:
-	OpenToWorldSSH  int `json:"open_to_world_ssh"`
-	OpenToWorldRDP  int `json:"open_to_world_rdp"`
-	FlowLogsEnabled int `json:"flow_logs_enabled"`
+	OpenToWorldSSH int `json:"open_to_world_ssh"`
+	OpenToWorldRDP int `json:"open_to_world_rdp"`
 
 	// Audit: present (possibly []) when collected at audit+; null when not collected.
 	VPCs           []VPCSummary           `json:"vpcs"`
@@ -294,10 +309,12 @@ type NetworkMetrics struct {
 
 // VPCSummary is a per-VPC audit-level inventory row.
 type VPCSummary struct {
-	VPCID           string `json:"vpc_id"`
-	Region          string `json:"region"`
-	IsDefault       bool   `json:"is_default"`
-	FlowLogsEnabled bool   `json:"flow_logs_enabled"`
+	VPCID             string `json:"vpc_id"`
+	Region            string `json:"region"`
+	IsDefault         bool   `json:"is_default"`
+	FlowLogsEnabled   *bool  `json:"flow_logs_enabled,omitempty"`
+	FlowLogsEvaluated *bool  `json:"flow_logs_evaluated,omitempty"`
+	FlowLogsErrorCode string `json:"flow_logs_error_code,omitempty"`
 }
 
 // SecurityGroupSummary is a per-SG audit-level inventory row. The OpenToWorld*
@@ -347,8 +364,12 @@ type AccountSecurity struct {
 // calls are needed.
 type CloudTrailStatus struct {
 	// Trust:
-	Enabled            bool `json:"enabled"`
-	MultiRegionEnabled bool `json:"multi_region_enabled"`
+	Enabled                   bool `json:"enabled"`
+	MultiRegionEnabled        bool `json:"multi_region_enabled"`
+	OrganizationTrailEnabled  bool `json:"organization_trail_enabled"`
+	TrailStatusEvaluatedCount int  `json:"trail_status_evaluated_count"`
+	TrailStatusInferredCount  int  `json:"trail_status_inferred_count"`
+	TrailStatusUnknownCount   int  `json:"trail_status_unknown_count"`
 
 	// Audit: present (possibly []) when collected at audit+ and CloudTrail is
 	// enabled; null when not collected or when DescribeTrails failed.
@@ -362,12 +383,18 @@ type CloudTrailStatus struct {
 type CloudTrailTrail struct {
 	// Audit:
 	Name                     string `json:"name"`
+	TrailARN                 string `json:"trail_arn,omitempty"`
+	HomeRegion               string `json:"home_region,omitempty"`
 	S3BucketName             string `json:"s3_bucket_name,omitempty"`
 	IsMultiRegionTrail       bool   `json:"is_multi_region_trail"`
+	IsOrganizationTrail      bool   `json:"is_organization_trail"`
 	LogFileValidationEnabled bool   `json:"log_file_validation_enabled"`
 	KMSEncrypted             bool   `json:"kms_encrypted"`
 	CloudWatchLogsEnabled    bool   `json:"cloudwatch_logs_enabled"`
 	IsLogging                bool   `json:"is_logging"`
+	TrailStatusEvaluated     bool   `json:"trail_status_evaluated"`
+	TrailStatusInferred      bool   `json:"trail_status_inferred,omitempty"`
+	TrailStatusErrorCode     string `json:"trail_status_error_code,omitempty"`
 
 	// Internal:
 	KMSKeyARN         string `json:"kms_key_arn,omitempty"`

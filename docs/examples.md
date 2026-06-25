@@ -110,11 +110,22 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
         "hardware_mfa_enabled": 0,
         "access_keys_rotated": 80,
         "root_mfa_enabled": true,
-        "root_access_keys_exist": false
+        "root_credentials_present": true,
+        "root_password_present": true,
+        "root_access_keys_exist": false,
+        "root_signing_certificates_present": false,
+        "root_access_protected": true,
+        "root_organizations_features_evaluated": true,
+        "root_organization_id": "o-abc1234567",
+        "root_credentials_management_feature_enabled": true,
+        "root_sessions_feature_enabled": true
       },
       "s3": {
         "public_access_blocked": 100,
         "default_encryption_enabled": 95,
+        "default_encryption_evaluated_count": 20,
+        "default_encryption_inferred_count": 0,
+        "default_encryption_unknown_count": 0,
         "versioning_enabled": 60,
         "logging_enabled": 40,
         "account_public_access_block_enabled": true
@@ -128,13 +139,16 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
       },
       "network": {
         "open_to_world_ssh": 2,
-        "open_to_world_rdp": 0,
-        "flow_logs_enabled": 100
+        "open_to_world_rdp": 0
       },
       "account_security": {
         "cloudtrail": {
           "enabled": true,
-          "multi_region_enabled": true
+          "multi_region_enabled": true,
+          "organization_trail_enabled": true,
+          "trail_status_evaluated_count": 1,
+          "trail_status_inferred_count": 0,
+          "trail_status_unknown_count": 0
         },
         "config": {
           "enabled": true,
@@ -379,8 +393,10 @@ resource "aws_iam_policy" "epack_collector" {
         Effect = "Allow"
         Action = [
           "iam:GetAccountPasswordPolicy",
+          "iam:GetAccountSummary",
           "iam:GetCredentialReport",
           "iam:GenerateCredentialReport",
+          "iam:ListOrganizationsFeatures",
           "iam:ListUsers",
           "iam:ListMFADevices",
           "iam:ListRoles",
@@ -388,6 +404,7 @@ resource "aws_iam_policy" "epack_collector" {
           "iam:ListAccountAliases",
           "s3:ListAllMyBuckets",
           "s3:GetBucket*",
+          "s3:GetEncryptionConfiguration",
           "s3:GetAccountPublicAccessBlock",
           "rds:DescribeDB*",
           "ec2:DescribeVpcs",

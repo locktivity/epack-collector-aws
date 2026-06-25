@@ -245,7 +245,7 @@ func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSC
 			c.warn("account %s region %s: failed to collect RDS metrics: %v", accountID, region, err)
 		}
 
-		if network, err := c.collectNetworkMetrics(ctx, client, region, level); err == nil {
+		if network, err := c.collectNetworkMetrics(ctx, client, region, accountID, level); err == nil {
 			networkMetrics = mergeNetworkMetrics(networkMetrics, *network)
 		} else {
 			c.warn("account %s region %s: failed to collect network metrics: %v", accountID, region, err)

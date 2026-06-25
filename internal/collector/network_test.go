@@ -64,27 +64,22 @@ func TestWeightedAverage(t *testing.T) {
 func TestMergeNetworkMetrics(t *testing.T) {
 	a := networkMetricsWithCounts{
 		NetworkMetrics: NetworkMetrics{
-			OpenToWorldSSH:  50,
-			OpenToWorldRDP:  100,
-			FlowLogsEnabled: 100,
+			OpenToWorldSSH: 50,
+			OpenToWorldRDP: 100,
 		},
 		vpcCount:           2,
 		securityGroupCount: 2,
 	}
 	b := networkMetricsWithCounts{
 		NetworkMetrics: NetworkMetrics{
-			OpenToWorldSSH:  0,
-			OpenToWorldRDP:  0,
-			FlowLogsEnabled: 0,
+			OpenToWorldSSH: 0,
+			OpenToWorldRDP: 0,
 		},
 		vpcCount:           2,
 		securityGroupCount: 2,
 	}
 
 	got := mergeNetworkMetrics(a, b)
-	if got.FlowLogsEnabled != 50 {
-		t.Fatalf("expected FlowLogsEnabled=50, got %d", got.FlowLogsEnabled)
-	}
 	if got.OpenToWorldSSH != 25 {
 		t.Fatalf("expected OpenToWorldSSH=25, got %d", got.OpenToWorldSSH)
 	}
@@ -96,6 +91,55 @@ func TestMergeNetworkMetrics(t *testing.T) {
 	}
 	if got.securityGroupCount != 4 {
 		t.Fatalf("expected securityGroupCount=4, got %d", got.securityGroupCount)
+	}
+}
+
+func TestVPCSummaries_AuditOmitsFlowLogs(t *testing.T) {
+	rows := vpcSummaries([]aws.VPC{
+		{VPCID: "vpc-1", IsDefault: true, FlowLogsEnabled: true},
+	}, "us-east-1", false)
+
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	if rows[0].FlowLogsEnabled != nil {
+		t.Fatalf("expected audit row to omit FlowLogsEnabled, got %+v", rows[0].FlowLogsEnabled)
+	}
+}
+
+func TestVPCSummaries_InternalIncludesFlowLogsFalse(t *testing.T) {
+	rows := vpcSummaries([]aws.VPC{
+		{VPCID: "vpc-1", FlowLogsEnabled: false, FlowLogsEvaluated: true},
+		{VPCID: "vpc-2", FlowLogsEnabled: true, FlowLogsEvaluated: true},
+	}, "us-east-1", true)
+
+	if rows[0].FlowLogsEnabled == nil || *rows[0].FlowLogsEnabled {
+		t.Fatalf("expected internal row to include FlowLogsEnabled=false, got %+v", rows[0].FlowLogsEnabled)
+	}
+	if rows[0].FlowLogsEvaluated == nil || *rows[0].FlowLogsEvaluated != true {
+		t.Fatalf("expected internal row to include FlowLogsEvaluated=true, got %+v", rows[0].FlowLogsEvaluated)
+	}
+	if rows[1].FlowLogsEnabled == nil || !*rows[1].FlowLogsEnabled {
+		t.Fatalf("expected internal row to include FlowLogsEnabled=true, got %+v", rows[1].FlowLogsEnabled)
+	}
+}
+
+func TestVPCSummaries_InternalSurfacesUnevaluatedFlowLogs(t *testing.T) {
+	rows := vpcSummaries([]aws.VPC{
+		{VPCID: "vpc-1", FlowLogsEvaluated: false, FlowLogsErrorCode: "UnauthorizedOperation"},
+	}, "us-east-1", true)
+
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	if rows[0].FlowLogsEnabled != nil {
+		t.Fatalf("expected unevaluated flow logs to omit FlowLogsEnabled, got %+v", rows[0].FlowLogsEnabled)
+	}
+	if rows[0].FlowLogsEvaluated == nil || *rows[0].FlowLogsEvaluated {
+		t.Fatalf("expected FlowLogsEvaluated=false, got %+v", rows[0].FlowLogsEvaluated)
+	}
+	if rows[0].FlowLogsErrorCode != "UnauthorizedOperation" {
+		t.Fatalf("expected UnauthorizedOperation error code, got %q", rows[0].FlowLogsErrorCode)
 	}
 }
 

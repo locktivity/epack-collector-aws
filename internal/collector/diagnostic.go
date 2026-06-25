@@ -43,3 +43,16 @@ func isAccessDeniedErr(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "AccessDenied") || strings.Contains(msg, "UnauthorizedOperation")
 }
+
+func apiErrorCode(err error) string {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		if code := strings.TrimSpace(apiErr.ErrorCode()); code != "" {
+			return code
+		}
+	}
+	if err != nil {
+		return "NonAPIError"
+	}
+	return ""
+}

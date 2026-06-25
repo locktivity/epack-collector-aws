@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"errors"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 	"github.com/locktivity/epack/componentsdk"
@@ -16,14 +17,13 @@ type networkMetricsWithCounts struct {
 
 // collectNetworkMetrics collects network security metrics for a single region.
 //
-// At trust, only aggregate percentages are populated. At audit, per-VPC and
-// per-SG summary rows are surfaced from the same ListVPCs / ListSecurityGroups
-// iteration (no extra API calls).
-func (c *Collector) collectNetworkMetrics(ctx context.Context, client *aws.AWSClient, region string, level componentsdk.Level) (*networkMetricsWithCounts, error) {
+// At trust, only aggregate exposure percentages are populated. At audit,
+// per-VPC and per-SG summary rows are surfaced. Flow log status is internal-only.
+func (c *Collector) collectNetworkMetrics(ctx context.Context, client *aws.AWSClient, region string, accountID string, level componentsdk.Level) (*networkMetricsWithCounts, error) {
 	result := &networkMetricsWithCounts{}
 
 	// Collect VPC metrics
-	if err := c.collectVPCMetrics(ctx, client, region, result, level); err != nil {
+	if err := c.collectVPCMetrics(ctx, client, region, accountID, result, level); err != nil {
 		return result, err
 	}
 
@@ -36,34 +36,44 @@ func (c *Collector) collectNetworkMetrics(ctx context.Context, client *aws.AWSCl
 }
 
 // collectVPCMetrics collects VPC-related metrics.
-func (c *Collector) collectVPCMetrics(ctx context.Context, client *aws.AWSClient, region string, result *networkMetricsWithCounts, level componentsdk.Level) error {
-	vpcs, err := client.ListVPCs(ctx, region)
+func (c *Collector) collectVPCMetrics(ctx context.Context, client *aws.AWSClient, region string, accountID string, result *networkMetricsWithCounts, level componentsdk.Level) error {
+	includeFlowLogs := level.AtLeast(componentsdk.LevelInternal)
+	vpcs, err := client.ListVPCs(ctx, region, includeFlowLogs)
 	if err != nil {
-		return err
+		var flowLogsErr *aws.FlowLogsUnavailableError
+		if !errors.As(err, &flowLogsErr) || len(vpcs) == 0 {
+			return err
+		}
+		c.warn("account %s region %s: failed to collect VPC flow log status: %v", accountID, region, err)
 	}
 
 	result.vpcCount = len(vpcs)
 
-	flowLogsEnabled := 0
-	for _, vpc := range vpcs {
-		if vpc.FlowLogsEnabled {
-			flowLogsEnabled++
-		}
-	}
-	result.FlowLogsEnabled = percent(flowLogsEnabled, len(vpcs))
-
 	if level.AtLeast(componentsdk.LevelAudit) {
-		for _, vpc := range vpcs {
-			result.VPCs = append(result.VPCs, VPCSummary{
-				VPCID:           vpc.VPCID,
-				Region:          region,
-				IsDefault:       vpc.IsDefault,
-				FlowLogsEnabled: vpc.FlowLogsEnabled,
-			})
-		}
+		result.VPCs = append(result.VPCs, vpcSummaries(vpcs, region, includeFlowLogs)...)
 	}
 
 	return nil
+}
+
+func vpcSummaries(vpcs []aws.VPC, region string, includeFlowLogs bool) []VPCSummary {
+	rows := make([]VPCSummary, 0, len(vpcs))
+	for _, vpc := range vpcs {
+		row := VPCSummary{
+			VPCID:     vpc.VPCID,
+			Region:    region,
+			IsDefault: vpc.IsDefault,
+		}
+		if includeFlowLogs {
+			row.FlowLogsEvaluated = boolPtr(vpc.FlowLogsEvaluated)
+			row.FlowLogsErrorCode = vpc.FlowLogsErrorCode
+			if vpc.FlowLogsEvaluated {
+				row.FlowLogsEnabled = boolPtr(vpc.FlowLogsEnabled)
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 // collectSecurityGroupMetrics collects security group metrics.
@@ -179,8 +189,8 @@ func analyzeSecurityGroupExposure(sg aws.SecurityGroup) sgExposure {
 
 // mergeNetworkMetrics merges network metrics from multiple regions.
 //
-// Trust-level aggregates are weighted-averaged across regions; audit-level
-// per-VPC and per-SG inventories are concatenated.
+// Trust-level exposure aggregates are weighted-averaged across regions;
+// audit-level per-VPC and per-SG inventories are concatenated.
 func mergeNetworkMetrics(a, b networkMetricsWithCounts) networkMetricsWithCounts {
 	result := a
 	result.vpcCount += b.vpcCount
@@ -194,11 +204,6 @@ func mergeNetworkMetrics(a, b networkMetricsWithCounts) networkMetricsWithCounts
 		result.SecurityGroups = append(result.SecurityGroups, b.SecurityGroups...)
 	}
 
-	// Weighted averages for percentages
-	if a.vpcCount+b.vpcCount > 0 {
-		result.FlowLogsEnabled = weightedAverage(a.FlowLogsEnabled, a.vpcCount, b.FlowLogsEnabled, b.vpcCount)
-	}
-
 	sgAll := a.securityGroupCount + b.securityGroupCount
 	if sgAll > 0 {
 		result.OpenToWorldSSH = weightedAverage(a.OpenToWorldSSH, a.securityGroupCount, b.OpenToWorldSSH, b.securityGroupCount)
@@ -206,6 +211,10 @@ func mergeNetworkMetrics(a, b networkMetricsWithCounts) networkMetricsWithCounts
 	}
 
 	return result
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 // weightedAverage computes a weighted average of two values.

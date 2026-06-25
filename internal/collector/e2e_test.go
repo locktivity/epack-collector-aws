@@ -134,7 +134,6 @@ func TestE2E_RealAWSCollection(t *testing.T) {
 
 		assertPercent(t, "network.open_to_world_ssh", acct.Network.OpenToWorldSSH)
 		assertPercent(t, "network.open_to_world_rdp", acct.Network.OpenToWorldRDP)
-		assertPercent(t, "network.flow_logs_enabled", acct.Network.FlowLogsEnabled)
 
 		assertPercent(t, "security_hub.level_1.compliance_percent", acct.AccountSecurity.SecurityHub.CISAWSFoundationsBenchmarkLevel1.CompliancePercent)
 		assertPercent(t, "security_hub.level_2.compliance_percent", acct.AccountSecurity.SecurityHub.CISAWSFoundationsBenchmarkLevel2.CompliancePercent)

@@ -18,12 +18,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/accessanalyzer"
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail"
+	cloudtrailtypes "github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
 	configservice "github.com/aws/aws-sdk-go-v2/service/configservice"
 	configtypes "github.com/aws/aws-sdk-go-v2/service/configservice/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/guardduty"
 	guarddutytypes "github.com/aws/aws-sdk-go-v2/service/guardduty/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -47,6 +49,8 @@ type Client interface {
 
 	// IAM
 	GetCredentialReport(ctx context.Context) (*CredentialReport, error)
+	GetAccountSummary(ctx context.Context) (*AccountSummary, error)
+	ListOrganizationsFeatures(ctx context.Context) (*OrganizationFeatures, error)
 	ListMFADevices(ctx context.Context, userName string) ([]MFADevice, error)
 	GetPasswordPolicy(ctx context.Context) (*PasswordPolicy, error)
 	ListRoles(ctx context.Context, callback func([]Role) error) error
@@ -63,7 +67,7 @@ type Client interface {
 	ListDBClusters(ctx context.Context, region string) ([]DBCluster, error)
 
 	// Network (regional)
-	ListVPCs(ctx context.Context, region string) ([]VPC, error)
+	ListVPCs(ctx context.Context, region string, includeFlowLogs bool) ([]VPC, error)
 	ListSecurityGroups(ctx context.Context, region string) ([]SecurityGroup, error)
 
 	// Account Security (regional for some)
@@ -339,6 +343,53 @@ func (c *AWSClient) GetAccountAlias(ctx context.Context) (*string, error) {
 	return nil, nil
 }
 
+// GetAccountSummary returns IAM account-level summary flags.
+func (c *AWSClient) GetAccountSummary(ctx context.Context) (*AccountSummary, error) {
+	iamClient := iam.NewFromConfig(c.cfg)
+	output, err := iamClient.GetAccountSummary(ctx, &iam.GetAccountSummaryInput{})
+	if err != nil {
+		return nil, fmt.Errorf("getting IAM account summary: %w", err)
+	}
+	return accountSummaryFromMap(output.SummaryMap), nil
+}
+
+func accountSummaryFromMap(summary map[string]int32) *AccountSummary {
+	return &AccountSummary{
+		AccountMFAEnabled:                 summaryValueEnabled(summary, "AccountMFAEnabled"),
+		AccountPasswordPresent:            summaryValueEnabled(summary, "AccountPasswordPresent"),
+		AccountAccessKeysPresent:          summaryValueEnabled(summary, "AccountAccessKeysPresent"),
+		AccountSigningCertificatesPresent: summaryValueEnabled(summary, "AccountSigningCertificatesPresent"),
+	}
+}
+
+func summaryValueEnabled(summary map[string]int32, key string) bool {
+	return summary[key] > 0
+}
+
+// ListOrganizationsFeatures returns IAM centralized root access features
+// enabled for the current organization.
+func (c *AWSClient) ListOrganizationsFeatures(ctx context.Context) (*OrganizationFeatures, error) {
+	iamClient := iam.NewFromConfig(c.cfg)
+	output, err := iamClient.ListOrganizationsFeatures(ctx, &iam.ListOrganizationsFeaturesInput{})
+	if err != nil {
+		return nil, fmt.Errorf("listing IAM organizations features: %w", err)
+	}
+	return organizationFeaturesFromList(aws.ToString(output.OrganizationId), output.EnabledFeatures), nil
+}
+
+func organizationFeaturesFromList(organizationID string, features []iamtypes.FeatureType) *OrganizationFeatures {
+	out := &OrganizationFeatures{OrganizationID: organizationID}
+	for _, feature := range features {
+		switch feature {
+		case iamtypes.FeatureTypeRootCredentialsManagement:
+			out.RootCredentialsManagementFeatureEnabled = true
+		case iamtypes.FeatureTypeRootSessions:
+			out.RootSessionsFeatureEnabled = true
+		}
+	}
+	return out
+}
+
 // GetEnabledRegions returns the list of enabled regions.
 func (c *AWSClient) GetEnabledRegions(ctx context.Context) ([]string, error) {
 	ec2Client := ec2.NewFromConfig(c.cfg)
@@ -604,9 +655,10 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 		encOutput, err := bucketClient.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{
 			Bucket: b.Name,
 		})
-		if err == nil && encOutput.ServerSideEncryptionConfiguration != nil {
-			bucket.DefaultEncryptionEnabled = len(encOutput.ServerSideEncryptionConfiguration.Rules) > 0
-		}
+		encryption := s3DefaultEncryptionEvaluation(encOutput, err)
+		bucket.DefaultEncryptionEnabled = encryption.Enabled
+		bucket.DefaultEncryptionEvaluated = encryption.Evaluated
+		bucket.DefaultEncryptionErrorCode = encryption.ErrorCode
 
 		// Get versioning
 		verOutput, err := bucketClient.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{
@@ -639,6 +691,40 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 	}
 
 	return buckets, nil
+}
+
+type s3DefaultEncryptionResult struct {
+	Enabled   bool
+	Evaluated bool
+	ErrorCode string
+}
+
+func s3DefaultEncryptionEvaluation(output *s3.GetBucketEncryptionOutput, err error) s3DefaultEncryptionResult {
+	if err != nil {
+		// Since January 5, 2023, S3 applies SSE-S3 to new objects for every
+		// bucket. Keep legacy missing-config responses from lowering posture.
+		if isAPIErrorCode(err, "ServerSideEncryptionConfigurationNotFoundError") {
+			return s3DefaultEncryptionResult{
+				Enabled:   true,
+				Evaluated: true,
+				ErrorCode: "ServerSideEncryptionConfigurationNotFoundError",
+			}
+		}
+		return s3DefaultEncryptionResult{ErrorCode: apiErrorCode(err)}
+	}
+	if output == nil {
+		return s3DefaultEncryptionResult{ErrorCode: "MissingGetBucketEncryptionOutput"}
+	}
+	if output.ServerSideEncryptionConfiguration == nil {
+		return s3DefaultEncryptionResult{ErrorCode: "MissingServerSideEncryptionConfiguration"}
+	}
+	if len(output.ServerSideEncryptionConfiguration.Rules) == 0 {
+		return s3DefaultEncryptionResult{ErrorCode: "EmptyServerSideEncryptionRules"}
+	}
+	return s3DefaultEncryptionResult{
+		Enabled:   true,
+		Evaluated: true,
+	}
 }
 
 // GetBucketPolicy returns the bucket's policy document. Returns nil with no
@@ -857,8 +943,8 @@ func (c *AWSClient) ListDBClusters(ctx context.Context, region string) ([]DBClus
 	return clusters, nil
 }
 
-// ListVPCs lists VPCs in the specified region with flow logs status.
-func (c *AWSClient) ListVPCs(ctx context.Context, region string) ([]VPC, error) {
+// ListVPCs lists VPCs in the specified region.
+func (c *AWSClient) ListVPCs(ctx context.Context, region string, includeFlowLogs bool) ([]VPC, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	ec2Client := ec2.NewFromConfig(cfg)
@@ -868,13 +954,25 @@ func (c *AWSClient) ListVPCs(ctx context.Context, region string) ([]VPC, error) 
 		return nil, fmt.Errorf("describing VPCs: %w", err)
 	}
 
-	// Get flow logs for all VPCs
-	flowLogsOutput, err := ec2Client.DescribeFlowLogs(ctx, &ec2.DescribeFlowLogsInput{})
 	flowLogVPCs := make(map[string]bool)
-	if err == nil {
-		for _, fl := range flowLogsOutput.FlowLogs {
-			if fl.ResourceId != nil {
-				flowLogVPCs[*fl.ResourceId] = true
+	flowLogsEvaluated := false
+	var flowLogsErr error
+	flowLogsErrorCode := ""
+	if includeFlowLogs {
+		flowLogsOutput, err := ec2Client.DescribeFlowLogs(ctx, &ec2.DescribeFlowLogsInput{})
+		if err != nil {
+			flowLogsErr = &FlowLogsUnavailableError{
+				Region: region,
+				Code:   apiErrorCode(err),
+				Err:    err,
+			}
+			flowLogsErrorCode = apiErrorCode(err)
+		} else {
+			flowLogsEvaluated = true
+			for _, fl := range flowLogsOutput.FlowLogs {
+				if fl.ResourceId != nil {
+					flowLogVPCs[*fl.ResourceId] = true
+				}
 			}
 		}
 	}
@@ -882,14 +980,30 @@ func (c *AWSClient) ListVPCs(ctx context.Context, region string) ([]VPC, error) 
 	vpcs := make([]VPC, 0, len(output.Vpcs))
 	for _, v := range output.Vpcs {
 		vpc := VPC{
-			VPCID:           aws.ToString(v.VpcId),
-			IsDefault:       aws.ToBool(v.IsDefault),
-			FlowLogsEnabled: flowLogVPCs[aws.ToString(v.VpcId)],
+			VPCID:             aws.ToString(v.VpcId),
+			IsDefault:         aws.ToBool(v.IsDefault),
+			FlowLogsEnabled:   flowLogVPCs[aws.ToString(v.VpcId)],
+			FlowLogsEvaluated: flowLogsEvaluated,
+			FlowLogsErrorCode: flowLogsErrorCode,
 		}
 		vpcs = append(vpcs, vpc)
 	}
 
-	return vpcs, nil
+	return vpcs, flowLogsErr
+}
+
+type FlowLogsUnavailableError struct {
+	Region string
+	Code   string
+	Err    error
+}
+
+func (e *FlowLogsUnavailableError) Error() string {
+	return fmt.Sprintf("describing VPC flow logs in %s: %v", e.Region, e.Err)
+}
+
+func (e *FlowLogsUnavailableError) Unwrap() error {
+	return e.Err
 }
 
 // ListSecurityGroups lists security groups in the specified region.
@@ -945,17 +1059,24 @@ func (c *AWSClient) ListSecurityGroups(ctx context.Context, region string) ([]Se
 // DescribeTrails returns CloudTrail trails.
 func (c *AWSClient) DescribeTrails(ctx context.Context) ([]Trail, error) {
 	ctClient := cloudtrail.NewFromConfig(c.cfg)
-	output, err := ctClient.DescribeTrails(ctx, &cloudtrail.DescribeTrailsInput{})
+	output, err := ctClient.DescribeTrails(ctx, &cloudtrail.DescribeTrailsInput{
+		IncludeShadowTrails: aws.Bool(true),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("describing trails: %w", err)
 	}
 
-	trails := make([]Trail, 0, len(output.TrailList))
-	for _, t := range output.TrailList {
+	sdkTrails := dedupeCloudTrailSDKTrails(output.TrailList)
+	trails := make([]Trail, 0, len(sdkTrails))
+	var statusErr error
+	for _, t := range sdkTrails {
 		trail := Trail{
 			Name:                      aws.ToString(t.Name),
+			TrailARN:                  aws.ToString(t.TrailARN),
+			HomeRegion:                aws.ToString(t.HomeRegion),
 			S3BucketName:              aws.ToString(t.S3BucketName),
 			IsMultiRegionTrail:        aws.ToBool(t.IsMultiRegionTrail),
+			IsOrganizationTrail:       aws.ToBool(t.IsOrganizationTrail),
 			LogFileValidationEnabled:  aws.ToBool(t.LogFileValidationEnabled),
 			CloudWatchLogsLogGroupArn: t.CloudWatchLogsLogGroupArn,
 			KMSKeyId:                  t.KmsKeyId,
@@ -963,17 +1084,83 @@ func (c *AWSClient) DescribeTrails(ctx context.Context) ([]Trail, error) {
 
 		// Get trail status
 		status, err := ctClient.GetTrailStatus(ctx, &cloudtrail.GetTrailStatusInput{
-			Name: t.Name,
+			Name: trailStatusIdentifier(t),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("getting trail status for %s: %w", aws.ToString(t.Name), err)
+			trail.TrailStatusErrorCode = apiErrorCode(err)
+			if shouldInferOrganizationTrailLogging(t, err) {
+				trail.IsLogging = true
+				trail.TrailStatusInferred = true
+			} else if statusErr == nil {
+				statusErr = &TrailStatusUnavailableError{
+					TrailName: trail.Name,
+					Code:      apiErrorCode(err),
+					Err:       err,
+				}
+			}
+			trails = append(trails, trail)
+			continue
 		}
 		trail.IsLogging = aws.ToBool(status.IsLogging)
+		trail.TrailStatusEvaluated = true
 
 		trails = append(trails, trail)
 	}
 
-	return trails, nil
+	return trails, statusErr
+}
+
+type TrailStatusUnavailableError struct {
+	TrailName string
+	Code      string
+	Err       error
+}
+
+func (e *TrailStatusUnavailableError) Error() string {
+	return fmt.Sprintf("getting trail status for %s: %v", e.TrailName, e.Err)
+}
+
+func (e *TrailStatusUnavailableError) Unwrap() error {
+	return e.Err
+}
+
+func shouldInferOrganizationTrailLogging(t cloudtrailtypes.Trail, err error) bool {
+	return err != nil && aws.ToBool(t.IsOrganizationTrail)
+}
+
+func dedupeCloudTrailSDKTrails(trails []cloudtrailtypes.Trail) []cloudtrailtypes.Trail {
+	out := make([]cloudtrailtypes.Trail, 0, len(trails))
+	seen := make(map[string]struct{}, len(trails))
+	for _, trail := range trails {
+		key := cloudTrailSDKTrailIdentity(trail)
+		if key == "" {
+			out = append(out, trail)
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trail)
+	}
+	return out
+}
+
+func cloudTrailSDKTrailIdentity(t cloudtrailtypes.Trail) string {
+	if arn := aws.ToString(t.TrailARN); arn != "" {
+		return arn
+	}
+	if name := aws.ToString(t.Name); name != "" {
+		return name
+	}
+	return ""
+}
+
+func trailStatusIdentifier(t cloudtrailtypes.Trail) *string {
+	if t.TrailARN != nil && *t.TrailARN != "" {
+		return t.TrailARN
+	}
+	return t.Name
 }
 
 // DescribeConfigRecorders returns AWS Config recorders in the specified region.
@@ -1671,6 +1858,18 @@ func (c *AWSClient) ListAccessAnalyzers(ctx context.Context, region string) ([]A
 }
 
 func isAPIErrorCode(err error, code string) bool {
+	return apiErrorCode(err) == code
+}
+
+func apiErrorCode(err error) string {
 	var apiErr smithy.APIError
-	return errors.As(err, &apiErr) && apiErr.ErrorCode() == code
+	if errors.As(err, &apiErr) {
+		if code := strings.TrimSpace(apiErr.ErrorCode()); code != "" {
+			return code
+		}
+	}
+	if err != nil {
+		return "NonAPIError"
+	}
+	return ""
 }

@@ -12,32 +12,57 @@ import (
 func TestS3BucketsToInventory_PreservesAllFlags(t *testing.T) {
 	in := []aws.Bucket{
 		{
-			Name:                     "alpha",
-			Region:                   "us-east-1",
-			PublicAccessBlocked:      true,
-			DefaultEncryptionEnabled: true,
-			VersioningEnabled:        true,
-			LoggingEnabled:           false,
+			Name:                       "alpha",
+			Region:                     "us-east-1",
+			PublicAccessBlocked:        true,
+			DefaultEncryptionEnabled:   true,
+			DefaultEncryptionEvaluated: true,
+			VersioningEnabled:          true,
+			LoggingEnabled:             false,
 		},
 		{
-			Name:                     "beta",
-			Region:                   "us-west-2",
-			PublicAccessBlocked:      false,
-			DefaultEncryptionEnabled: true,
-			VersioningEnabled:        false,
-			LoggingEnabled:           true,
+			Name:                       "beta",
+			Region:                     "us-west-2",
+			PublicAccessBlocked:        false,
+			DefaultEncryptionEnabled:   true,
+			DefaultEncryptionEvaluated: true,
+			VersioningEnabled:          false,
+			LoggingEnabled:             true,
+		},
+		{
+			Name:                       "gamma",
+			Region:                     "us-west-1",
+			PublicAccessBlocked:        true,
+			DefaultEncryptionErrorCode: "AccessDenied",
+			VersioningEnabled:          true,
+			LoggingEnabled:             true,
 		},
 	}
 
 	out := s3BucketsToInventory(in)
-	if len(out) != 2 {
-		t.Fatalf("expected 2 buckets, got %d", len(out))
+	if len(out) != 3 {
+		t.Fatalf("expected 3 buckets, got %d", len(out))
 	}
-	if out[0].Name != "alpha" || out[0].Region != "us-east-1" || !out[0].PublicAccessBlocked || !out[0].VersioningEnabled || out[0].LoggingEnabled {
+	if out[0].Name != "alpha" || out[0].Region != "us-east-1" || !out[0].PublicAccessBlocked || !out[0].DefaultEncryptionEvaluated || !out[0].VersioningEnabled || out[0].LoggingEnabled {
 		t.Errorf("alpha row mis-projected: %+v", out[0])
 	}
-	if out[1].Name != "beta" || out[1].PublicAccessBlocked || !out[1].LoggingEnabled {
+	if out[0].DefaultEncryptionEnabled == nil || !*out[0].DefaultEncryptionEnabled {
+		t.Errorf("alpha default encryption should be true, got %v", out[0].DefaultEncryptionEnabled)
+	}
+	if out[1].Name != "beta" || out[1].PublicAccessBlocked || !out[1].DefaultEncryptionEvaluated || !out[1].LoggingEnabled {
 		t.Errorf("beta row mis-projected: %+v", out[1])
+	}
+	if out[1].DefaultEncryptionEnabled == nil || !*out[1].DefaultEncryptionEnabled {
+		t.Errorf("beta default encryption should be true, got %v", out[1].DefaultEncryptionEnabled)
+	}
+	if out[2].Name != "gamma" || out[2].DefaultEncryptionEvaluated {
+		t.Errorf("gamma row should preserve unevaluated encryption state: %+v", out[2])
+	}
+	if out[2].DefaultEncryptionEnabled != nil {
+		t.Errorf("gamma default encryption should be nil when unevaluated, got %v", out[2].DefaultEncryptionEnabled)
+	}
+	if out[2].DefaultEncryptionErrorCode != "AccessDenied" {
+		t.Errorf("gamma error code = %q, want AccessDenied", out[2].DefaultEncryptionErrorCode)
 	}
 }
 
@@ -45,6 +70,45 @@ func TestS3BucketsToInventory_EmptyInputReturnsEmpty(t *testing.T) {
 	out := s3BucketsToInventory(nil)
 	if len(out) != 0 {
 		t.Errorf("expected empty inventory for nil input, got %d rows", len(out))
+	}
+}
+
+func TestSummarizeS3Buckets_DefaultEncryptionUsesEvaluatedDenominator(t *testing.T) {
+	buckets := []aws.Bucket{
+		{
+			Name:                       "encrypted",
+			DefaultEncryptionEnabled:   true,
+			DefaultEncryptionEvaluated: true,
+		},
+		{
+			Name:                       "inferred",
+			DefaultEncryptionEnabled:   true,
+			DefaultEncryptionEvaluated: true,
+			DefaultEncryptionErrorCode: "ServerSideEncryptionConfigurationNotFoundError",
+		},
+		{
+			Name:                       "not-encrypted",
+			DefaultEncryptionEvaluated: true,
+		},
+		{
+			Name: "unknown",
+		},
+	}
+
+	metrics := &S3Metrics{}
+	summarizeS3Buckets(metrics, buckets)
+
+	if metrics.DefaultEncryptionEnabled != 66 {
+		t.Errorf("DefaultEncryptionEnabled = %d, want 66", metrics.DefaultEncryptionEnabled)
+	}
+	if metrics.DefaultEncryptionEvaluatedCount != 3 {
+		t.Errorf("DefaultEncryptionEvaluatedCount = %d, want 3", metrics.DefaultEncryptionEvaluatedCount)
+	}
+	if metrics.DefaultEncryptionInferredCount != 1 {
+		t.Errorf("DefaultEncryptionInferredCount = %d, want 1", metrics.DefaultEncryptionInferredCount)
+	}
+	if metrics.DefaultEncryptionUnknownCount != 1 {
+		t.Errorf("DefaultEncryptionUnknownCount = %d, want 1", metrics.DefaultEncryptionUnknownCount)
 	}
 }
 

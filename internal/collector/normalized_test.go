@@ -15,10 +15,11 @@ func TestToCloudPosture(t *testing.T) {
 				AccountID: "123456789012",
 				Regions:   []string{"us-east-1", "us-west-2"},
 				IAM: IAMMetrics{
-					MFAEnabled:         80,
-					RootMFAEnabled:     true,
-					AccessKeysRotated:  90,
-					HardwareMFAEnabled: 30,
+					MFAEnabled:          80,
+					RootMFAEnabled:      true,
+					RootAccessProtected: true,
+					AccessKeysRotated:   90,
+					HardwareMFAEnabled:  30,
 				},
 				S3: S3Metrics{
 					DefaultEncryptionEnabled: 95,
@@ -31,9 +32,8 @@ func TestToCloudPosture(t *testing.T) {
 					BackupRetentionMin:      14,
 				},
 				Network: NetworkMetrics{
-					OpenToWorldSSH:  5,
-					OpenToWorldRDP:  0,
-					FlowLogsEnabled: 85,
+					OpenToWorldSSH: 5,
+					OpenToWorldRDP: 0,
 				},
 				AccountSecurity: AccountSecurity{
 					CloudTrail: CloudTrailStatus{
@@ -76,6 +76,9 @@ func TestToCloudPosture(t *testing.T) {
 	if !acct.IAM.RootMFAEnabled {
 		t.Error("IAM.RootMFAEnabled = false, want true")
 	}
+	if !acct.IAM.RootAccessProtected {
+		t.Error("IAM.RootAccessProtected = false, want true")
+	}
 	if acct.IAM.AccessKeyRotationCompliantPct != 90 {
 		t.Errorf("IAM.AccessKeyRotationCompliantPct = %v, want 90", acct.IAM.AccessKeyRotationCompliantPct)
 	}
@@ -95,10 +98,6 @@ func TestToCloudPosture(t *testing.T) {
 	if !acct.Logging.CloudTrailMultiregion {
 		t.Error("Logging.CloudTrailMultiregion = false, want true")
 	}
-	if acct.Logging.FlowLogsPct != 85 {
-		t.Errorf("Logging.FlowLogsPct = %v, want 85", acct.Logging.FlowLogsPct)
-	}
-
 	// Verify Network mappings
 	if acct.Network.SSHOpenToWorldPct != 5 {
 		t.Errorf("Network.SSHOpenToWorldPct = %v, want 5", acct.Network.SSHOpenToWorldPct)
@@ -128,11 +127,11 @@ func TestToCloudPosture_MultipleAccounts(t *testing.T) {
 		Accounts: []AccountPosture{
 			{
 				AccountID: "111111111111",
-				IAM:       IAMMetrics{MFAEnabled: 100, RootMFAEnabled: true},
+				IAM:       IAMMetrics{MFAEnabled: 100, RootMFAEnabled: true, RootAccessProtected: true},
 			},
 			{
 				AccountID: "222222222222",
-				IAM:       IAMMetrics{MFAEnabled: 50, RootMFAEnabled: false},
+				IAM:       IAMMetrics{MFAEnabled: 50, RootMFAEnabled: false, RootAccessProtected: false},
 			},
 		},
 	}
@@ -206,18 +205,18 @@ func TestCloudPostureJSONStructure(t *testing.T) {
 			{
 				AccountID: "123456789012",
 				IAM: IAMMetrics{
-					MFAEnabled:        100,
-					RootMFAEnabled:    true,
-					AccessKeysRotated: 95,
+					MFAEnabled:          100,
+					RootMFAEnabled:      true,
+					RootAccessProtected: true,
+					AccessKeysRotated:   95,
 				},
 				S3: S3Metrics{
 					DefaultEncryptionEnabled: 100,
 					PublicAccessBlocked:      100,
 				},
 				Network: NetworkMetrics{
-					OpenToWorldSSH:  0,
-					OpenToWorldRDP:  0,
-					FlowLogsEnabled: 100,
+					OpenToWorldSSH: 0,
+					OpenToWorldRDP: 0,
 				},
 				RDS: RDSMetrics{
 					BackupRetentionAdequate: 100,
@@ -289,7 +288,7 @@ func TestCloudPostureJSONStructure(t *testing.T) {
 	if !ok {
 		t.Fatal("iam is not an object")
 	}
-	iamFields := []string{"mfa_coverage_pct", "root_mfa_enabled", "access_key_rotation_compliant_pct"}
+	iamFields := []string{"mfa_coverage_pct", "root_mfa_enabled", "root_access_protected", "access_key_rotation_compliant_pct"}
 	for _, field := range iamFields {
 		if _, ok := iam[field]; !ok {
 			t.Errorf("iam missing required field: %s", field)
@@ -313,7 +312,7 @@ func TestCloudPostureJSONStructure(t *testing.T) {
 	if !ok {
 		t.Fatal("logging is not an object")
 	}
-	loggingFields := []string{"cloudtrail_enabled", "cloudtrail_multiregion", "flow_logs_pct"}
+	loggingFields := []string{"cloudtrail_enabled", "cloudtrail_multiregion"}
 	for _, field := range loggingFields {
 		if _, ok := logging[field]; !ok {
 			t.Errorf("logging missing required field: %s", field)

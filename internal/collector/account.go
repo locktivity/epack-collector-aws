@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -36,21 +37,41 @@ func (c *Collector) collectAccountSecurity(ctx context.Context, client *aws.AWSC
 func (c *Collector) collectCloudTrailStatus(ctx context.Context, client *aws.AWSClient, accountID string, status *CloudTrailStatus, level componentsdk.Level) {
 	trails, err := client.DescribeTrails(ctx)
 	if err != nil {
-		c.warn("account %s: failed to collect CloudTrail status: %v", accountID, err)
-		return
+		var statusErr *aws.TrailStatusUnavailableError
+		if !errors.As(err, &statusErr) || len(trails) == 0 {
+			c.warn("account %s: failed to collect CloudTrail status: %v", accountID, err)
+			return
+		}
+		c.warn("account %s: failed to collect one or more CloudTrail trail statuses: %v", accountID, err)
 	}
 
-	for _, trail := range trails {
-		if trail.IsLogging {
-			status.Enabled = true
-		}
-		if trail.IsMultiRegionTrail {
-			status.MultiRegionEnabled = true
-		}
-	}
+	summarizeCloudTrailStatus(status, trails)
 
 	if level.AtLeast(componentsdk.LevelAudit) {
 		status.Trails = trailsToInventory(trails, level)
+	}
+}
+
+func summarizeCloudTrailStatus(status *CloudTrailStatus, trails []aws.Trail) {
+	trails = dedupeTrails(trails)
+	for _, trail := range trails {
+		switch {
+		case trail.TrailStatusEvaluated:
+			status.TrailStatusEvaluatedCount++
+		case trail.TrailStatusInferred:
+			status.TrailStatusInferredCount++
+		case trail.TrailStatusErrorCode != "":
+			status.TrailStatusUnknownCount++
+		}
+		if trail.IsLogging {
+			status.Enabled = true
+		}
+		if trail.IsLogging && trail.IsMultiRegionTrail {
+			status.MultiRegionEnabled = true
+		}
+		if trail.IsLogging && trail.IsOrganizationTrail {
+			status.OrganizationTrailEnabled = true
+		}
 	}
 }
 
@@ -59,16 +80,23 @@ func (c *Collector) collectCloudTrailStatus(ctx context.Context, client *aws.AWS
 // the KMS key ARN and CloudWatch Logs ARN so consumers can correlate the trail
 // to its key and destination log group.
 func trailsToInventory(trails []aws.Trail, level componentsdk.Level) []CloudTrailTrail {
+	trails = dedupeTrails(trails)
 	out := make([]CloudTrailTrail, 0, len(trails))
 	for _, t := range trails {
 		row := CloudTrailTrail{
 			Name:                     t.Name,
+			TrailARN:                 t.TrailARN,
+			HomeRegion:               t.HomeRegion,
 			S3BucketName:             t.S3BucketName,
 			IsMultiRegionTrail:       t.IsMultiRegionTrail,
+			IsOrganizationTrail:      t.IsOrganizationTrail,
 			LogFileValidationEnabled: t.LogFileValidationEnabled,
 			KMSEncrypted:             t.KMSKeyId != nil && *t.KMSKeyId != "",
 			CloudWatchLogsEnabled:    t.CloudWatchLogsLogGroupArn != nil && *t.CloudWatchLogsLogGroupArn != "",
 			IsLogging:                t.IsLogging,
+			TrailStatusEvaluated:     t.TrailStatusEvaluated,
+			TrailStatusInferred:      t.TrailStatusInferred,
+			TrailStatusErrorCode:     t.TrailStatusErrorCode,
 		}
 		if level.AtLeast(componentsdk.LevelInternal) {
 			if t.KMSKeyId != nil {
@@ -81,6 +109,44 @@ func trailsToInventory(trails []aws.Trail, level componentsdk.Level) []CloudTrai
 		out = append(out, row)
 	}
 	return out
+}
+
+func dedupeTrails(trails []aws.Trail) []aws.Trail {
+	out := make([]aws.Trail, 0, len(trails))
+	seen := make(map[string]int, len(trails))
+	for _, trail := range trails {
+		key := trailIdentity(trail)
+		if key == "" {
+			out = append(out, trail)
+			continue
+		}
+		if idx, ok := seen[key]; ok {
+			if shouldReplaceDuplicateTrail(out[idx], trail) {
+				out[idx] = trail
+			}
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, trail)
+	}
+	return out
+}
+
+func trailIdentity(trail aws.Trail) string {
+	if trail.TrailARN != "" {
+		return trail.TrailARN
+	}
+	return trail.Name
+}
+
+func shouldReplaceDuplicateTrail(existing, candidate aws.Trail) bool {
+	if !existing.TrailStatusEvaluated && candidate.TrailStatusEvaluated {
+		return true
+	}
+	if !existing.IsLogging && candidate.IsLogging {
+		return true
+	}
+	return false
 }
 
 // collectConfigStatus collects AWS Config status.

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/smithy-go"
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 )
 
@@ -94,6 +95,9 @@ func TestProcessCredentialReport(t *testing.T) {
 	if !metrics.RootMFAEnabled {
 		t.Fatalf("expected RootMFAEnabled=true")
 	}
+	if !metrics.RootAccessProtected {
+		t.Fatalf("expected RootAccessProtected=true")
+	}
 	if metrics.RootAccessKeysExist {
 		t.Fatalf("expected RootAccessKeysExist=false")
 	}
@@ -126,6 +130,168 @@ func TestProcessCredentialReport_NoActiveAccessKeys(t *testing.T) {
 
 	if metrics.AccessKeysRotated != 100 {
 		t.Fatalf("expected AccessKeysRotated=100 when no active access keys exist, got %d", metrics.AccessKeysRotated)
+	}
+}
+
+func TestProcessRootCredentialState(t *testing.T) {
+	tests := []struct {
+		name                        string
+		mfaActive                   bool
+		passwordPresent             bool
+		accessKeysPresent           bool
+		signingCertificatesPresent  bool
+		wantRootMFAEnabled          bool
+		wantRootCredentialsPresent  bool
+		wantRootPasswordPresent     bool
+		wantRootAccessKeysExist     bool
+		wantRootSigningCertsPresent bool
+		wantRootAccessProtected     bool
+	}{
+		{
+			name:                       "mfa active with root password passes",
+			mfaActive:                  true,
+			passwordPresent:            true,
+			wantRootMFAEnabled:         true,
+			wantRootCredentialsPresent: true,
+			wantRootPasswordPresent:    true,
+			wantRootAccessProtected:    true,
+		},
+		{
+			name:                    "no long-term root credentials passes without claiming mfa",
+			wantRootMFAEnabled:      false,
+			wantRootAccessProtected: true,
+		},
+		{
+			name:                       "password without mfa fails",
+			passwordPresent:            true,
+			wantRootCredentialsPresent: true,
+			wantRootPasswordPresent:    true,
+		},
+		{
+			name:                       "access key without mfa fails",
+			accessKeysPresent:          true,
+			wantRootCredentialsPresent: true,
+			wantRootAccessKeysExist:    true,
+		},
+		{
+			name:                        "signing certificate without mfa fails",
+			signingCertificatesPresent:  true,
+			wantRootCredentialsPresent:  true,
+			wantRootSigningCertsPresent: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			metrics := &IAMMetrics{}
+			processRootCredentialState(
+				metrics,
+				tc.mfaActive,
+				tc.passwordPresent,
+				tc.accessKeysPresent,
+				tc.signingCertificatesPresent,
+			)
+
+			if metrics.RootMFAEnabled != tc.wantRootMFAEnabled {
+				t.Errorf("RootMFAEnabled = %v, want %v", metrics.RootMFAEnabled, tc.wantRootMFAEnabled)
+			}
+			if metrics.RootCredentialsPresent != tc.wantRootCredentialsPresent {
+				t.Errorf("RootCredentialsPresent = %v, want %v", metrics.RootCredentialsPresent, tc.wantRootCredentialsPresent)
+			}
+			if metrics.RootPasswordPresent != tc.wantRootPasswordPresent {
+				t.Errorf("RootPasswordPresent = %v, want %v", metrics.RootPasswordPresent, tc.wantRootPasswordPresent)
+			}
+			if metrics.RootAccessKeysExist != tc.wantRootAccessKeysExist {
+				t.Errorf("RootAccessKeysExist = %v, want %v", metrics.RootAccessKeysExist, tc.wantRootAccessKeysExist)
+			}
+			if metrics.RootSigningCertificatesPresent != tc.wantRootSigningCertsPresent {
+				t.Errorf("RootSigningCertificatesPresent = %v, want %v", metrics.RootSigningCertificatesPresent, tc.wantRootSigningCertsPresent)
+			}
+			if metrics.RootAccessProtected != tc.wantRootAccessProtected {
+				t.Errorf("RootAccessProtected = %v, want %v", metrics.RootAccessProtected, tc.wantRootAccessProtected)
+			}
+		})
+	}
+}
+
+func TestProcessRootOrganizationsFeatures(t *testing.T) {
+	metrics := &IAMMetrics{}
+
+	processRootOrganizationsFeatures(&aws.OrganizationFeatures{
+		OrganizationID:                          "o-abc1234567",
+		RootCredentialsManagementFeatureEnabled: true,
+		RootSessionsFeatureEnabled:              true,
+	}, nil, metrics)
+
+	if !metrics.RootOrganizationsFeaturesEvaluated {
+		t.Fatalf("expected root organizations features to be evaluated")
+	}
+	if metrics.RootOrganizationID != "o-abc1234567" {
+		t.Errorf("RootOrganizationID = %q, want o-abc1234567", metrics.RootOrganizationID)
+	}
+	if !metrics.RootCredentialsManagementFeatureEnabled {
+		t.Errorf("RootCredentialsManagementFeatureEnabled should be true")
+	}
+	if !metrics.RootSessionsFeatureEnabled {
+		t.Errorf("RootSessionsFeatureEnabled should be true")
+	}
+	if metrics.RootOrganizationsFeaturesErrorCode != "" {
+		t.Errorf("RootOrganizationsFeaturesErrorCode = %q, want empty", metrics.RootOrganizationsFeaturesErrorCode)
+	}
+}
+
+func TestProcessRootOrganizationsFeatures_APIError(t *testing.T) {
+	metrics := &IAMMetrics{}
+
+	processRootOrganizationsFeatures(nil, &smithy.GenericAPIError{
+		Code: "AccountNotManagementOrDelegatedAdministrator",
+	}, metrics)
+
+	if metrics.RootOrganizationsFeaturesEvaluated {
+		t.Fatalf("expected failed feature read not to be evaluated")
+	}
+	if metrics.RootOrganizationsFeaturesErrorCode != "AccountNotManagementOrDelegatedAdministrator" {
+		t.Fatalf("RootOrganizationsFeaturesErrorCode = %q", metrics.RootOrganizationsFeaturesErrorCode)
+	}
+}
+
+func TestProcessRootOrganizationsFeatures_MissingOutput(t *testing.T) {
+	metrics := &IAMMetrics{}
+
+	processRootOrganizationsFeatures(nil, nil, metrics)
+
+	if metrics.RootOrganizationsFeaturesEvaluated {
+		t.Fatalf("expected missing feature output not to be evaluated")
+	}
+	if metrics.RootOrganizationsFeaturesErrorCode != "MissingOrganizationsFeatures" {
+		t.Fatalf("RootOrganizationsFeaturesErrorCode = %q", metrics.RootOrganizationsFeaturesErrorCode)
+	}
+}
+
+func TestShouldWarnRootOrganizationsFeaturesError(t *testing.T) {
+	tests := []struct {
+		code string
+		want bool
+	}{
+		{code: "", want: false},
+		{code: "AccountNotManagementOrDelegatedAdministrator", want: false},
+		{code: "AccountNotManagementOrDelegatedAdministratorException", want: false},
+		{code: "OrganizationNotFound", want: false},
+		{code: "OrganizationNotFoundException", want: false},
+		{code: "OrganizationNotInAllFeaturesMode", want: false},
+		{code: "OrganizationNotInAllFeaturesModeException", want: false},
+		{code: "ServiceAccessNotEnabled", want: false},
+		{code: "ServiceAccessNotEnabledException", want: false},
+		{code: "ThrottlingException", want: true},
+		{code: "NonAPIError", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.code, func(t *testing.T) {
+			if got := shouldWarnRootOrganizationsFeaturesError(tt.code); got != tt.want {
+				t.Fatalf("shouldWarnRootOrganizationsFeaturesError(%q) = %v, want %v", tt.code, got, tt.want)
+			}
+		})
 	}
 }
 

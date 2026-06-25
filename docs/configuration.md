@@ -117,6 +117,14 @@ collectors:
 
 Create a managed policy with these read-only permissions:
 
+`iam:ListOrganizationsFeatures` only evaluates centralized root access when
+the collector role runs in the AWS Organizations management account or an IAM
+delegated administrator account. Member-account roles record the AWS error code
+as evidence instead of inferring the organization-level state.
+
+For internal-level collection, also grant `ec2:DescribeFlowLogs` so VPC rows can
+include per-VPC flow log status. Trust and audit collection do not call that API.
+
 ```json
 {
   "Version": "2012-10-17",
@@ -125,8 +133,10 @@ Create a managed policy with these read-only permissions:
       "Sid": "IAMReadAccess",
       "Effect": "Allow",
       "Action": [
+        "iam:GetAccountSummary",
         "iam:GetCredentialReport",
         "iam:GenerateCredentialReport",
+        "iam:ListOrganizationsFeatures",
         "iam:ListAccountAliases"
       ],
       "Resource": "*"
@@ -137,7 +147,7 @@ Create a managed policy with these read-only permissions:
       "Action": [
         "s3:ListAllMyBuckets",
         "s3:GetBucketPublicAccessBlock",
-        "s3:GetBucketEncryption",
+        "s3:GetEncryptionConfiguration",
         "s3:GetBucketVersioning",
         "s3:GetBucketLogging",
         "s3:GetBucketPolicy",
@@ -161,7 +171,6 @@ Create a managed policy with these read-only permissions:
       "Action": [
         "ec2:DescribeVpcs",
         "ec2:DescribeSecurityGroups",
-        "ec2:DescribeFlowLogs",
         "ec2:DescribeRegions"
       ],
       "Resource": "*"
