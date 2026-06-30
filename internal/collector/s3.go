@@ -108,11 +108,22 @@ func summarizeS3Buckets(metrics *S3Metrics, buckets []aws.Bucket) {
 	}
 
 	metrics.BucketCount = len(buckets)
-	metrics.PublicAccessBlocked = percent(publicBlocked, len(buckets))
-	metrics.DefaultEncryptionEnabled = percent(encrypted, encryptionEvaluated)
 	metrics.DefaultEncryptionEvaluatedCount = encryptionEvaluated
 	metrics.DefaultEncryptionInferredCount = encryptionInferred
 	metrics.DefaultEncryptionUnknownCount = encryptionUnknown
+
+	if len(buckets) == 0 {
+		// No buckets is vacuously compliant. A failed ListBuckets errors
+		// upstream and never reaches here, so this cannot mask one.
+		metrics.PublicAccessBlocked = MaxPercentage
+		metrics.DefaultEncryptionEnabled = MaxPercentage
+		metrics.VersioningEnabled = MaxPercentage
+		metrics.LoggingEnabled = MaxPercentage
+		return
+	}
+
+	metrics.PublicAccessBlocked = percent(publicBlocked, len(buckets))
+	metrics.DefaultEncryptionEnabled = percent(encrypted, encryptionEvaluated)
 	metrics.VersioningEnabled = percent(versioned, len(buckets))
 	metrics.LoggingEnabled = percent(logging, len(buckets))
 }

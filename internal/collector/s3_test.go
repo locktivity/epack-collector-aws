@@ -122,11 +122,17 @@ func TestSummarizeS3Buckets_NoBuckets(t *testing.T) {
 	if metrics.BucketCount != 0 {
 		t.Errorf("BucketCount = %d, want 0", metrics.BucketCount)
 	}
-	if metrics.PublicAccessBlocked != 0 {
-		t.Errorf("PublicAccessBlocked = %d, want 0", metrics.PublicAccessBlocked)
+	if metrics.PublicAccessBlocked != 100 {
+		t.Errorf("PublicAccessBlocked = %d, want 100", metrics.PublicAccessBlocked)
 	}
-	if metrics.DefaultEncryptionEnabled != 0 {
-		t.Errorf("DefaultEncryptionEnabled = %d, want 0", metrics.DefaultEncryptionEnabled)
+	if metrics.DefaultEncryptionEnabled != 100 {
+		t.Errorf("DefaultEncryptionEnabled = %d, want 100", metrics.DefaultEncryptionEnabled)
+	}
+	if metrics.VersioningEnabled != 100 {
+		t.Errorf("VersioningEnabled = %d, want 100", metrics.VersioningEnabled)
+	}
+	if metrics.LoggingEnabled != 100 {
+		t.Errorf("LoggingEnabled = %d, want 100", metrics.LoggingEnabled)
 	}
 }
 
