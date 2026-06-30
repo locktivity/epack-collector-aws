@@ -114,7 +114,9 @@
         "buckets"
       ],
       "properties": {
-        "public_access_blocked": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "bucket_count": { "type": "integer", "minimum": 0, "description": "Total S3 buckets returned by ListBuckets." },
+        "public_access_blocked": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets whose effective S3 Block Public Access settings block public access." },
+        "public_access_block_unknown_count": { "type": "integer", "minimum": 0, "description": "Buckets whose effective S3 Block Public Access setting could not be fully evaluated." },
         "default_encryption_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets whose default encryption was evaluated and enabled." },
         "default_encryption_evaluated_count": { "type": "integer", "minimum": 0 },
         "default_encryption_inferred_count": { "type": "integer", "minimum": 0, "description": "Evaluated buckets counted as encrypted from documented AWS SSE-S3 baseline behavior rather than a readable encryption rule." },

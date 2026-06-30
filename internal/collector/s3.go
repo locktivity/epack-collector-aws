@@ -17,11 +17,11 @@ func (c *Collector) collectS3Metrics(ctx context.Context, client *aws.AWSClient,
 	metrics := &S3Metrics{}
 
 	// Get account-level public access block
-	accountBlocked, err := client.GetAccountPublicAccessBlock(ctx, accountID)
+	accountPublicAccessBlock, err := client.GetAccountPublicAccessBlock(ctx, accountID)
 	if err != nil {
 		c.warn("account %s: failed to collect account-level S3 public access block: %v", accountID, err)
 	} else {
-		metrics.AccountPublicAccessBlockEnabled = accountBlocked
+		metrics.AccountPublicAccessBlockEnabled = accountPublicAccessBlock.BlocksPublicAccess()
 	}
 
 	// List buckets and get their settings
@@ -30,7 +30,16 @@ func (c *Collector) collectS3Metrics(ctx context.Context, client *aws.AWSClient,
 		return metrics, fmt.Errorf("listing buckets: %w", err)
 	}
 
+	publicAccessUnknownCount := applyEffectivePublicAccessBlock(buckets, accountPublicAccessBlock)
+	metrics.PublicAccessBlockUnknownCount = publicAccessUnknownCount
 	summarizeS3Buckets(metrics, buckets)
+	if publicAccessUnknownCount > 0 {
+		c.warn(
+			"account %s: failed to fully evaluate S3 public access block for %d bucket(s); check s3:GetAccountPublicAccessBlock, s3:GetBucketPublicAccessBlock, and per-bucket access",
+			accountID,
+			publicAccessUnknownCount,
+		)
+	}
 	if metrics.DefaultEncryptionUnknownCount > 0 {
 		c.warn(
 			"account %s: failed to evaluate S3 default encryption for %d bucket(s); check s3:GetEncryptionConfiguration and per-bucket access",
@@ -58,11 +67,25 @@ func (c *Collector) collectS3Metrics(ctx context.Context, client *aws.AWSClient,
 	return metrics, nil
 }
 
+func applyEffectivePublicAccessBlock(buckets []aws.Bucket, accountPublicAccessBlock aws.PublicAccessBlockSettings) int {
+	var publicAccessUnknown int
+
+	for i := range buckets {
+		publicAccess := effectivePublicAccessBlock(accountPublicAccessBlock, buckets[i].PublicAccessBlock)
+		buckets[i].EffectivePublicAccessBlocked = publicAccess.blocked
+		if publicAccess.unknown {
+			publicAccessUnknown++
+		}
+	}
+
+	return publicAccessUnknown
+}
+
 func summarizeS3Buckets(metrics *S3Metrics, buckets []aws.Bucket) {
 	var publicBlocked, encrypted, encryptionEvaluated, encryptionInferred, encryptionUnknown, versioned, logging int
 
 	for _, b := range buckets {
-		if b.PublicAccessBlocked {
+		if b.EffectivePublicAccessBlocked {
 			publicBlocked++
 		}
 		if bucketDefaultEncryptionEvaluated(b) {
@@ -84,6 +107,7 @@ func summarizeS3Buckets(metrics *S3Metrics, buckets []aws.Bucket) {
 		}
 	}
 
+	metrics.BucketCount = len(buckets)
 	metrics.PublicAccessBlocked = percent(publicBlocked, len(buckets))
 	metrics.DefaultEncryptionEnabled = percent(encrypted, encryptionEvaluated)
 	metrics.DefaultEncryptionEvaluatedCount = encryptionEvaluated
@@ -91,6 +115,35 @@ func summarizeS3Buckets(metrics *S3Metrics, buckets []aws.Bucket) {
 	metrics.DefaultEncryptionUnknownCount = encryptionUnknown
 	metrics.VersioningEnabled = percent(versioned, len(buckets))
 	metrics.LoggingEnabled = percent(logging, len(buckets))
+}
+
+type effectivePublicAccessBlockStatus struct {
+	blocked bool
+	unknown bool
+}
+
+func effectivePublicAccessBlock(account, bucket aws.PublicAccessBlockSettings) effectivePublicAccessBlockStatus {
+	blocked := (account.BlockPublicACLs || bucket.BlockPublicACLs) &&
+		(account.IgnorePublicACLs || bucket.IgnorePublicACLs) &&
+		(account.BlockPublicPolicy || bucket.BlockPublicPolicy) &&
+		(account.RestrictPublicBuckets || bucket.RestrictPublicBuckets)
+	if blocked {
+		return effectivePublicAccessBlockStatus{blocked: true}
+	}
+
+	return effectivePublicAccessBlockStatus{
+		unknown: publicAccessBlockFlagUnknown(account.Evaluated, account.BlockPublicACLs, bucket.Evaluated, bucket.BlockPublicACLs) ||
+			publicAccessBlockFlagUnknown(account.Evaluated, account.IgnorePublicACLs, bucket.Evaluated, bucket.IgnorePublicACLs) ||
+			publicAccessBlockFlagUnknown(account.Evaluated, account.BlockPublicPolicy, bucket.Evaluated, bucket.BlockPublicPolicy) ||
+			publicAccessBlockFlagUnknown(account.Evaluated, account.RestrictPublicBuckets, bucket.Evaluated, bucket.RestrictPublicBuckets),
+	}
+}
+
+func publicAccessBlockFlagUnknown(accountEvaluated, accountEnabled, bucketEvaluated, bucketEnabled bool) bool {
+	if accountEnabled || bucketEnabled {
+		return false
+	}
+	return !accountEvaluated || !bucketEvaluated
 }
 
 func bucketDefaultEncryptionEvaluated(b aws.Bucket) bool {
@@ -120,7 +173,7 @@ func s3BucketsToInventory(buckets []aws.Bucket) []S3Bucket {
 		out = append(out, S3Bucket{
 			Name:                       b.Name,
 			Region:                     b.Region,
-			PublicAccessBlocked:        b.PublicAccessBlocked,
+			PublicAccessBlocked:        b.EffectivePublicAccessBlocked,
 			DefaultEncryptionEnabled:   bucketDefaultEncryptionEnabled(b),
 			DefaultEncryptionEvaluated: bucketDefaultEncryptionEvaluated(b),
 			DefaultEncryptionErrorCode: b.DefaultEncryptionErrorCode,

@@ -121,7 +121,9 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
         "root_sessions_feature_enabled": true
       },
       "s3": {
+        "bucket_count": 20,
         "public_access_blocked": 100,
+        "public_access_block_unknown_count": 0,
         "default_encryption_enabled": 95,
         "default_encryption_evaluated_count": 20,
         "default_encryption_inferred_count": 0,

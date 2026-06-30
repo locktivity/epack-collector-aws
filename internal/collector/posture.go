@@ -166,7 +166,9 @@ type IAMRole struct {
 // already iterates buckets to derive the aggregates).
 type S3Metrics struct {
 	// Trust:
+	BucketCount                     int  `json:"bucket_count"`
 	PublicAccessBlocked             int  `json:"public_access_blocked"`
+	PublicAccessBlockUnknownCount   int  `json:"public_access_block_unknown_count"`
 	DefaultEncryptionEnabled        int  `json:"default_encryption_enabled"`
 	DefaultEncryptionEvaluatedCount int  `json:"default_encryption_evaluated_count"`
 	DefaultEncryptionInferredCount  int  `json:"default_encryption_inferred_count"`

@@ -30,6 +30,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
+	s3controltypes "github.com/aws/aws-sdk-go-v2/service/s3control/types"
 	"github.com/aws/aws-sdk-go-v2/service/securityhub"
 	securityhubtypes "github.com/aws/aws-sdk-go-v2/service/securityhub/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -57,7 +58,7 @@ type Client interface {
 
 	// S3
 	ListBuckets(ctx context.Context) ([]Bucket, error)
-	GetAccountPublicAccessBlock(ctx context.Context, accountID string) (bool, error)
+	GetAccountPublicAccessBlock(ctx context.Context, accountID string) (PublicAccessBlockSettings, error)
 	GetBucketPolicy(ctx context.Context, region, bucket string) (*BucketPolicy, error)
 	GetBucketACL(ctx context.Context, region, bucket string) (*BucketACL, error)
 	GetBucketLifecycle(ctx context.Context, region, bucket string) (*BucketLifecycle, error)
@@ -643,13 +644,7 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 		pabOutput, err := bucketClient.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{
 			Bucket: b.Name,
 		})
-		if err == nil && pabOutput.PublicAccessBlockConfiguration != nil {
-			pab := pabOutput.PublicAccessBlockConfiguration
-			bucket.PublicAccessBlocked = aws.ToBool(pab.BlockPublicAcls) &&
-				aws.ToBool(pab.BlockPublicPolicy) &&
-				aws.ToBool(pab.IgnorePublicAcls) &&
-				aws.ToBool(pab.RestrictPublicBuckets)
-		}
+		bucket.PublicAccessBlock = s3BucketPublicAccessBlockEvaluation(pabOutput, err)
 
 		// Get encryption
 		encOutput, err := bucketClient.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{
@@ -849,28 +844,75 @@ func isPublicGranteeURI(uri string) bool {
 	return false
 }
 
-// GetAccountPublicAccessBlock checks if account-level public access block is enabled.
-func (c *AWSClient) GetAccountPublicAccessBlock(ctx context.Context, accountID string) (bool, error) {
+// GetAccountPublicAccessBlock returns the account-level S3 Block Public Access settings.
+func (c *AWSClient) GetAccountPublicAccessBlock(ctx context.Context, accountID string) (PublicAccessBlockSettings, error) {
 	s3ControlClient := s3control.NewFromConfig(c.cfg)
 	output, err := s3ControlClient.GetPublicAccessBlock(ctx, &s3control.GetPublicAccessBlockInput{
 		AccountId: aws.String(accountID),
 	})
+	pab := s3AccountPublicAccessBlockEvaluation(output, err)
+	if pab.ErrorCode != "" {
+		if err != nil {
+			return pab, fmt.Errorf("getting account public access block: %w", err)
+		}
+		return pab, fmt.Errorf("getting account public access block: %s", pab.ErrorCode)
+	}
+
+	return pab, nil
+}
+
+func s3BucketPublicAccessBlockEvaluation(output *s3.GetPublicAccessBlockOutput, err error) PublicAccessBlockSettings {
 	if err != nil {
 		if isAPIErrorCode(err, "NoSuchPublicAccessBlockConfiguration") {
-			return false, nil
+			return PublicAccessBlockSettings{Evaluated: true}
 		}
-		return false, fmt.Errorf("getting account public access block: %w", err)
+		return PublicAccessBlockSettings{ErrorCode: apiErrorCode(err)}
 	}
-
+	if output == nil {
+		return PublicAccessBlockSettings{ErrorCode: "MissingGetPublicAccessBlockOutput"}
+	}
 	if output.PublicAccessBlockConfiguration == nil {
-		return false, nil
+		return PublicAccessBlockSettings{ErrorCode: "MissingPublicAccessBlockConfiguration"}
 	}
 
-	pab := output.PublicAccessBlockConfiguration
-	return aws.ToBool(pab.BlockPublicAcls) &&
-		aws.ToBool(pab.BlockPublicPolicy) &&
-		aws.ToBool(pab.IgnorePublicAcls) &&
-		aws.ToBool(pab.RestrictPublicBuckets), nil
+	return publicAccessBlockFromS3(output.PublicAccessBlockConfiguration)
+}
+
+func s3AccountPublicAccessBlockEvaluation(output *s3control.GetPublicAccessBlockOutput, err error) PublicAccessBlockSettings {
+	if err != nil {
+		if isAPIErrorCode(err, "NoSuchPublicAccessBlockConfiguration") {
+			return PublicAccessBlockSettings{Evaluated: true}
+		}
+		return PublicAccessBlockSettings{ErrorCode: apiErrorCode(err)}
+	}
+	if output == nil {
+		return PublicAccessBlockSettings{ErrorCode: "MissingGetPublicAccessBlockOutput"}
+	}
+	if output.PublicAccessBlockConfiguration == nil {
+		return PublicAccessBlockSettings{ErrorCode: "MissingPublicAccessBlockConfiguration"}
+	}
+
+	return publicAccessBlockFromS3Control(output.PublicAccessBlockConfiguration)
+}
+
+func publicAccessBlockFromS3(pab *s3types.PublicAccessBlockConfiguration) PublicAccessBlockSettings {
+	return PublicAccessBlockSettings{
+		BlockPublicACLs:       aws.ToBool(pab.BlockPublicAcls),
+		IgnorePublicACLs:      aws.ToBool(pab.IgnorePublicAcls),
+		BlockPublicPolicy:     aws.ToBool(pab.BlockPublicPolicy),
+		RestrictPublicBuckets: aws.ToBool(pab.RestrictPublicBuckets),
+		Evaluated:             true,
+	}
+}
+
+func publicAccessBlockFromS3Control(pab *s3controltypes.PublicAccessBlockConfiguration) PublicAccessBlockSettings {
+	return PublicAccessBlockSettings{
+		BlockPublicACLs:       aws.ToBool(pab.BlockPublicAcls),
+		IgnorePublicACLs:      aws.ToBool(pab.IgnorePublicAcls),
+		BlockPublicPolicy:     aws.ToBool(pab.BlockPublicPolicy),
+		RestrictPublicBuckets: aws.ToBool(pab.RestrictPublicBuckets),
+		Evaluated:             true,
+	}
 }
 
 // ListDBInstances lists RDS instances in the specified region.

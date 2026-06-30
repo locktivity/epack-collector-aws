@@ -51,10 +51,11 @@ The active level appears in the output artifact as the top-level
 
 ### S3 (`s3`)
 
-- **trust**: per-bucket aggregate percentages for public access blocked,
-  evaluated default encryption, versioning, logging; account-level
-  public-access-block flag; default-encryption evaluated, inferred, and
-  unknown counts.
+- **trust**: bucket count; per-bucket aggregate percentages for public access
+  blocked after applying account-level S3 Block Public Access, evaluated
+  default encryption, versioning, logging; account-level public-access-block
+  flag; public-access-block unknown count; default-encryption evaluated,
+  inferred, and unknown counts.
 - **audit**: `buckets[]` per-bucket row (the same data the percentages were
   computed from, plus region). `default_encryption_enabled` is `null` when
   the bucket's encryption setting could not be evaluated. A

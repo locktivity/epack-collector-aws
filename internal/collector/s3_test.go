@@ -12,30 +12,30 @@ import (
 func TestS3BucketsToInventory_PreservesAllFlags(t *testing.T) {
 	in := []aws.Bucket{
 		{
-			Name:                       "alpha",
-			Region:                     "us-east-1",
-			PublicAccessBlocked:        true,
-			DefaultEncryptionEnabled:   true,
-			DefaultEncryptionEvaluated: true,
-			VersioningEnabled:          true,
-			LoggingEnabled:             false,
+			Name:                         "alpha",
+			Region:                       "us-east-1",
+			EffectivePublicAccessBlocked: true,
+			DefaultEncryptionEnabled:     true,
+			DefaultEncryptionEvaluated:   true,
+			VersioningEnabled:            true,
+			LoggingEnabled:               false,
 		},
 		{
-			Name:                       "beta",
-			Region:                     "us-west-2",
-			PublicAccessBlocked:        false,
-			DefaultEncryptionEnabled:   true,
-			DefaultEncryptionEvaluated: true,
-			VersioningEnabled:          false,
-			LoggingEnabled:             true,
+			Name:                         "beta",
+			Region:                       "us-west-2",
+			EffectivePublicAccessBlocked: false,
+			DefaultEncryptionEnabled:     true,
+			DefaultEncryptionEvaluated:   true,
+			VersioningEnabled:            false,
+			LoggingEnabled:               true,
 		},
 		{
-			Name:                       "gamma",
-			Region:                     "us-west-1",
-			PublicAccessBlocked:        true,
-			DefaultEncryptionErrorCode: "AccessDenied",
-			VersioningEnabled:          true,
-			LoggingEnabled:             true,
+			Name:                         "gamma",
+			Region:                       "us-west-1",
+			EffectivePublicAccessBlocked: true,
+			DefaultEncryptionErrorCode:   "AccessDenied",
+			VersioningEnabled:            true,
+			LoggingEnabled:               true,
 		},
 	}
 
@@ -98,6 +98,9 @@ func TestSummarizeS3Buckets_DefaultEncryptionUsesEvaluatedDenominator(t *testing
 	metrics := &S3Metrics{}
 	summarizeS3Buckets(metrics, buckets)
 
+	if metrics.BucketCount != 4 {
+		t.Errorf("BucketCount = %d, want 4", metrics.BucketCount)
+	}
 	if metrics.DefaultEncryptionEnabled != 66 {
 		t.Errorf("DefaultEncryptionEnabled = %d, want 66", metrics.DefaultEncryptionEnabled)
 	}
@@ -109,6 +112,132 @@ func TestSummarizeS3Buckets_DefaultEncryptionUsesEvaluatedDenominator(t *testing
 	}
 	if metrics.DefaultEncryptionUnknownCount != 1 {
 		t.Errorf("DefaultEncryptionUnknownCount = %d, want 1", metrics.DefaultEncryptionUnknownCount)
+	}
+}
+
+func TestSummarizeS3Buckets_NoBuckets(t *testing.T) {
+	metrics := &S3Metrics{}
+	summarizeS3Buckets(metrics, nil)
+
+	if metrics.BucketCount != 0 {
+		t.Errorf("BucketCount = %d, want 0", metrics.BucketCount)
+	}
+	if metrics.PublicAccessBlocked != 0 {
+		t.Errorf("PublicAccessBlocked = %d, want 0", metrics.PublicAccessBlocked)
+	}
+	if metrics.DefaultEncryptionEnabled != 0 {
+		t.Errorf("DefaultEncryptionEnabled = %d, want 0", metrics.DefaultEncryptionEnabled)
+	}
+}
+
+func TestApplyEffectivePublicAccessBlock_UsesAccountAndBucketSettings(t *testing.T) {
+	accountPublicAccessBlock := aws.PublicAccessBlockSettings{
+		BlockPublicACLs:  true,
+		IgnorePublicACLs: true,
+		Evaluated:        true,
+	}
+	buckets := []aws.Bucket{
+		{
+			Name: "combined",
+			PublicAccessBlock: aws.PublicAccessBlockSettings{
+				BlockPublicPolicy:     true,
+				RestrictPublicBuckets: true,
+				Evaluated:             true,
+			},
+		},
+		{
+			Name: "bucket-only",
+			PublicAccessBlock: aws.PublicAccessBlockSettings{
+				BlockPublicACLs:       true,
+				IgnorePublicACLs:      true,
+				BlockPublicPolicy:     true,
+				RestrictPublicBuckets: true,
+				Evaluated:             true,
+			},
+		},
+		{
+			Name: "not-covered",
+			PublicAccessBlock: aws.PublicAccessBlockSettings{
+				BlockPublicPolicy: true,
+				Evaluated:         true,
+			},
+		},
+	}
+
+	metrics := &S3Metrics{}
+	unknown := applyEffectivePublicAccessBlock(buckets, accountPublicAccessBlock)
+	summarizeS3Buckets(metrics, buckets)
+
+	if metrics.PublicAccessBlocked != 66 {
+		t.Errorf("PublicAccessBlocked = %d, want 66", metrics.PublicAccessBlocked)
+	}
+	if unknown != 0 {
+		t.Errorf("unknown public access block count = %d, want 0", unknown)
+	}
+	if !buckets[0].EffectivePublicAccessBlocked || !buckets[1].EffectivePublicAccessBlocked {
+		t.Errorf("combined and bucket-only buckets should be effectively blocked: %+v", buckets)
+	}
+	if buckets[2].EffectivePublicAccessBlocked {
+		t.Errorf("not-covered bucket should not be effectively blocked: %+v", buckets[2])
+	}
+}
+
+func TestApplyEffectivePublicAccessBlock_AccountSettingsCoverUnreadableBuckets(t *testing.T) {
+	accountPublicAccessBlock := aws.PublicAccessBlockSettings{
+		BlockPublicACLs:       true,
+		IgnorePublicACLs:      true,
+		BlockPublicPolicy:     true,
+		RestrictPublicBuckets: true,
+		Evaluated:             true,
+	}
+	buckets := []aws.Bucket{
+		{
+			Name: "bucket-without-readable-pab",
+			PublicAccessBlock: aws.PublicAccessBlockSettings{
+				ErrorCode: "AccessDenied",
+			},
+		},
+	}
+
+	metrics := &S3Metrics{}
+	unknown := applyEffectivePublicAccessBlock(buckets, accountPublicAccessBlock)
+	summarizeS3Buckets(metrics, buckets)
+
+	if metrics.PublicAccessBlocked != 100 {
+		t.Errorf("PublicAccessBlocked = %d, want 100", metrics.PublicAccessBlocked)
+	}
+	if unknown != 0 {
+		t.Errorf("unknown public access block count = %d, want 0", unknown)
+	}
+	if !buckets[0].EffectivePublicAccessBlocked {
+		t.Errorf("bucket should be effectively blocked by account-level settings: %+v", buckets[0])
+	}
+}
+
+func TestApplyEffectivePublicAccessBlock_UnknownWhenNeededSettingUnreadable(t *testing.T) {
+	accountPublicAccessBlock := aws.PublicAccessBlockSettings{ErrorCode: "AccessDenied"}
+	buckets := []aws.Bucket{
+		{
+			Name: "partial-bucket-config",
+			PublicAccessBlock: aws.PublicAccessBlockSettings{
+				BlockPublicACLs: true,
+				Evaluated:       true,
+			},
+		},
+	}
+
+	metrics := &S3Metrics{}
+	unknown := applyEffectivePublicAccessBlock(buckets, accountPublicAccessBlock)
+	summarizeS3Buckets(metrics, buckets)
+
+	if metrics.PublicAccessBlocked != 0 {
+		t.Errorf("PublicAccessBlocked = %d, want 0", metrics.PublicAccessBlocked)
+	}
+	if unknown != 1 {
+		t.Errorf("unknown public access block count = %d, want 1", unknown)
+	}
+	if buckets[0].EffectivePublicAccessBlocked {
+		t.Errorf("bucket should not be treated as blocked when needed flags are unknown: %+v", buckets[0])
 	}
 }
 

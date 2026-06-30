@@ -11,6 +11,8 @@ import (
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3control"
+	s3controltypes "github.com/aws/aws-sdk-go-v2/service/s3control/types"
 	securityhubtypes "github.com/aws/aws-sdk-go-v2/service/securityhub/types"
 	"github.com/aws/smithy-go"
 )
@@ -319,6 +321,139 @@ func TestS3DefaultEncryptionEvaluation(t *testing.T) {
 			}
 			if got.Evaluated != tt.wantEvaluated {
 				t.Errorf("Evaluated = %v, want %v", got.Evaluated, tt.wantEvaluated)
+			}
+			if got.ErrorCode != tt.wantErrorCode {
+				t.Errorf("ErrorCode = %q, want %q", got.ErrorCode, tt.wantErrorCode)
+			}
+		})
+	}
+}
+
+func TestS3BucketPublicAccessBlockEvaluation(t *testing.T) {
+	tests := []struct {
+		name            string
+		output          *s3.GetPublicAccessBlockOutput
+		err             error
+		wantEvaluated   bool
+		wantBlocked     bool
+		wantErrorCode   string
+		wantBlockACLs   bool
+		wantIgnoreACLs  bool
+		wantBlockPolicy bool
+		wantRestrictPub bool
+	}{
+		{
+			name: "all four flags enabled",
+			output: &s3.GetPublicAccessBlockOutput{
+				PublicAccessBlockConfiguration: &s3types.PublicAccessBlockConfiguration{
+					BlockPublicAcls:       aws.Bool(true),
+					IgnorePublicAcls:      aws.Bool(true),
+					BlockPublicPolicy:     aws.Bool(true),
+					RestrictPublicBuckets: aws.Bool(true),
+				},
+			},
+			wantEvaluated:   true,
+			wantBlocked:     true,
+			wantBlockACLs:   true,
+			wantIgnoreACLs:  true,
+			wantBlockPolicy: true,
+			wantRestrictPub: true,
+		},
+		{
+			name: "missing bucket config is evaluated as no bucket-level flags",
+			err: &smithy.GenericAPIError{
+				Code: "NoSuchPublicAccessBlockConfiguration",
+			},
+			wantEvaluated: true,
+		},
+		{
+			name: "access denied is not evaluated",
+			err: &smithy.GenericAPIError{
+				Code: "AccessDenied",
+			},
+			wantErrorCode: "AccessDenied",
+		},
+		{
+			name:          "nil output is not evaluated",
+			output:        nil,
+			wantErrorCode: "MissingGetPublicAccessBlockOutput",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s3BucketPublicAccessBlockEvaluation(tt.output, tt.err)
+			if got.Evaluated != tt.wantEvaluated {
+				t.Errorf("Evaluated = %v, want %v", got.Evaluated, tt.wantEvaluated)
+			}
+			if got.BlocksPublicAccess() != tt.wantBlocked {
+				t.Errorf("BlocksPublicAccess() = %v, want %v", got.BlocksPublicAccess(), tt.wantBlocked)
+			}
+			if got.ErrorCode != tt.wantErrorCode {
+				t.Errorf("ErrorCode = %q, want %q", got.ErrorCode, tt.wantErrorCode)
+			}
+			if got.BlockPublicACLs != tt.wantBlockACLs {
+				t.Errorf("BlockPublicACLs = %v, want %v", got.BlockPublicACLs, tt.wantBlockACLs)
+			}
+			if got.IgnorePublicACLs != tt.wantIgnoreACLs {
+				t.Errorf("IgnorePublicACLs = %v, want %v", got.IgnorePublicACLs, tt.wantIgnoreACLs)
+			}
+			if got.BlockPublicPolicy != tt.wantBlockPolicy {
+				t.Errorf("BlockPublicPolicy = %v, want %v", got.BlockPublicPolicy, tt.wantBlockPolicy)
+			}
+			if got.RestrictPublicBuckets != tt.wantRestrictPub {
+				t.Errorf("RestrictPublicBuckets = %v, want %v", got.RestrictPublicBuckets, tt.wantRestrictPub)
+			}
+		})
+	}
+}
+
+func TestS3AccountPublicAccessBlockEvaluation(t *testing.T) {
+	tests := []struct {
+		name          string
+		output        *s3control.GetPublicAccessBlockOutput
+		err           error
+		wantEvaluated bool
+		wantBlocked   bool
+		wantErrorCode string
+	}{
+		{
+			name: "all four flags enabled",
+			output: &s3control.GetPublicAccessBlockOutput{
+				PublicAccessBlockConfiguration: &s3controltypes.PublicAccessBlockConfiguration{
+					BlockPublicAcls:       aws.Bool(true),
+					IgnorePublicAcls:      aws.Bool(true),
+					BlockPublicPolicy:     aws.Bool(true),
+					RestrictPublicBuckets: aws.Bool(true),
+				},
+			},
+			wantEvaluated: true,
+			wantBlocked:   true,
+		},
+		{
+			name: "missing account config is evaluated as no account-level flags",
+			err: &smithy.GenericAPIError{
+				Code: "NoSuchPublicAccessBlockConfiguration",
+			},
+			wantEvaluated: true,
+		},
+		{
+			name: "access denied is not evaluated",
+			err: &smithy.GenericAPIError{
+				Code: "AccessDenied",
+			},
+			wantErrorCode: "AccessDenied",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s3AccountPublicAccessBlockEvaluation(tt.output, tt.err)
+			if got.Evaluated != tt.wantEvaluated {
+				t.Errorf("Evaluated = %v, want %v", got.Evaluated, tt.wantEvaluated)
+			}
+			if got.BlocksPublicAccess() != tt.wantBlocked {
+				t.Errorf("BlocksPublicAccess() = %v, want %v", got.BlocksPublicAccess(), tt.wantBlocked)
 			}
 			if got.ErrorCode != tt.wantErrorCode {
 				t.Errorf("ErrorCode = %q, want %q", got.ErrorCode, tt.wantErrorCode)

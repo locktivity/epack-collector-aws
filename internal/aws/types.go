@@ -109,16 +109,37 @@ type Role struct {
 // Bucket represents an S3 bucket with security settings.
 // DefaultEncryptionEnabled includes AWS's SSE-S3 baseline for new objects.
 type Bucket struct {
-	Name                       string
-	Region                     string
-	PublicAccessBlocked        bool
-	DefaultEncryptionEnabled   bool
-	DefaultEncryptionEvaluated bool
-	DefaultEncryptionErrorCode string
-	VersioningEnabled          bool
-	MFADeleteEnabled           bool
-	LoggingEnabled             bool
-	SSLOnlyPolicy              bool
+	Name                         string
+	Region                       string
+	EffectivePublicAccessBlocked bool
+	PublicAccessBlock            PublicAccessBlockSettings
+	DefaultEncryptionEnabled     bool
+	DefaultEncryptionEvaluated   bool
+	DefaultEncryptionErrorCode   string
+	VersioningEnabled            bool
+	MFADeleteEnabled             bool
+	LoggingEnabled               bool
+	SSLOnlyPolicy                bool
+}
+
+// PublicAccessBlockSettings represents S3 Block Public Access flags read from
+// either account-level or bucket-level configuration.
+type PublicAccessBlockSettings struct {
+	BlockPublicACLs       bool
+	IgnorePublicACLs      bool
+	BlockPublicPolicy     bool
+	RestrictPublicBuckets bool
+	Evaluated             bool
+	ErrorCode             string
+}
+
+// BlocksPublicAccess returns true when all four S3 Block Public Access flags
+// are enabled.
+func (p PublicAccessBlockSettings) BlocksPublicAccess() bool {
+	return p.BlockPublicACLs &&
+		p.IgnorePublicACLs &&
+		p.BlockPublicPolicy &&
+		p.RestrictPublicBuckets
 }
 
 // DBInstance represents an RDS instance with security settings.

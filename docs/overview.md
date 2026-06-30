@@ -36,7 +36,9 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 
 | Metric | Description |
 |--------|-------------|
-| `public_access_blocked` | Percentage of buckets with public access blocked |
+| `bucket_count` | Total S3 buckets returned by `ListBuckets` |
+| `public_access_blocked` | Percentage of buckets whose effective S3 Block Public Access settings block public access |
+| `public_access_block_unknown_count` | Buckets whose effective S3 Block Public Access setting could not be fully evaluated |
 | `default_encryption_enabled` | Percentage of evaluated buckets with default encryption |
 | `default_encryption_evaluated_count` | Buckets whose default encryption setting was evaluated |
 | `default_encryption_inferred_count` | Evaluated buckets counted from the documented AWS SSE-S3 baseline rather than a readable encryption rule |
