@@ -122,9 +122,10 @@
         "default_encryption_inferred_count": { "type": "integer", "minimum": 0, "description": "Evaluated buckets counted as encrypted from documented AWS SSE-S3 baseline behavior rather than a readable encryption rule." },
         "default_encryption_unknown_count": { "type": "integer", "minimum": 0 },
         "versioning_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "logging_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "logging_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets with server access logging enabled. Log sink buckets (targets of other buckets' logging) are excluded from the denominator." },
+        "log_sink_bucket_count": { "type": "integer", "minimum": 0, "description": "Buckets identified as server access log destinations for at least one other bucket. These are excluded from the logging_enabled denominator." },
         "account_public_access_block_enabled": { "type": "boolean" },
-        "buckets": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-bucket rows. Per-bucket policy/acl/lifecycle attached at internal." }
+        "buckets": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-bucket rows with is_log_sink flag. Per-bucket policy/acl/lifecycle attached at internal." }
       }
     },
 
