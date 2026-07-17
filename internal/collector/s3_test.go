@@ -385,3 +385,87 @@ func TestEnrichS3BucketsForInternal_NonAccessDeniedErrorEmitsGenericWarning(t *t
 		t.Errorf("non-AccessDenied error should not produce access-denied warning text: %q", c.warnings[0])
 	}
 }
+
+func TestSummarizeS3Buckets_LogSinkExcludedFromLoggingDenominator(t *testing.T) {
+	buckets := []aws.Bucket{
+		{Name: "app-bucket", LoggingEnabled: true, LoggingTargetBucket: "log-bucket"},
+		{Name: "data-bucket", LoggingEnabled: false},
+		{Name: "log-bucket", LoggingEnabled: false},
+	}
+
+	metrics := &S3Metrics{}
+	summarizeS3Buckets(metrics, buckets)
+
+	if metrics.BucketCount != 3 {
+		t.Errorf("BucketCount = %d, want 3", metrics.BucketCount)
+	}
+	if metrics.LogSinkBucketCount != 1 {
+		t.Errorf("LogSinkBucketCount = %d, want 1", metrics.LogSinkBucketCount)
+	}
+	// Only app-bucket and data-bucket require logging (2 buckets).
+	// app-bucket has logging → 1/2 = 50%.
+	if metrics.LoggingEnabled != 50 {
+		t.Errorf("LoggingEnabled = %d, want 50 (log sink excluded from denominator)", metrics.LoggingEnabled)
+	}
+}
+
+func TestSummarizeS3Buckets_AllBucketsAreLogSinks(t *testing.T) {
+	buckets := []aws.Bucket{
+		{Name: "sink-a", LoggingEnabled: false},
+		{Name: "sink-b", LoggingEnabled: true, LoggingTargetBucket: "sink-a"},
+	}
+	// sink-a is a log sink (target of sink-b's logging)
+	// sink-b is the only non-sink, and it has logging enabled → 100%.
+
+	metrics := &S3Metrics{}
+	summarizeS3Buckets(metrics, buckets)
+
+	if metrics.LogSinkBucketCount != 1 {
+		t.Errorf("LogSinkBucketCount = %d, want 1", metrics.LogSinkBucketCount)
+	}
+	if metrics.LoggingEnabled != 100 {
+		t.Errorf("LoggingEnabled = %d, want 100", metrics.LoggingEnabled)
+	}
+}
+
+func TestSummarizeS3Buckets_OnlyLogSinkBucketsIsVacuouslyCompliant(t *testing.T) {
+	// Every bucket is a log sink for some other bucket → no bucket requires logging → 100%.
+	buckets := []aws.Bucket{
+		{Name: "a", LoggingEnabled: true, LoggingTargetBucket: "b"},
+		{Name: "b", LoggingEnabled: true, LoggingTargetBucket: "a"},
+	}
+
+	metrics := &S3Metrics{}
+	summarizeS3Buckets(metrics, buckets)
+
+	if metrics.LogSinkBucketCount != 2 {
+		t.Errorf("LogSinkBucketCount = %d, want 2", metrics.LogSinkBucketCount)
+	}
+	if metrics.LoggingEnabled != 100 {
+		t.Errorf("LoggingEnabled = %d, want 100 (vacuously compliant)", metrics.LoggingEnabled)
+	}
+}
+
+func TestS3BucketsToInventory_SetsIsLogSink(t *testing.T) {
+	in := []aws.Bucket{
+		{Name: "app", LoggingEnabled: true, LoggingTargetBucket: "logs"},
+		{Name: "logs", LoggingEnabled: false},
+	}
+
+	out := s3BucketsToInventory(in)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 buckets, got %d", len(out))
+	}
+	if out[0].IsLogSink {
+		t.Errorf("app bucket should not be a log sink")
+	}
+	if !out[1].IsLogSink {
+		t.Errorf("logs bucket should be a log sink")
+	}
+	if !out[0].LoggingEnabled {
+		t.Errorf("app bucket logging_enabled should be true")
+	}
+	if out[1].LoggingEnabled {
+		t.Errorf("logs bucket logging_enabled should stay false (truthful)")
+	}
+}

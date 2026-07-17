@@ -175,6 +175,7 @@ type S3Metrics struct {
 	DefaultEncryptionUnknownCount   int  `json:"default_encryption_unknown_count"`
 	VersioningEnabled               int  `json:"versioning_enabled"`
 	LoggingEnabled                  int  `json:"logging_enabled"`
+	LogSinkBucketCount              int  `json:"log_sink_bucket_count"`
 	AccountPublicAccessBlockEnabled bool `json:"account_public_access_block_enabled"`
 
 	// Audit: present (possibly []) when collected at audit+; null when not collected.
@@ -193,6 +194,7 @@ type S3Bucket struct {
 	DefaultEncryptionErrorCode string `json:"default_encryption_error_code,omitempty"`
 	VersioningEnabled          bool   `json:"versioning_enabled"`
 	LoggingEnabled             bool   `json:"logging_enabled"`
+	IsLogSink                  bool   `json:"is_log_sink,omitempty"`
 
 	// Internal:
 	Policy    *S3BucketPolicy    `json:"policy,omitempty"`
