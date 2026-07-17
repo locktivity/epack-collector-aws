@@ -55,10 +55,12 @@ The active level appears in the output artifact as the top-level
   blocked after applying account-level S3 Block Public Access, evaluated
   default encryption, versioning, logging; account-level public-access-block
   flag; public-access-block unknown count; default-encryption evaluated,
-  inferred, and unknown counts.
+  inferred, and unknown counts; log sink bucket count. The `logging_enabled`
+  percentage excludes server access log destination buckets from the
+  denominator (they don't need their own logging).
 - **audit**: `buckets[]` per-bucket row (the same data the percentages were
-  computed from, plus region). `default_encryption_enabled` is `null` when
-  the bucket's encryption setting could not be evaluated. A
+  computed from, plus region and `is_log_sink` flag). `default_encryption_enabled`
+  is `null` when the bucket's encryption setting could not be evaluated. A
   `default_encryption_error_code` value records either the collection gap or a
   documented-baseline inference.
 - **internal**: per-bucket gains `policy`, `acl`, `lifecycle` sub-objects

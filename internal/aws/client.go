@@ -668,8 +668,11 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 		logOutput, err := bucketClient.GetBucketLogging(ctx, &s3.GetBucketLoggingInput{
 			Bucket: b.Name,
 		})
-		if err == nil {
-			bucket.LoggingEnabled = logOutput.LoggingEnabled != nil
+		if err == nil && logOutput.LoggingEnabled != nil {
+			bucket.LoggingEnabled = true
+			if logOutput.LoggingEnabled.TargetBucket != nil {
+				bucket.LoggingTargetBucket = *logOutput.LoggingEnabled.TargetBucket
+			}
 		}
 
 		// Get bucket policy and check for SSL requirement

@@ -81,8 +81,26 @@ func applyEffectivePublicAccessBlock(buckets []aws.Bucket, accountPublicAccessBl
 	return publicAccessUnknown
 }
 
+// logSinkBuckets returns the set of bucket names that serve as server access
+// log destinations for at least one other bucket. These buckets don't need
+// their own logging enabled and should be excluded from the LoggingEnabled
+// denominator.
+func logSinkBuckets(buckets []aws.Bucket) map[string]struct{} {
+	sinks := map[string]struct{}{}
+	for _, b := range buckets {
+		if b.LoggingTargetBucket != "" {
+			sinks[b.LoggingTargetBucket] = struct{}{}
+		}
+	}
+	return sinks
+}
+
 func summarizeS3Buckets(metrics *S3Metrics, buckets []aws.Bucket) {
 	var publicBlocked, encrypted, encryptionEvaluated, encryptionInferred, encryptionUnknown, versioned, logging int
+
+	sinks := logSinkBuckets(buckets)
+	var logSinkCount int
+	bucketsRequiringLogging := 0
 
 	for _, b := range buckets {
 		if b.EffectivePublicAccessBlocked {
@@ -102,19 +120,25 @@ func summarizeS3Buckets(metrics *S3Metrics, buckets []aws.Bucket) {
 		if b.VersioningEnabled {
 			versioned++
 		}
-		if b.LoggingEnabled {
-			logging++
+
+		_, isSink := sinks[b.Name]
+		if isSink {
+			logSinkCount++
+		} else {
+			bucketsRequiringLogging++
+			if b.LoggingEnabled {
+				logging++
+			}
 		}
 	}
 
 	metrics.BucketCount = len(buckets)
+	metrics.LogSinkBucketCount = logSinkCount
 	metrics.DefaultEncryptionEvaluatedCount = encryptionEvaluated
 	metrics.DefaultEncryptionInferredCount = encryptionInferred
 	metrics.DefaultEncryptionUnknownCount = encryptionUnknown
 
 	if len(buckets) == 0 {
-		// No buckets is vacuously compliant. A failed ListBuckets errors
-		// upstream and never reaches here, so this cannot mask one.
 		metrics.PublicAccessBlocked = MaxPercentage
 		metrics.DefaultEncryptionEnabled = MaxPercentage
 		metrics.VersioningEnabled = MaxPercentage
@@ -125,7 +149,11 @@ func summarizeS3Buckets(metrics *S3Metrics, buckets []aws.Bucket) {
 	metrics.PublicAccessBlocked = percent(publicBlocked, len(buckets))
 	metrics.DefaultEncryptionEnabled = percent(encrypted, encryptionEvaluated)
 	metrics.VersioningEnabled = percent(versioned, len(buckets))
-	metrics.LoggingEnabled = percent(logging, len(buckets))
+	if bucketsRequiringLogging == 0 {
+		metrics.LoggingEnabled = MaxPercentage
+	} else {
+		metrics.LoggingEnabled = percent(logging, bucketsRequiringLogging)
+	}
 }
 
 type effectivePublicAccessBlockStatus struct {
@@ -179,8 +207,10 @@ func bucketDefaultEncryptionEnabled(b aws.Bucket) *bool {
 // rows. The same iteration produced the trust-level aggregates; this just
 // surfaces the rows.
 func s3BucketsToInventory(buckets []aws.Bucket) []S3Bucket {
+	sinks := logSinkBuckets(buckets)
 	out := make([]S3Bucket, 0, len(buckets))
 	for _, b := range buckets {
+		_, isSink := sinks[b.Name]
 		out = append(out, S3Bucket{
 			Name:                       b.Name,
 			Region:                     b.Region,
@@ -190,6 +220,7 @@ func s3BucketsToInventory(buckets []aws.Bucket) []S3Bucket {
 			DefaultEncryptionErrorCode: b.DefaultEncryptionErrorCode,
 			VersioningEnabled:          b.VersioningEnabled,
 			LoggingEnabled:             b.LoggingEnabled,
+			IsLogSink:                  isSink,
 		})
 	}
 	return out

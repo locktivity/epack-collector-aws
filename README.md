@@ -286,6 +286,7 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
         "default_encryption_unknown_count": 0,
         "versioning_enabled": 60,
         "logging_enabled": 40,
+        "log_sink_bucket_count": 2,
         "account_public_access_block_enabled": true
       },
       "rds": {

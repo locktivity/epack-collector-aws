@@ -119,6 +119,7 @@ type Bucket struct {
 	VersioningEnabled            bool
 	MFADeleteEnabled             bool
 	LoggingEnabled               bool
+	LoggingTargetBucket          string
 	SSLOnlyPolicy                bool
 }
 
