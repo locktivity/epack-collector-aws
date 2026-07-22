@@ -60,6 +60,15 @@ func normalizeForLevel(p *AccountPosture, level componentsdk.Level) {
 	if p.IdentityCenter.PermissionSets == nil {
 		p.IdentityCenter.PermissionSets = []IdentityCenterPermissionSetRow{}
 	}
+	if p.IdentityCenter.Users == nil {
+		p.IdentityCenter.Users = []IdentityCenterUserRow{}
+	}
+	if p.IdentityCenter.Groups == nil {
+		p.IdentityCenter.Groups = []IdentityCenterGroupRow{}
+	}
+	if p.IdentityCenter.AccountAssignments == nil {
+		p.IdentityCenter.AccountAssignments = []IdentityCenterAssignmentRow{}
+	}
 	if p.Lambda.Functions == nil {
 		p.Lambda.Functions = []LambdaFunctionRow{}
 	}
@@ -91,11 +100,5 @@ func normalizeForLevel(p *AccountPosture, level componentsdk.Level) {
 	}
 	if p.AccountSecurity.GuardDuty.Findings == nil {
 		p.AccountSecurity.GuardDuty.Findings = []GuardDutyFindingRow{}
-	}
-	if p.IdentityCenter.Users == nil {
-		p.IdentityCenter.Users = []IdentityCenterUserRow{}
-	}
-	if p.IdentityCenter.Groups == nil {
-		p.IdentityCenter.Groups = []IdentityCenterGroupRow{}
 	}
 }

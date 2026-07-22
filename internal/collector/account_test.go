@@ -1,6 +1,8 @@
 package collector
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -422,5 +424,102 @@ func TestGuardDutyDetectorToRow_PreservesAllFields(t *testing.T) {
 	}
 	if row.HighOrCriticalFindings != 5 || row.HighOrCriticalFindingsOlderThan48Hours != 2 {
 		t.Errorf("finding counts mis-projected: %+v", row)
+	}
+}
+
+type fakeTrailDescriber struct {
+	trails []aws.Trail
+	err    error
+}
+
+func (f fakeTrailDescriber) DescribeTrails(_ context.Context) ([]aws.Trail, error) {
+	return f.trails, f.err
+}
+
+func TestCollectCloudTrailStatus_ListingFailureSetsSentinels(t *testing.T) {
+	c := &Collector{}
+	status := &CloudTrailStatus{}
+
+	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{err: errors.New("Throttling")}, "111111111111", status, componentsdk.LevelTrust)
+
+	if status.TrailListingEvaluated {
+		t.Error("expected TrailListingEvaluated false on listing failure")
+	}
+	if status.TrailListingErrorCode == "" {
+		t.Error("expected TrailListingErrorCode set on listing failure")
+	}
+	if status.Enabled {
+		t.Error("expected Enabled to stay false (unevaluated) on listing failure")
+	}
+	if len(c.warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %v", c.warnings)
+	}
+}
+
+func TestCollectCloudTrailStatus_SuccessSetsEvaluated(t *testing.T) {
+	c := &Collector{}
+	status := &CloudTrailStatus{}
+	trails := []aws.Trail{{Name: "main", IsLogging: true, TrailStatusEvaluated: true}}
+
+	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{trails: trails}, "111111111111", status, componentsdk.LevelTrust)
+
+	if !status.TrailListingEvaluated {
+		t.Error("expected TrailListingEvaluated true on success")
+	}
+	if !status.Enabled {
+		t.Error("expected Enabled true from a logging trail")
+	}
+}
+
+func TestCollectCloudTrailStatus_PartialStatusStillEvaluated(t *testing.T) {
+	c := &Collector{}
+	status := &CloudTrailStatus{}
+	trails := []aws.Trail{{Name: "main", IsLogging: true, TrailStatusEvaluated: true}}
+	err := &aws.TrailStatusUnavailableError{}
+
+	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{trails: trails, err: err}, "111111111111", status, componentsdk.LevelTrust)
+
+	if !status.TrailListingEvaluated {
+		t.Error("expected TrailListingEvaluated true when only per-trail statuses failed")
+	}
+	if status.TrailListingErrorCode != "" {
+		t.Errorf("expected empty TrailListingErrorCode, got %q", status.TrailListingErrorCode)
+	}
+}
+
+type fakeInspectorSummarizer struct {
+	summary *aws.InspectorSummary
+	err     error
+}
+
+func (f fakeInspectorSummarizer) GetInspectorSummaryFromSecurityHub(_ context.Context, _ string) (*aws.InspectorSummary, error) {
+	return f.summary, f.err
+}
+
+func TestCollectInspectorStatus_FailureSetsSentinels(t *testing.T) {
+	c := &Collector{}
+	status := &InspectorStatus{}
+
+	c.collectInspectorStatus(context.Background(), fakeInspectorSummarizer{err: errors.New("AccessDenied")}, "us-east-1", "111111111111", status, componentsdk.LevelTrust)
+
+	if status.StatusEvaluated {
+		t.Error("expected StatusEvaluated false on failure")
+	}
+	if status.StatusErrorCode == "" {
+		t.Error("expected StatusErrorCode set on failure")
+	}
+}
+
+func TestCollectInspectorStatus_NilSummaryStillEvaluated(t *testing.T) {
+	c := &Collector{}
+	status := &InspectorStatus{}
+
+	c.collectInspectorStatus(context.Background(), fakeInspectorSummarizer{}, "us-east-1", "111111111111", status, componentsdk.LevelTrust)
+
+	if !status.StatusEvaluated {
+		t.Error("expected StatusEvaluated true when absence was genuinely observed")
+	}
+	if status.Enabled {
+		t.Error("expected Enabled false with nil summary")
 	}
 }

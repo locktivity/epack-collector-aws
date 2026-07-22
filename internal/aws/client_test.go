@@ -1,6 +1,8 @@
 package aws
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -8,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	cloudtrailtypes "github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -750,4 +753,125 @@ func TestGitHubOIDCTokenSource_CachingBehavior(t *testing.T) {
 		}
 		// This proves the cache was bypassed
 	})
+}
+
+type fakeCredentialReportAPI struct {
+	generateErr error
+	getErrs     []error
+	getCalls    int
+	reportCSV   []byte
+}
+
+func (f *fakeCredentialReportAPI) GenerateCredentialReport(_ context.Context, _ *iam.GenerateCredentialReportInput, _ ...func(*iam.Options)) (*iam.GenerateCredentialReportOutput, error) {
+	return &iam.GenerateCredentialReportOutput{}, f.generateErr
+}
+
+func (f *fakeCredentialReportAPI) GetCredentialReport(_ context.Context, _ *iam.GetCredentialReportInput, _ ...func(*iam.Options)) (*iam.GetCredentialReportOutput, error) {
+	call := f.getCalls
+	f.getCalls++
+	if call < len(f.getErrs) {
+		return nil, f.getErrs[call]
+	}
+	return &iam.GetCredentialReportOutput{Content: f.reportCSV}, nil
+}
+
+const minimalCredentialReportCSV = "user,arn,user_creation_time,password_enabled,password_last_used,password_last_changed,password_next_rotation,mfa_active,access_key_1_active,access_key_1_last_rotated,access_key_1_last_used_date,access_key_1_last_used_region,access_key_1_last_used_service,access_key_2_active,access_key_2_last_rotated,access_key_2_last_used_date,access_key_2_last_used_region,access_key_2_last_used_service\n<root_account>,arn:aws:iam::123456789012:root,2020-01-01T00:00:00+00:00,not_supported,N/A,not_supported,not_supported,true,false,N/A,N/A,N/A,N/A,false,N/A,N/A,N/A,N/A\n"
+
+func TestGetCredentialReport_RetriesWhilePending(t *testing.T) {
+	api := &fakeCredentialReportAPI{
+		getErrs: []error{
+			&iamtypes.CredentialReportNotPresentException{},
+			&iamtypes.CredentialReportNotReadyException{},
+		},
+		reportCSV: []byte(minimalCredentialReportCSV),
+	}
+
+	report, err := getCredentialReport(context.Background(), api, time.Millisecond, time.Second)
+	if err != nil {
+		t.Fatalf("getCredentialReport() error = %v", err)
+	}
+	if api.getCalls != 3 {
+		t.Errorf("getCalls = %d, want 3 (two pending, one success)", api.getCalls)
+	}
+	if len(report.Users) != 1 || report.Users[0].User != "<root_account>" {
+		t.Errorf("unexpected parsed report: %+v", report)
+	}
+}
+
+func TestGetCredentialReport_TimesOutWithSentinelError(t *testing.T) {
+	pending := make([]error, 1000)
+	for i := range pending {
+		pending[i] = &iamtypes.CredentialReportNotReadyException{}
+	}
+	api := &fakeCredentialReportAPI{getErrs: pending}
+
+	_, err := getCredentialReport(context.Background(), api, time.Millisecond, 20*time.Millisecond)
+	if !errors.Is(err, ErrCredentialReportTimeout) {
+		t.Fatalf("error = %v, want ErrCredentialReportTimeout", err)
+	}
+	if api.getCalls >= len(pending) {
+		t.Errorf("getCalls = %d, want polling bounded by the wall-clock budget", api.getCalls)
+	}
+}
+
+func TestGetCredentialReport_ExpiredReportIsRegenerated(t *testing.T) {
+	api := &fakeCredentialReportAPI{
+		getErrs:   []error{&iamtypes.CredentialReportExpiredException{}},
+		reportCSV: []byte(minimalCredentialReportCSV),
+	}
+
+	report, err := getCredentialReport(context.Background(), api, time.Millisecond, time.Second)
+	if err != nil {
+		t.Fatalf("getCredentialReport() error = %v", err)
+	}
+	if len(report.Users) != 1 {
+		t.Errorf("unexpected parsed report: %+v", report)
+	}
+}
+
+func TestGetCredentialReport_ContextCancelledDuringWait(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	api := &fakeCredentialReportAPI{reportCSV: []byte(minimalCredentialReportCSV)}
+
+	_, err := getCredentialReport(ctx, api, time.Minute, time.Hour)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if api.getCalls != 0 {
+		t.Errorf("getCalls = %d, want 0 (cancelled before first poll)", api.getCalls)
+	}
+}
+
+func TestGetCredentialReport_GenerateErrorFailsImmediately(t *testing.T) {
+	api := &fakeCredentialReportAPI{generateErr: errors.New("AccessDenied")}
+
+	_, err := getCredentialReport(context.Background(), api, time.Millisecond, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "generating credential report") {
+		t.Fatalf("error = %v, want generate failure", err)
+	}
+}
+
+func TestGetCredentialReport_NonPendingGetErrorFailsImmediately(t *testing.T) {
+	api := &fakeCredentialReportAPI{getErrs: []error{errors.New("Throttling: rate exceeded")}}
+
+	_, err := getCredentialReport(context.Background(), api, time.Millisecond, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "getting credential report") {
+		t.Fatalf("error = %v, want get failure", err)
+	}
+	if api.getCalls != 1 {
+		t.Errorf("getCalls = %d, want 1 (no retry on non-pending error)", api.getCalls)
+	}
+}
+
+func TestCredentialReportPending_StringFallback(t *testing.T) {
+	if !credentialReportPending(errors.New("api error ReportInProgress: report generation in progress")) {
+		t.Error("ReportInProgress string should read as pending")
+	}
+	if !credentialReportPending(errors.New("api error ReportExpired: report has expired")) {
+		t.Error("ReportExpired string should read as pending")
+	}
+	if credentialReportPending(errors.New("Throttling: rate exceeded")) {
+		t.Error("throttling error should not read as pending")
+	}
 }

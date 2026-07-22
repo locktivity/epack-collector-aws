@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
+	"github.com/locktivity/epack/componentsdk"
 )
 
 func TestS3BucketsToInventory_PreservesAllFlags(t *testing.T) {
@@ -467,5 +468,87 @@ func TestS3BucketsToInventory_SetsIsLogSink(t *testing.T) {
 	}
 	if out[1].LoggingEnabled {
 		t.Errorf("logs bucket logging_enabled should stay false (truthful)")
+	}
+}
+
+// fakeS3Client is a focused mock for the s3Client interface.
+type fakeS3Client struct {
+	fakeS3Enricher
+	pab     aws.PublicAccessBlockSettings
+	pabErr  error
+	buckets []aws.Bucket
+	listErr error
+}
+
+func (f fakeS3Client) GetAccountPublicAccessBlock(_ context.Context, _ string) (aws.PublicAccessBlockSettings, error) {
+	return f.pab, f.pabErr
+}
+
+func (f fakeS3Client) ListBuckets(_ context.Context) ([]aws.Bucket, error) {
+	return f.buckets, f.listErr
+}
+
+func TestCollectS3Metrics_ListBucketsFailureSetsSentinels(t *testing.T) {
+	c := &Collector{}
+	client := fakeS3Client{listErr: errors.New("Throttling: rate exceeded")}
+
+	metrics := c.collectS3Metrics(context.Background(), client, "111111111111", componentsdk.LevelTrust)
+
+	if metrics.BucketListingEvaluated {
+		t.Error("expected BucketListingEvaluated false on listing failure")
+	}
+	if metrics.BucketListingErrorCode == "" {
+		t.Error("expected BucketListingErrorCode set on listing failure")
+	}
+	if metrics.PublicAccessBlocked != 0 || metrics.DefaultEncryptionEnabled != 0 {
+		t.Errorf("expected zero aggregates on listing failure, got %+v", metrics)
+	}
+	if len(c.warnings) != 1 || !strings.Contains(c.warnings[0], "failed to collect S3 metrics") {
+		t.Errorf("expected S3 failure warning, got %v", c.warnings)
+	}
+}
+
+func TestCollectS3Metrics_SuccessSetsEvaluated(t *testing.T) {
+	c := &Collector{}
+	client := fakeS3Client{
+		pab: aws.PublicAccessBlockSettings{
+			Evaluated:             true,
+			BlockPublicACLs:       true,
+			IgnorePublicACLs:      true,
+			BlockPublicPolicy:     true,
+			RestrictPublicBuckets: true,
+		},
+	}
+
+	metrics := c.collectS3Metrics(context.Background(), client, "111111111111", componentsdk.LevelTrust)
+
+	if !metrics.BucketListingEvaluated {
+		t.Error("expected BucketListingEvaluated true on success")
+	}
+	if !metrics.AccountPublicAccessBlockEvaluated {
+		t.Error("expected AccountPublicAccessBlockEvaluated true on success")
+	}
+	if metrics.BucketListingErrorCode != "" {
+		t.Errorf("expected empty BucketListingErrorCode, got %q", metrics.BucketListingErrorCode)
+	}
+	if metrics.PublicAccessBlocked != MaxPercentage {
+		t.Errorf("expected vacuous %d%% with zero buckets, got %d", MaxPercentage, metrics.PublicAccessBlocked)
+	}
+}
+
+func TestCollectS3Metrics_AccountPABFailureLeavesEvaluatedFalse(t *testing.T) {
+	c := &Collector{}
+	client := fakeS3Client{pabErr: errors.New("AccessDenied")}
+
+	metrics := c.collectS3Metrics(context.Background(), client, "111111111111", componentsdk.LevelTrust)
+
+	if metrics.AccountPublicAccessBlockEvaluated {
+		t.Error("expected AccountPublicAccessBlockEvaluated false on PAB failure")
+	}
+	if !metrics.BucketListingEvaluated {
+		t.Error("expected BucketListingEvaluated true when only PAB failed")
+	}
+	if metrics.AccountPublicAccessBlockEnabled {
+		t.Error("expected AccountPublicAccessBlockEnabled false on PAB failure")
 	}
 }

@@ -208,7 +208,7 @@ The minimum policy. Required for every collection level.
 
 ### Audit level
 
-Add these actions to the trust-level policy above. They surface per-permission-set Identity Center detail, per-function Lambda configuration, and KMS alias enrichment.
+Add these actions to the trust-level policy above. They surface the Identity Center access model (permission sets, the user and group roster, membership and account-assignment edges), per-function Lambda configuration, KMS alias enrichment, and the organization-membership classification of cross-account role trust.
 
 ```json
 [
@@ -216,6 +216,11 @@ Add these actions to the trust-level policy above. They surface per-permission-s
   "sso:ListAccountsForProvisionedPermissionSet",
   "sso:ListManagedPoliciesInPermissionSet",
   "sso:GetInlinePolicyForPermissionSet",
+  "sso:ListAccountAssignments",
+
+  "identitystore:ListGroupMemberships",
+
+  "organizations:ListAccounts",
 
   "lambda:GetPolicy",
   "lambda:ListFunctionUrlConfigs",
@@ -224,14 +229,14 @@ Add these actions to the trust-level policy above. They surface per-permission-s
 ]
 ```
 
+`organizations:ListAccounts` is optional and best effort: it succeeds only from the Organizations management account or a delegated administrator. Without it, per-role `external_trust_in_org` determinations are absent (never guessed) and the run continues quietly.
+
 ### Internal level
 
-Add these actions on top of the audit-level set. They surface per-user Identity Center group memberships, per-rule Config compliance, GuardDuty finding payloads, and per-bucket S3 ACL and lifecycle configuration.
+Add these actions on top of the audit-level set. They surface per-rule Config compliance, GuardDuty finding payloads, and per-bucket S3 ACL and lifecycle configuration.
 
 ```json
 [
-  "identitystore:ListGroupMemberships",
-
   "config:DescribeConfigRules",
   "config:DescribeComplianceByConfigRule",
   "config:DescribeConfigRuleEvaluationStatus",

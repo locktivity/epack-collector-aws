@@ -408,25 +408,58 @@ func (c *AWSClient) GetEnabledRegions(ctx context.Context) ([]string, error) {
 	return regions, nil
 }
 
+// ErrCredentialReportTimeout is returned when the IAM credential report is
+// still not ready after the full polling budget. Callers use errors.Is to
+// distinguish this transient condition from a real API failure.
+var ErrCredentialReportTimeout = errors.New("credential report generation timed out")
+
+// credentialReportBudget bounds per-account polling wall-clock time. Accounts
+// are collected sequentially under the SDK's global run timeout, so the budget
+// must leave room for every configured account plus the rest of collection.
+const (
+	credentialReportBaseDelay = 2 * time.Second
+	credentialReportMaxDelay  = 10 * time.Second
+	credentialReportBudget    = 45 * time.Second
+)
+
+// credentialReportAPI is the slice of the IAM API used by the credential
+// report polling loop, extracted so the loop can be tested without AWS.
+type credentialReportAPI interface {
+	GenerateCredentialReport(ctx context.Context, params *iam.GenerateCredentialReportInput, optFns ...func(*iam.Options)) (*iam.GenerateCredentialReportOutput, error)
+	GetCredentialReport(ctx context.Context, params *iam.GetCredentialReportInput, optFns ...func(*iam.Options)) (*iam.GetCredentialReportOutput, error)
+}
+
 // GetCredentialReport generates and retrieves the IAM credential report.
 func (c *AWSClient) GetCredentialReport(ctx context.Context) (*CredentialReport, error) {
-	iamClient := iam.NewFromConfig(c.cfg)
+	return getCredentialReport(ctx, iam.NewFromConfig(c.cfg), credentialReportBaseDelay, credentialReportBudget)
+}
 
-	// Generate the report (may need multiple attempts)
-	for attempts := 0; attempts < 10; attempts++ {
-		_, err := iamClient.GenerateCredentialReport(ctx, &iam.GenerateCredentialReportInput{})
+// getCredentialReport polls until the report is ready, backing off between
+// attempts, for at most budget of wall-clock waiting. Report generation is
+// asynchronous on the AWS side; regenerating while a report is in progress is
+// a no-op, and ReportNotPresent / ReportExpired require a fresh
+// GenerateCredentialReport call, so the generate call stays inside the loop.
+func getCredentialReport(ctx context.Context, api credentialReportAPI, baseDelay, budget time.Duration) (*CredentialReport, error) {
+	deadline := time.Now().Add(budget)
+	delay := baseDelay
+	for {
+		_, err := api.GenerateCredentialReport(ctx, &iam.GenerateCredentialReportInput{})
 		if err != nil {
 			return nil, fmt.Errorf("generating credential report: %w", err)
 		}
 
-		// Wait for report to be ready
-		time.Sleep(2 * time.Second)
+		wait := min(delay, time.Until(deadline))
+		if wait <= 0 {
+			return nil, ErrCredentialReportTimeout
+		}
+		if err := sleepContext(ctx, wait); err != nil {
+			return nil, fmt.Errorf("waiting for credential report: %w", err)
+		}
+		delay = min(delay*2, credentialReportMaxDelay)
 
-		output, err := iamClient.GetCredentialReport(ctx, &iam.GetCredentialReportInput{})
+		output, err := api.GetCredentialReport(ctx, &iam.GetCredentialReportInput{})
 		if err != nil {
-			// Check if report is still being generated
-			if strings.Contains(err.Error(), "ReportInProgress") ||
-				strings.Contains(err.Error(), "ReportNotPresent") {
+			if credentialReportPending(err) {
 				continue
 			}
 			return nil, fmt.Errorf("getting credential report: %w", err)
@@ -434,8 +467,35 @@ func (c *AWSClient) GetCredentialReport(ctx context.Context) (*CredentialReport,
 
 		return parseCredentialReport(output.Content)
 	}
+}
 
-	return nil, fmt.Errorf("credential report generation timed out")
+// credentialReportPending reports whether err means the report is still being
+// generated, was never generated, or has expired; all three are resolved by
+// regenerating and polling again. The string checks cover SDK paths where the
+// typed exceptions don't surface.
+func credentialReportPending(err error) bool {
+	var notReady *iamtypes.CredentialReportNotReadyException
+	var notPresent *iamtypes.CredentialReportNotPresentException
+	var expired *iamtypes.CredentialReportExpiredException
+	if errors.As(err, &notReady) || errors.As(err, &notPresent) || errors.As(err, &expired) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "ReportInProgress") ||
+		strings.Contains(msg, "ReportNotPresent") ||
+		strings.Contains(msg, "ReportExpired")
+}
+
+// sleepContext waits for d or until ctx is cancelled, whichever comes first.
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // ListMFADevices returns MFA devices assigned to a specific IAM user.

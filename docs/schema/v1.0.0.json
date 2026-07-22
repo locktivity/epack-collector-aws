@@ -27,6 +27,19 @@
         "$ref": "#/definitions/AccountPosture"
       }
     },
+    "failed_accounts": {
+      "type": "array",
+      "description": "Configured accounts whose collection failed entirely, so no entry exists for them under accounts. Absent when every account answered.",
+      "items": {
+        "type": "object",
+        "required": ["error_code"],
+        "properties": {
+          "account_id": { "type": "string", "pattern": "^[0-9]{12}$", "description": "Parsed from the configured role ARN; absent when not derivable (e.g. default credentials)." },
+          "role_arn": { "type": "string" },
+          "error_code": { "type": "string" }
+        }
+      }
+    },
     "diagnostics": {
       "type": ["object", "null"],
       "description": "Per-account errors and surface-level warnings encountered during collection. Absent when there were none.",
@@ -79,10 +92,13 @@
         "users", "roles", "credential_report"
       ],
       "properties": {
+        "credential_report_evaluated": { "type": "boolean", "description": "True when the IAM credential report was collected. The user aggregates (iam_users_present, mfa_enabled, hardware_mfa_enabled, access_keys_rotated) are meaningful only when true; on collection failure they hold zero values." },
+        "credential_report_error_code": { "type": "string", "description": "Present when the credential report was not evaluated (e.g. CredentialReportTimeout)." },
         "iam_users_present": { "type": "boolean" },
         "mfa_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
         "hardware_mfa_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
         "access_keys_rotated": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "root_credential_state_evaluated": { "type": "boolean", "description": "True when root credential state was read from the credential report or the account summary. The root_* credential flags are meaningful only when true." },
         "root_mfa_enabled": { "type": "boolean", "description": "True when root MFA is active." },
         "root_credentials_present": { "type": "boolean" },
         "root_password_present": { "type": "boolean" },
@@ -94,8 +110,10 @@
         "root_credentials_management_feature_enabled": { "type": "boolean", "description": "True when IAM ListOrganizationsFeatures reported the RootCredentialsManagement centralized root access feature." },
         "root_sessions_feature_enabled": { "type": "boolean", "description": "True when IAM ListOrganizationsFeatures reported the RootSessions centralized root access feature." },
         "root_organizations_features_error_code": { "type": "string", "description": "Present when the centralized root access feature read was not evaluated." },
+        "organization_accounts_evaluated": { "type": "boolean", "description": "True when the AWS Organizations account roster was listed. Per-role external_trust_in_org determinations are meaningful only when true; member accounts without Organizations visibility record the error code without a warning." },
+        "organization_accounts_error_code": { "type": "string", "description": "Present when the organization account roster was not evaluated." },
         "users": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-user rows. Null at trust." },
-        "roles": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-role rows. Null at trust." },
+        "roles": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-role rows with has_external_trust, has_wildcard_principal, external_trust_account_ids (foreign principal account IDs), and three-state external_trust_in_org (absent when undeterminable). Internal adds trust_policy_json, the decoded trust policy document. Null at trust." },
         "credential_report": {
           "description": "Internal: full IAM credential report with per-user activity. Null when not collected at internal.",
           "oneOf": [
@@ -114,6 +132,9 @@
         "buckets"
       ],
       "properties": {
+        "bucket_listing_evaluated": { "type": "boolean", "description": "True when the bucket listing was collected. The bucket aggregates below are meaningful only when true; on listing failure they hold zero values." },
+        "bucket_listing_error_code": { "type": "string", "description": "Present when the bucket listing was not evaluated." },
+        "account_public_access_block_evaluated": { "type": "boolean", "description": "True when the account-level S3 Block Public Access settings were read. account_public_access_block_enabled is meaningful only when true." },
         "bucket_count": { "type": "integer", "minimum": 0, "description": "Total S3 buckets returned by ListBuckets." },
         "public_access_blocked": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets whose effective S3 Block Public Access settings block public access." },
         "public_access_block_unknown_count": { "type": "integer", "minimum": 0, "description": "Buckets whose effective S3 Block Public Access setting could not be fully evaluated." },
@@ -133,6 +154,9 @@
       "type": "object",
       "required": ["instances", "clusters"],
       "properties": {
+        "regions_evaluated_count": { "type": "integer", "minimum": 0, "description": "Regions whose RDS listing succeeded. The aggregates cover only these regions and are meaningful only when regions_failed is absent." },
+        "regions_failed": { "type": "array", "items": { "type": "string" }, "description": "Regions whose RDS listing failed. Absent when every region evaluated." },
+        "database_count": { "type": "integer", "minimum": 0, "description": "Instances plus clusters across evaluated regions, so vacuous aggregates (zero databases) are distinguishable from real ones." },
         "encrypted_at_rest": { "type": "integer", "minimum": 0, "maximum": 100 },
         "publicly_accessible": { "type": "integer", "minimum": 0, "maximum": 100 },
         "deletion_protection": { "type": "integer", "minimum": 0, "maximum": 100 },
@@ -148,6 +172,8 @@
       "type": "object",
       "required": ["vpcs", "security_groups"],
       "properties": {
+        "regions_evaluated_count": { "type": "integer", "minimum": 0, "description": "Regions whose network listing succeeded. The exposure aggregates cover only these regions and are meaningful only when regions_failed is absent: partial coverage can only understate exposure." },
+        "regions_failed": { "type": "array", "items": { "type": "string" }, "description": "Regions whose network listing failed. Absent when every region evaluated." },
         "open_to_world_ssh": { "type": "integer", "minimum": 0, "maximum": 100 },
         "open_to_world_rdp": { "type": "integer", "minimum": 0, "maximum": 100 },
         "vpcs": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-VPC rows; internal adds flow_logs_enabled when evaluated, plus flow_logs_evaluated and flow_logs_error_code provenance." },
@@ -163,6 +189,8 @@
           "type": "object",
           "required": ["enabled", "multi_region_enabled", "trails"],
           "properties": {
+            "trail_listing_evaluated": { "type": "boolean", "description": "True when the trail listing was collected. The summary booleans are meaningful only when true; on listing failure they hold zero values." },
+            "trail_listing_error_code": { "type": "string", "description": "Present when the trail listing was not evaluated." },
             "enabled": { "type": "boolean" },
             "multi_region_enabled": { "type": "boolean" },
             "organization_trail_enabled": { "type": "boolean" },
@@ -214,6 +242,8 @@
           "type": "object",
           "required": ["enabled", "unpatched_server_percent"],
           "properties": {
+            "status_evaluated": { "type": "boolean", "description": "True when the Inspector status was read (including a genuine absence). enabled and unpatched_server_percent are meaningful only when true." },
+            "status_error_code": { "type": "string", "description": "Present when the Inspector status was not evaluated." },
             "enabled": { "type": "boolean" },
             "unpatched_server_percent": { "type": "integer", "minimum": 0, "maximum": 100 },
             "total_findings": { "type": "integer", "minimum": 0 },
@@ -252,9 +282,13 @@
         "user_count": { "type": "integer", "minimum": 0 },
         "group_count": { "type": "integer", "minimum": 0 },
         "permission_set_count": { "type": "integer", "minimum": 0 },
-        "permission_sets": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-permission-set rows; internal adds managed_policy_arns and has_inline_policy." },
-        "users": { "$ref": "#/definitions/LevelGatedArray", "description": "Internal: per-user rows from the identity store." },
-        "groups": { "$ref": "#/definitions/LevelGatedArray", "description": "Internal: per-group rows with member counts." }
+        "permission_sets": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-permission-set rows with provisioned_account_ids; internal adds managed_policy_arns and has_inline_policy." },
+        "users": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-user rows from the identity store (id, login, display name, primary email; no further PII at any level)." },
+        "groups": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-group rows with member_user_ids edges (join against users[].user_id)." },
+        "account_assignments": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: principal-to-permission-set-to-account edges (account_id, permission_set_arn, principal_type USER|GROUP, principal_id). Rows are meaningful only when assignments_evaluated is true. Capped; truncation companions below." },
+        "assignments_evaluated": { "type": "boolean", "description": "True when the assignment listing was fully collected. On failure the array is empty and this is false; a partial inventory is never emitted." },
+        "assignments_truncated": { "type": "boolean" },
+        "assignments_dropped_count": { "type": "integer", "minimum": 0 }
       }
     },
 

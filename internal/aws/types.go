@@ -405,28 +405,40 @@ type IdentityCenterPermissionSet struct {
 	SessionDurationISO8601 string
 	ManagedPoliciesCount   int
 	AccountsAssignedCount  int
+	ProvisionedAccountIDs  []string
 	ManagedPolicyARNs      []string
 	HasInlinePolicy        bool
 }
 
 // IdentityStoreUser is one user in the identity store. PrimaryEmail is the
-// email marked Primary on the user; Status is "ENABLED" / "DISABLED" as
-// reported by the identity store.
+// email marked Primary on the user. The identity store API exposes no
+// enabled/disabled status; consumers wanting activity signals correlate
+// against IdP-side evidence instead.
 type IdentityStoreUser struct {
 	UserID       string
 	UserName     string
 	DisplayName  string
 	PrimaryEmail string
-	Status       string
 }
 
-// IdentityStoreGroup is one group in the identity store. MemberCount is
-// populated only at internal level (requires an extra paginated call per group).
+// IdentityStoreGroup is one group in the identity store. MemberCount and
+// MemberUserIDs are populated only when membership enrichment was requested
+// (an extra paginated call per group).
 type IdentityStoreGroup struct {
-	GroupID     string
-	DisplayName string
-	Description string
-	MemberCount int
+	GroupID       string
+	DisplayName   string
+	Description   string
+	MemberCount   int
+	MemberUserIDs []string
+}
+
+// IdentityCenterAssignment is one principal-to-permission-set-to-account edge
+// from ListAccountAssignments. PrincipalType is "USER" or "GROUP".
+type IdentityCenterAssignment struct {
+	AccountID        string
+	PermissionSetARN string
+	PrincipalType    string
+	PrincipalID      string
 }
 
 // SSMParameter is a single Parameter Store parameter's posture-relevant

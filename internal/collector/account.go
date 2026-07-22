@@ -12,7 +12,7 @@ import (
 
 // collectAccountSecurity collects account-level security service status.
 // level is passed through to per-service collectors that gate audit / internal fields.
-func (c *Collector) collectAccountSecurity(ctx context.Context, client *aws.AWSClient, primaryRegion string, regions []string, accountID string, level componentsdk.Level) (*AccountSecurity, error) {
+func (c *Collector) collectAccountSecurity(ctx context.Context, client *aws.AWSClient, primaryRegion string, regions []string, accountID string, level componentsdk.Level) *AccountSecurity {
 	security := &AccountSecurity{}
 
 	c.status("Checking CloudTrail...")
@@ -30,20 +30,28 @@ func (c *Collector) collectAccountSecurity(ctx context.Context, client *aws.AWSC
 	c.status("Checking Inspector...")
 	c.collectInspectorStatus(ctx, client, primaryRegion, accountID, &security.Inspector, level)
 
-	return security, nil
+	return security
+}
+
+// trailDescriber is the slice of the AWS client used by collectCloudTrailStatus,
+// extracted so the failure paths can be tested without AWS.
+type trailDescriber interface {
+	DescribeTrails(ctx context.Context) ([]aws.Trail, error)
 }
 
 // collectCloudTrailStatus collects CloudTrail configuration status.
-func (c *Collector) collectCloudTrailStatus(ctx context.Context, client *aws.AWSClient, accountID string, status *CloudTrailStatus, level componentsdk.Level) {
+func (c *Collector) collectCloudTrailStatus(ctx context.Context, client trailDescriber, accountID string, status *CloudTrailStatus, level componentsdk.Level) {
 	trails, err := client.DescribeTrails(ctx)
 	if err != nil {
 		var statusErr *aws.TrailStatusUnavailableError
 		if !errors.As(err, &statusErr) || len(trails) == 0 {
+			status.TrailListingErrorCode = apiErrorCode(err)
 			c.warn("account %s: failed to collect CloudTrail status: %v", accountID, err)
 			return
 		}
 		c.warn("account %s: failed to collect one or more CloudTrail trail statuses: %v", accountID, err)
 	}
+	status.TrailListingEvaluated = true
 
 	summarizeCloudTrailStatus(status, trails)
 
@@ -358,13 +366,22 @@ func (c *Collector) collectSecurityHubStatus(ctx context.Context, client *aws.AW
 	}
 }
 
+// inspectorSummarizer is the slice of the AWS client used by
+// collectInspectorStatus, extracted so the failure paths can be tested
+// without AWS.
+type inspectorSummarizer interface {
+	GetInspectorSummaryFromSecurityHub(ctx context.Context, region string) (*aws.InspectorSummary, error)
+}
+
 // collectInspectorStatus collects Inspector vulnerability posture from Security Hub findings.
-func (c *Collector) collectInspectorStatus(ctx context.Context, client *aws.AWSClient, region string, accountID string, status *InspectorStatus, level componentsdk.Level) {
+func (c *Collector) collectInspectorStatus(ctx context.Context, client inspectorSummarizer, region string, accountID string, status *InspectorStatus, level componentsdk.Level) {
 	summary, err := client.GetInspectorSummaryFromSecurityHub(ctx, region)
 	if err != nil {
+		status.StatusErrorCode = apiErrorCode(err)
 		c.warn("account %s: failed to collect Inspector status: %v", accountID, err)
 		return
 	}
+	status.StatusEvaluated = true
 	if summary == nil {
 		return
 	}

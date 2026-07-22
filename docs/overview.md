@@ -16,10 +16,13 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 
 | Metric | Description |
 |--------|-------------|
+| `credential_report_evaluated` | Whether the IAM credential report was collected. The user aggregates below are meaningful only when true |
+| `credential_report_error_code` | Error code when the credential report could not be collected (e.g. `CredentialReportTimeout`) |
 | `iam_users_present` | Whether at least one IAM user (excluding root) exists in the account |
 | `mfa_enabled` | Percentage of IAM users with MFA enabled |
 | `hardware_mfa_enabled` | Percentage of IAM users with hardware MFA (physical OTP devices or FIDO/U2F security keys) |
 | `access_keys_rotated` | Percentage of access keys rotated within 90 days |
+| `root_credential_state_evaluated` | Whether root credential state was read from the credential report or the account summary. The root credential flags below are meaningful only when true |
 | `root_mfa_enabled` | Whether root MFA is active |
 | `root_credentials_present` | Whether root has any password, access key, or signing certificate present |
 | `root_password_present` | Whether root has a password present |
@@ -36,6 +39,9 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 
 | Metric | Description |
 |--------|-------------|
+| `bucket_listing_evaluated` | Whether the bucket listing was collected. The bucket aggregates below are meaningful only when true |
+| `bucket_listing_error_code` | Error code when the bucket listing could not be collected |
+| `account_public_access_block_evaluated` | Whether the account-level public access block settings were read |
 | `bucket_count` | Total S3 buckets returned by `ListBuckets` |
 | `public_access_blocked` | Percentage of buckets whose effective S3 Block Public Access settings block public access |
 | `public_access_block_unknown_count` | Buckets whose effective S3 Block Public Access setting could not be fully evaluated |
@@ -51,6 +57,9 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 
 | Metric | Description |
 |--------|-------------|
+| `regions_evaluated_count` | Regions whose RDS listing succeeded; aggregates cover only these regions |
+| `regions_failed` | Regions whose RDS listing failed. Aggregates are meaningful only when absent |
+| `database_count` | Instances plus clusters across evaluated regions |
 | `encrypted_at_rest` | Percentage of instances/clusters with encryption |
 | `publicly_accessible` | Percentage publicly accessible (should be 0%) |
 | `deletion_protection` | Percentage with deletion protection enabled |
@@ -61,6 +70,8 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 
 | Metric | Description |
 |--------|-------------|
+| `regions_evaluated_count` | Regions whose network listing succeeded; exposure aggregates cover only these regions |
+| `regions_failed` | Regions whose network listing failed. Exposure aggregates are meaningful only when absent, since partial coverage can only understate exposure |
 | `open_to_world_ssh` | Percentage of security groups allowing SSH from 0.0.0.0/0 |
 | `open_to_world_rdp` | Percentage allowing RDP from 0.0.0.0/0 |
 | `vpcs[].flow_logs_enabled` | Internal-level per-VPC flow log status |
@@ -71,11 +82,11 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 
 | Service | Metrics |
 |---------|---------|
-| **CloudTrail** | Enabled, multi-region, organization trail coverage, trail-status evaluated / inferred / unknown counts |
+| **CloudTrail** | Trail-listing evaluated marker and error code, enabled, multi-region, organization trail coverage, trail-status evaluated / inferred / unknown counts |
 | **AWS Config** | Enabled, recorder running |
 | **GuardDuty** | Enabled, unremediated high/critical findings >48h |
 | **Security Hub** | Enabled, CIS AWS Foundations Benchmark level 1/2/unknown-level compliance |
-| **Inspector** | Enabled, unpatched server % |
+| **Inspector** | Status evaluated marker and error code, enabled, unpatched server % |
 
 For CIS level splits, the collector uses Security Hub finding `related_requirements` level tags and aggregates to one status per control (FAILED > WARNING > PASSED > NOT_AVAILABLE).
 Findings without explicit level tags are reported in an explicit unknown-level bucket.
@@ -181,3 +192,7 @@ collectors:
 ```
 
 Each account's posture is collected independently and included in the output.
+An account that fails entirely is recorded under `failed_accounts` (with the
+account ID parsed from its role ARN and the upstream error code) instead of
+silently disappearing, and the normalized artifact carries a matching stub
+entry plus an `accounts_expected` count.

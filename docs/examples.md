@@ -105,10 +105,12 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
       "account_alias": "production",
       "regions": ["us-east-1", "us-west-2"],
       "iam": {
+        "credential_report_evaluated": true,
         "iam_users_present": true,
         "mfa_enabled": 95,
         "hardware_mfa_enabled": 0,
         "access_keys_rotated": 80,
+        "root_credential_state_evaluated": true,
         "root_mfa_enabled": true,
         "root_credentials_present": true,
         "root_password_present": true,
@@ -121,6 +123,8 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
         "root_sessions_feature_enabled": true
       },
       "s3": {
+        "bucket_listing_evaluated": true,
+        "account_public_access_block_evaluated": true,
         "bucket_count": 20,
         "public_access_blocked": 100,
         "public_access_block_unknown_count": 0,
@@ -133,6 +137,8 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
         "account_public_access_block_enabled": true
       },
       "rds": {
+        "regions_evaluated_count": 2,
+        "database_count": 6,
         "encrypted_at_rest": 100,
         "publicly_accessible": 0,
         "deletion_protection": 90,
@@ -140,11 +146,13 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
         "multi_az_enabled": 80
       },
       "network": {
+        "regions_evaluated_count": 2,
         "open_to_world_ssh": 2,
         "open_to_world_rdp": 0
       },
       "account_security": {
         "cloudtrail": {
+          "trail_listing_evaluated": true,
           "enabled": true,
           "multi_region_enabled": true,
           "organization_trail_enabled": true,
@@ -191,6 +199,7 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
           }
         },
         "inspector": {
+          "status_evaluated": true,
           "enabled": true,
           "unpatched_server_percent": 25
         }
@@ -383,6 +392,8 @@ variable "external_id" {
 
 ### Collector Policy (shared by both)
 
+The list below is the trust-level (default) set. The authoritative, level-tiered permission reference lives in the README under Required IAM Permissions; add the audit or internal actions from there when your pipeline collects at those levels.
+
 ```hcl
 resource "aws_iam_policy" "epack_collector" {
   name        = "EpackCollectorPolicy"
@@ -422,6 +433,18 @@ resource "aws_iam_policy" "epack_collector" {
           "securityhub:Describe*",
           "securityhub:Get*",
           "securityhub:List*",
+          "sso:ListInstances",
+          "sso:ListPermissionSets",
+          "identitystore:ListUsers",
+          "identitystore:ListGroups",
+          "lambda:ListFunctions",
+          "logs:DescribeLogGroups",
+          "kms:ListKeys",
+          "kms:DescribeKey",
+          "kms:GetKeyRotationStatus",
+          "secretsmanager:ListSecrets",
+          "ssm:DescribeParameters",
+          "access-analyzer:ListAnalyzers",
           "sts:GetCallerIdentity"
         ]
         Resource = "*"

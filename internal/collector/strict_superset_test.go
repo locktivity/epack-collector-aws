@@ -30,6 +30,9 @@ var auditGatedJSONPaths = []string{
 	"account_security.security_hub.standards_arns",
 	"account_security.security_hub.product_subscriptions",
 	"identity_center.permission_sets",
+	"identity_center.users",
+	"identity_center.groups",
+	"identity_center.account_assignments",
 	"lambda.functions",
 	"ec2.instances",
 	"cloudwatch_logs.log_groups",
@@ -43,8 +46,6 @@ var internalGatedJSONPaths = []string{
 	"iam.credential_report",
 	"account_security.config.rules",
 	"account_security.guardduty.findings",
-	"identity_center.users",
-	"identity_center.groups",
 }
 
 // TestStrictSuperset_ContractAcrossLevels marshals an empty AccountPosture

@@ -45,9 +45,13 @@ The active level appears in the output artifact as the top-level
   access protection, and centralized root access feature evidence when the
   caller is the Organizations management account or delegated administrator.
 - **audit**: `users[]` (per-user MFA + access-key + console flags),
-  `roles[]` (per-role ARN + external-trust flag).
+  `roles[]` (per-role ARN, external-trust flag, wildcard-principal flag,
+  the foreign principal account IDs, and a best-effort
+  `external_trust_in_org` determination backed by the
+  `organization_accounts_evaluated` marker).
 - **internal**: `credential_report` (full per-user activity from the IAM
-  credential report: last-used dates, key rotation dates, password state).
+  credential report: last-used dates, key rotation dates, password state);
+  `roles[].trust_policy_json` (the decoded trust policy document verbatim).
 
 ### S3 (`s3`)
 
@@ -105,10 +109,17 @@ per-rule / per-finding detail at internal.
 ### IAM Identity Center (`identity_center`)
 
 - **trust**: enabled flag, instance metadata, user / group / permission-set counts.
-- **audit**: `permission_sets[]` (name, session duration, managed-policy count,
-  accounts-assigned count).
-- **internal**: `users[]`, `groups[]` (with member counts); permission-set rows
-  gain `managed_policy_arns` and `has_inline_policy`.
+- **audit**: the full access model. `users[]` (id, login, display name,
+  primary email; identity-system inventories are audit-level evidence, and no
+  PII beyond the primary email is collected), `groups[]` with
+  `member_user_ids`, `permission_sets[]` (name, session duration,
+  managed-policy count, provisioned account IDs), and `account_assignments[]`
+  (principal to permission set to account edges, meaningful only when
+  `assignments_evaluated` is true, capped with truncation companions).
+  Joining these reconstructs who can access which account with which
+  permission set, entirely within the pack.
+- **internal**: permission-set rows gain `managed_policy_arns` and
+  `has_inline_policy`.
 
 ### Lambda (`lambda`)
 

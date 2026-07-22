@@ -28,10 +28,12 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 		return result, err
 	}
 
-	// Get clusters
+	// Get clusters. A cluster-listing failure fails the region: aggregates
+	// computed over instances alone would silently overstate posture (for
+	// example a retention minimum that ignores the clusters).
 	clusters, err := client.ListDBClusters(ctx, region)
 	if err != nil {
-		clusters = nil
+		return result, err
 	}
 
 	result.instanceCount = len(instances)

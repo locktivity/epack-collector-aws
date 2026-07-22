@@ -8,12 +8,24 @@ import (
 	"github.com/locktivity/epack/componentsdk"
 )
 
+// s3Client is the slice of the AWS client used by collectS3Metrics, extracted
+// so the failure paths can be tested without AWS.
+type s3Client interface {
+	GetAccountPublicAccessBlock(ctx context.Context, accountID string) (aws.PublicAccessBlockSettings, error)
+	ListBuckets(ctx context.Context) ([]aws.Bucket, error)
+	s3BucketEnricher
+}
+
 // collectS3Metrics collects S3 security metrics.
 //
 // At trust, only aggregate percentages and the account-level PAB flag are
 // populated. At audit, per-bucket rows are also surfaced from the same
 // ListBuckets iteration (no extra API calls).
-func (c *Collector) collectS3Metrics(ctx context.Context, client *aws.AWSClient, accountID string, level componentsdk.Level) (*S3Metrics, error) {
+//
+// Failures never abort the surface: the evaluated flags on S3Metrics record
+// which sources succeeded so a consumer never mistakes an uncollected
+// aggregate for a genuine zero.
+func (c *Collector) collectS3Metrics(ctx context.Context, client s3Client, accountID string, level componentsdk.Level) *S3Metrics {
 	metrics := &S3Metrics{}
 
 	// Get account-level public access block
@@ -22,13 +34,17 @@ func (c *Collector) collectS3Metrics(ctx context.Context, client *aws.AWSClient,
 		c.warn("account %s: failed to collect account-level S3 public access block: %v", accountID, err)
 	} else {
 		metrics.AccountPublicAccessBlockEnabled = accountPublicAccessBlock.BlocksPublicAccess()
+		metrics.AccountPublicAccessBlockEvaluated = true
 	}
 
 	// List buckets and get their settings
 	buckets, err := client.ListBuckets(ctx)
 	if err != nil {
-		return metrics, fmt.Errorf("listing buckets: %w", err)
+		metrics.BucketListingErrorCode = apiErrorCode(err)
+		c.warn("account %s: failed to collect S3 metrics: %v", accountID, err)
+		return metrics
 	}
+	metrics.BucketListingEvaluated = true
 
 	publicAccessUnknownCount := applyEffectivePublicAccessBlock(buckets, accountPublicAccessBlock)
 	metrics.PublicAccessBlockUnknownCount = publicAccessUnknownCount
@@ -64,7 +80,7 @@ func (c *Collector) collectS3Metrics(ctx context.Context, client *aws.AWSClient,
 		}
 	}
 
-	return metrics, nil
+	return metrics
 }
 
 func applyEffectivePublicAccessBlock(buckets []aws.Bucket, accountPublicAccessBlock aws.PublicAccessBlockSettings) int {

@@ -91,6 +91,13 @@ const (
 	// Sort key is last_modified_date DESC so recently-touched parameters
 	// (the most posture-interesting) survive truncation.
 	SSMParametersCap = 10000
+
+	// IdentityCenterAssignmentsCap is the maximum number of account assignment
+	// edges surfaced in the audit inventory. Assignments scale with permission
+	// sets times provisioned accounts times principals; the cap keeps
+	// pathological orgs bounded. Sort key is (account_id, permission_set_arn,
+	// principal_id) ASC for stable truncation.
+	IdentityCenterAssignmentsCap = 10000
 )
 
 // SSM parameter type constants.

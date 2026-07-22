@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/aws/smithy-go"
 	"github.com/locktivity/epack-collector-aws/internal/aws"
+	"github.com/locktivity/epack/componentsdk"
 )
 
 type fakeMFADeviceLister struct {
@@ -453,25 +455,49 @@ func TestProcessCredentialReportNoUsers(t *testing.T) {
 	}
 }
 
-func TestHasExternalTrust(t *testing.T) {
+func TestAnalyzeTrustPolicy(t *testing.T) {
 	current := "203984714075"
 
 	sameAccountPolicy := `{"Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::203984714075:root"}}]}`
-	encodedSame := url.QueryEscape(sameAccountPolicy)
-	if hasExternalTrust(encodedSame, current) {
-		t.Fatalf("expected same-account trust to be non-external")
+	got := analyzeTrustPolicy(url.QueryEscape(sameAccountPolicy), current)
+	if got.hasExternalTrust || len(got.externalAccountIDs) != 0 {
+		t.Fatalf("expected same-account trust to be non-external, got %+v", got)
+	}
+	if got.decodedPolicy != sameAccountPolicy {
+		t.Fatalf("expected decoded policy to round-trip, got %q", got.decodedPolicy)
 	}
 
-	externalPolicy := `{"Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::111111111111:root"}}]}`
-	encodedExternal := url.QueryEscape(externalPolicy)
-	if !hasExternalTrust(encodedExternal, current) {
+	externalPolicy := `{"Statement":[{"Effect":"Allow","Principal":{"AWS":["arn:aws:iam::111111111111:root","222222222222","arn:aws:iam::111111111111:role/other"]}}]}`
+	got = analyzeTrustPolicy(url.QueryEscape(externalPolicy), current)
+	if !got.hasExternalTrust {
 		t.Fatalf("expected external-account trust to be detected")
+	}
+	if len(got.externalAccountIDs) != 2 || got.externalAccountIDs[0] != "111111111111" || got.externalAccountIDs[1] != "222222222222" {
+		t.Fatalf("expected sorted deduped external accounts [111111111111 222222222222], got %v", got.externalAccountIDs)
+	}
+	if got.hasWildcardPrincipal {
+		t.Fatalf("expected no wildcard principal")
 	}
 
 	wildcardPolicy := `{"Statement":[{"Effect":"Allow","Principal":"*"}]}`
-	encodedWildcard := url.QueryEscape(wildcardPolicy)
-	if !hasExternalTrust(encodedWildcard, current) {
-		t.Fatalf("expected wildcard trust to be detected as external")
+	got = analyzeTrustPolicy(url.QueryEscape(wildcardPolicy), current)
+	if !got.hasExternalTrust || !got.hasWildcardPrincipal {
+		t.Fatalf("expected wildcard trust to be external with the wildcard flag, got %+v", got)
+	}
+	if len(got.externalAccountIDs) != 0 {
+		t.Fatalf("wildcard is not account-scoped; got %v", got.externalAccountIDs)
+	}
+
+	servicePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"}}]}`
+	got = analyzeTrustPolicy(url.QueryEscape(servicePolicy), current)
+	if got.hasExternalTrust {
+		t.Fatalf("service principals must not count as external, got %+v", got)
+	}
+
+	denyPolicy := `{"Statement":[{"Effect":"Deny","Principal":{"AWS":"arn:aws:iam::111111111111:root"}}]}`
+	got = analyzeTrustPolicy(url.QueryEscape(denyPolicy), current)
+	if got.hasExternalTrust {
+		t.Fatalf("deny statements must not count as external trust, got %+v", got)
 	}
 }
 
@@ -497,17 +523,19 @@ func TestExtractPrincipals(t *testing.T) {
 	}
 }
 
-func TestHasExternalPrincipal(t *testing.T) {
-	current := "203984714075"
-
-	if hasExternalPrincipal("arn:aws:iam::203984714075:root", current) {
-		t.Fatalf("expected same-account principal to be non-external")
+func TestIsBareAccountID(t *testing.T) {
+	cases := map[string]bool{
+		"203984714075":      true,
+		"20398471407":       false,
+		"2039847140755":     false,
+		"20398471407a":      false,
+		"ec2.amazonaws.com": false,
+		"*":                 false,
 	}
-	if !hasExternalPrincipal("arn:aws:iam::111111111111:root", current) {
-		t.Fatalf("expected external principal to be detected")
-	}
-	if !hasExternalPrincipal("*", current) {
-		t.Fatalf("expected wildcard principal to be treated as external")
+	for in, want := range cases {
+		if got := isBareAccountID(in); got != want {
+			t.Errorf("isBareAccountID(%q) = %v, want %v", in, got, want)
+		}
 	}
 }
 
@@ -580,7 +608,7 @@ func TestCollectIAMRoles_PopulatesRolesWithTrustFlag(t *testing.T) {
 	}}
 
 	c := &Collector{}
-	roles := c.collectIAMRoles(context.Background(), client, accountID)
+	roles := c.collectIAMRoles(context.Background(), client, accountID, componentsdk.LevelAudit, nil)
 
 	if len(roles) != 2 {
 		t.Fatalf("expected 2 roles, got %d", len(roles))
@@ -601,7 +629,7 @@ func TestCollectIAMRoles_AccessDeniedEmitsDiagnostic(t *testing.T) {
 	client := fakeRoleLister{err: errors.New("operation error IAM: ListRoles, https response error: AccessDenied: User is not authorized")}
 
 	c := &Collector{}
-	roles := c.collectIAMRoles(context.Background(), client, accountID)
+	roles := c.collectIAMRoles(context.Background(), client, accountID, componentsdk.LevelAudit, nil)
 
 	if roles != nil {
 		t.Errorf("expected nil roles on AccessDenied, got %v", roles)
@@ -619,7 +647,7 @@ func TestCollectIAMRoles_OtherErrorEmitsGenericWarning(t *testing.T) {
 	client := fakeRoleLister{err: errors.New("connection refused")}
 
 	c := &Collector{}
-	roles := c.collectIAMRoles(context.Background(), client, accountID)
+	roles := c.collectIAMRoles(context.Background(), client, accountID, componentsdk.LevelAudit, nil)
 
 	if roles != nil {
 		t.Errorf("expected nil roles on error, got %v", roles)
@@ -714,5 +742,266 @@ func TestCredentialReportToInternal_PreservesRootRow(t *testing.T) {
 	}
 	if out.Users[0].UserName != "<root_account>" {
 		t.Errorf("root account should be first (preserves credential-report ordering), got %q", out.Users[0].UserName)
+	}
+}
+
+type fakeIAMClient struct {
+	report         *aws.CredentialReport
+	reportErr      error
+	summary        *aws.AccountSummary
+	summaryErr     error
+	features       *aws.OrganizationFeatures
+	featuresErr    error
+	rolesErr       error
+	orgAccountIDs  []string
+	orgAccountsErr error
+}
+
+func (f fakeIAMClient) GetCredentialReport(_ context.Context) (*aws.CredentialReport, error) {
+	return f.report, f.reportErr
+}
+
+func (f fakeIAMClient) GetAccountSummary(_ context.Context) (*aws.AccountSummary, error) {
+	return f.summary, f.summaryErr
+}
+
+func (f fakeIAMClient) ListOrganizationsFeatures(_ context.Context) (*aws.OrganizationFeatures, error) {
+	return f.features, f.featuresErr
+}
+
+func (f fakeIAMClient) ListOrganizationAccountIDs(_ context.Context) ([]string, error) {
+	return f.orgAccountIDs, f.orgAccountsErr
+}
+
+func (f fakeIAMClient) ListMFADevices(_ context.Context, _ string) ([]aws.MFADevice, error) {
+	return nil, nil
+}
+
+func (f fakeIAMClient) ListRoles(_ context.Context, _ func([]aws.Role) error) error {
+	return f.rolesErr
+}
+
+func TestCollectIAMMetrics_CredentialReportTimeout(t *testing.T) {
+	c := &Collector{}
+	client := fakeIAMClient{
+		reportErr: fmt.Errorf("getting credential report: %w", aws.ErrCredentialReportTimeout),
+		summary: &aws.AccountSummary{
+			AccountMFAEnabled:      true,
+			AccountPasswordPresent: true,
+		},
+		features: &aws.OrganizationFeatures{OrganizationID: "o-abcdefghij"},
+	}
+
+	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", componentsdk.LevelTrust)
+
+	if metrics.CredentialReportEvaluated {
+		t.Error("CredentialReportEvaluated = true, want false")
+	}
+	if metrics.CredentialReportErrorCode != "CredentialReportTimeout" {
+		t.Errorf("CredentialReportErrorCode = %q, want CredentialReportTimeout", metrics.CredentialReportErrorCode)
+	}
+	if metrics.MFAEnabled != 0 || metrics.AccessKeysRotated != 0 || metrics.IAMUsersPresent {
+		t.Errorf("report-derived aggregates should stay zero-valued (labeled unevaluated), got MFAEnabled=%d AccessKeysRotated=%d IAMUsersPresent=%v",
+			metrics.MFAEnabled, metrics.AccessKeysRotated, metrics.IAMUsersPresent)
+	}
+	if !metrics.RootCredentialStateEvaluated {
+		t.Error("RootCredentialStateEvaluated = false, want true (account summary succeeded)")
+	}
+	if !metrics.RootMFAEnabled || !metrics.RootAccessProtected {
+		t.Errorf("root state from summary not applied: RootMFAEnabled=%v RootAccessProtected=%v",
+			metrics.RootMFAEnabled, metrics.RootAccessProtected)
+	}
+	if len(c.warnings) == 0 || !strings.Contains(c.warnings[0], "credential report") {
+		t.Errorf("expected credential report warning, got %v", c.warnings)
+	}
+}
+
+func TestCollectIAMMetrics_AllRootSourcesFail(t *testing.T) {
+	c := &Collector{}
+	client := fakeIAMClient{
+		reportErr:  aws.ErrCredentialReportTimeout,
+		summaryErr: errors.New("throttled"),
+		features:   &aws.OrganizationFeatures{},
+	}
+
+	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", componentsdk.LevelTrust)
+
+	if metrics.RootCredentialStateEvaluated {
+		t.Error("RootCredentialStateEvaluated = true, want false (no source succeeded)")
+	}
+	if metrics.RootAccessProtected {
+		t.Error("RootAccessProtected = true, want false zero value")
+	}
+}
+
+func TestCollectIAMMetrics_ReportFailureAtAudit(t *testing.T) {
+	c := &Collector{}
+	client := fakeIAMClient{
+		reportErr: aws.ErrCredentialReportTimeout,
+		summary:   &aws.AccountSummary{AccountMFAEnabled: true},
+		features:  &aws.OrganizationFeatures{},
+	}
+
+	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", componentsdk.LevelAudit)
+
+	if metrics.Users != nil {
+		t.Errorf("Users = %v, want nil when the credential report was not collected", metrics.Users)
+	}
+	if metrics.Roles == nil {
+		t.Error("Roles = nil, want role inventory collected independently of the report")
+	}
+}
+
+func TestCollectIAMMetrics_Success(t *testing.T) {
+	c := &Collector{}
+	client := fakeIAMClient{
+		report: &aws.CredentialReport{
+			Users: []aws.CredentialReportUser{
+				{User: "<root_account>", MFAActive: true},
+				{User: "alice", MFAActive: true},
+			},
+		},
+		features: &aws.OrganizationFeatures{},
+	}
+
+	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", componentsdk.LevelTrust)
+
+	if !metrics.CredentialReportEvaluated {
+		t.Error("CredentialReportEvaluated = false, want true")
+	}
+	if metrics.CredentialReportErrorCode != "" {
+		t.Errorf("CredentialReportErrorCode = %q, want empty", metrics.CredentialReportErrorCode)
+	}
+	if !metrics.RootCredentialStateEvaluated {
+		t.Error("RootCredentialStateEvaluated = false, want true")
+	}
+	if metrics.MFAEnabled != 100 {
+		t.Errorf("MFAEnabled = %d, want 100", metrics.MFAEnabled)
+	}
+}
+
+func TestCollectIAMRoles_InOrgDetermination(t *testing.T) {
+	current := "203984714075"
+	external := `{"Statement":[{"Effect":"Allow","Principal":{"AWS":["arn:aws:iam::111111111111:root","arn:aws:iam::333333333333:root"]}}]}`
+	internalOnly := `{"Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::111111111111:root"}}]}`
+	client := fakeRoleLister{roles: []aws.Role{
+		{RoleName: "mixed", ARN: "arn:aws:iam::203984714075:role/mixed", AssumeRolePolicyDocument: url.QueryEscape(external)},
+		{RoleName: "in-org", ARN: "arn:aws:iam::203984714075:role/in-org", AssumeRolePolicyDocument: url.QueryEscape(internalOnly)},
+		{RoleName: "local", ARN: "arn:aws:iam::203984714075:role/local"},
+	}}
+	orgAccounts := &organizationAccounts{evaluated: true, ids: map[string]struct{}{
+		"203984714075": {}, "111111111111": {},
+	}}
+
+	c := &Collector{}
+	roles := c.collectIAMRoles(context.Background(), client, current, componentsdk.LevelAudit, orgAccounts)
+
+	if len(roles) != 3 {
+		t.Fatalf("expected 3 roles, got %d", len(roles))
+	}
+	mixed := roles[0]
+	if mixed.ExternalTrustInOrg == nil || *mixed.ExternalTrustInOrg {
+		t.Errorf("mixed: expected in_org false (333333333333 outside org), got %v", mixed.ExternalTrustInOrg)
+	}
+	if len(mixed.ExternalTrustAccountIDs) != 2 {
+		t.Errorf("mixed: expected 2 external accounts, got %v", mixed.ExternalTrustAccountIDs)
+	}
+	inOrg := roles[1]
+	if inOrg.ExternalTrustInOrg == nil || !*inOrg.ExternalTrustInOrg {
+		t.Errorf("in-org: expected in_org true, got %v", inOrg.ExternalTrustInOrg)
+	}
+	local := roles[2]
+	if local.ExternalTrustInOrg != nil {
+		t.Errorf("local: expected absent in_org with no external accounts, got %v", *local.ExternalTrustInOrg)
+	}
+	if local.HasExternalTrust {
+		t.Error("local: expected no external trust")
+	}
+	if mixed.TrustPolicyJSON != "" {
+		t.Errorf("audit level must not carry the trust policy document, got %q", mixed.TrustPolicyJSON)
+	}
+}
+
+func TestCollectIAMRoles_UnknownWithoutOrgVisibility(t *testing.T) {
+	current := "203984714075"
+	external := `{"Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::111111111111:root"}}]}`
+	client := fakeRoleLister{roles: []aws.Role{
+		{RoleName: "xacct", ARN: "arn:aws:iam::203984714075:role/xacct", AssumeRolePolicyDocument: url.QueryEscape(external)},
+	}}
+
+	c := &Collector{}
+	roles := c.collectIAMRoles(context.Background(), client, current, componentsdk.LevelAudit, &organizationAccounts{})
+
+	if roles[0].ExternalTrustInOrg != nil {
+		t.Errorf("expected absent in_org without org visibility, got %v", *roles[0].ExternalTrustInOrg)
+	}
+	if !roles[0].HasExternalTrust {
+		t.Error("expected external trust flag regardless of org visibility")
+	}
+}
+
+func TestCollectIAMRoles_TrustPolicyAtInternal(t *testing.T) {
+	current := "203984714075"
+	policy := `{"Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::111111111111:root"}}]}`
+	client := fakeRoleLister{roles: []aws.Role{
+		{RoleName: "xacct", ARN: "arn:aws:iam::203984714075:role/xacct", AssumeRolePolicyDocument: url.QueryEscape(policy)},
+	}}
+
+	c := &Collector{}
+	roles := c.collectIAMRoles(context.Background(), client, current, componentsdk.LevelInternal, nil)
+
+	if roles[0].TrustPolicyJSON != policy {
+		t.Errorf("internal level must carry the decoded trust policy, got %q", roles[0].TrustPolicyJSON)
+	}
+}
+
+func TestCollectOrganizationAccounts_MemberAccountDeniedIsQuiet(t *testing.T) {
+	c := &Collector{}
+	metrics := &IAMMetrics{}
+	client := fakeIAMClient{orgAccountsErr: errors.New("AccessDeniedException: not authorized")}
+
+	orgAccounts := c.collectOrganizationAccounts(context.Background(), client, "203984714075", metrics)
+
+	if metrics.OrganizationAccountsEvaluated {
+		t.Error("expected OrganizationAccountsEvaluated false on denial")
+	}
+	if metrics.OrganizationAccountsErrorCode == "" {
+		t.Error("expected OrganizationAccountsErrorCode recorded")
+	}
+	if len(c.warnings) != 0 {
+		t.Errorf("member-account denial must not warn, got %v", c.warnings)
+	}
+	if got := orgAccounts.membership([]string{"111111111111"}); got != nil {
+		t.Errorf("expected nil membership without evaluation, got %v", *got)
+	}
+}
+
+func TestCollectOrganizationAccounts_UnexpectedErrorWarns(t *testing.T) {
+	c := &Collector{}
+	metrics := &IAMMetrics{}
+	client := fakeIAMClient{orgAccountsErr: errors.New("Throttling: rate exceeded")}
+
+	c.collectOrganizationAccounts(context.Background(), client, "203984714075", metrics)
+
+	if len(c.warnings) != 1 {
+		t.Errorf("expected 1 warning for unexpected error, got %v", c.warnings)
+	}
+}
+
+func TestCollectOrganizationAccounts_Success(t *testing.T) {
+	c := &Collector{}
+	metrics := &IAMMetrics{}
+	client := fakeIAMClient{orgAccountIDs: []string{"203984714075", "111111111111"}}
+
+	orgAccounts := c.collectOrganizationAccounts(context.Background(), client, "203984714075", metrics)
+
+	if !metrics.OrganizationAccountsEvaluated {
+		t.Error("expected OrganizationAccountsEvaluated true")
+	}
+	if got := orgAccounts.membership([]string{"111111111111"}); got == nil || !*got {
+		t.Errorf("expected in-org true, got %v", got)
+	}
+	if got := orgAccounts.membership([]string{"999999999999"}); got == nil || *got {
+		t.Errorf("expected in-org false for unknown account, got %v", got)
 	}
 }

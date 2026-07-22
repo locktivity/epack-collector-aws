@@ -4,6 +4,7 @@ package collector
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 	"github.com/locktivity/epack/componentsdk"
@@ -80,6 +81,11 @@ func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Out
 		if err != nil {
 			errMsg := formatAccountError(acct, err)
 			accountErrors = append(accountErrors, errMsg)
+			output.FailedAccounts = append(output.FailedAccounts, FailedAccountRecord{
+				AccountID: accountIDFromRoleARN(acct.RoleARN),
+				RoleARN:   acct.RoleARN,
+				ErrorCode: apiErrorCode(err),
+			})
 			c.status(errMsg)
 			continue
 		}
@@ -95,6 +101,12 @@ func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Out
 			AccountErrors: accountErrors,
 			Warnings:      allWarnings,
 		}
+	}
+
+	// Partial failure emits stubs and succeeds; total failure must not exit 0
+	// with an empty artifact (COL-034: exit 0 only when collection succeeds).
+	if len(output.Accounts) == 0 && len(accountErrors) > 0 {
+		return nil, fmt.Errorf("all %d configured accounts failed: %s", len(accounts), strings.Join(accountErrors, "; "))
 	}
 
 	c.status("Collection complete")
@@ -206,19 +218,11 @@ func (c *Collector) getRegions(ctx context.Context, client *aws.AWSClient) ([]st
 func (c *Collector) collectGlobalMetrics(ctx context.Context, client *aws.AWSClient, accountID string, posture *AccountPosture, level componentsdk.Level) {
 	// IAM metrics (global)
 	c.status("Collecting IAM metrics...")
-	if iamMetrics, err := c.collectIAMMetrics(ctx, client, accountID, level); err == nil {
-		posture.IAM = *iamMetrics
-	} else {
-		c.warn("account %s: failed to collect IAM metrics: %v", accountID, err)
-	}
+	posture.IAM = *c.collectIAMMetrics(ctx, client, accountID, level)
 
 	// S3 metrics (global bucket list)
 	c.status("Collecting S3 metrics...")
-	if s3Metrics, err := c.collectS3Metrics(ctx, client, accountID, level); err == nil {
-		posture.S3 = *s3Metrics
-	} else {
-		c.warn("account %s: failed to collect S3 metrics: %v", accountID, err)
-	}
+	posture.S3 = *c.collectS3Metrics(ctx, client, accountID, level)
 }
 
 // collectRegionalMetrics collects RDS, network, Lambda, EC2, CloudWatch Logs,
@@ -235,19 +239,25 @@ func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSC
 	var secretsMetrics SecretsManagerMetrics
 	var ssmMetrics SSMParametersMetrics
 
+	var rdsRegionsFailed, networkRegionsFailed []string
+
 	total := int64(len(regions))
 	for i, region := range regions {
 		c.progress(int64(i+1), total, fmt.Sprintf("Scanning region %s", region))
 
 		if rds, err := c.collectRDSMetrics(ctx, client, region, level); err == nil {
 			rdsMetrics = mergeRDSMetrics(rdsMetrics, *rds)
+			rdsMetrics.RegionsEvaluatedCount++
 		} else {
+			rdsRegionsFailed = append(rdsRegionsFailed, region)
 			c.warn("account %s region %s: failed to collect RDS metrics: %v", accountID, region, err)
 		}
 
 		if network, err := c.collectNetworkMetrics(ctx, client, region, accountID, level); err == nil {
 			networkMetrics = mergeNetworkMetrics(networkMetrics, *network)
+			networkMetrics.RegionsEvaluatedCount++
 		} else {
+			networkRegionsFailed = append(networkRegionsFailed, region)
 			c.warn("account %s region %s: failed to collect network metrics: %v", accountID, region, err)
 		}
 
@@ -287,6 +297,10 @@ func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSC
 			c.warn("account %s region %s: failed to collect SSM parameters: %v", accountID, region, err)
 		}
 	}
+
+	rdsMetrics.RegionsFailed = rdsRegionsFailed
+	rdsMetrics.DatabaseCount = rdsMetrics.instanceCount + rdsMetrics.clusterCount
+	networkMetrics.RegionsFailed = networkRegionsFailed
 
 	if len(lambdaMetrics.Functions) > 0 {
 		kept, dropped, truncated := Truncate(lambdaMetrics.Functions, LambdaFunctionsCap, func(a, b LambdaFunctionRow) bool {
@@ -372,10 +386,7 @@ func (c *Collector) collectSecurityServices(ctx context.Context, client *aws.AWS
 	}
 
 	// collectAccountSecurity handles per-service warnings internally
-	acctSec, _ := c.collectAccountSecurity(ctx, client, primaryRegion, regions, posture.AccountID, level)
-	if acctSec != nil {
-		posture.AccountSecurity = *acctSec
-	}
+	posture.AccountSecurity = *c.collectAccountSecurity(ctx, client, primaryRegion, regions, posture.AccountID, level)
 
 	c.status("Checking IAM Identity Center...")
 	posture.IdentityCenter = c.collectIdentityCenter(ctx, client, primaryRegion, posture.AccountID, level)
@@ -443,6 +454,26 @@ func (c *Collector) initializeAuth(accounts []AccountConfig) (authMode string, w
 	}
 
 	return authMode, warnings, nil
+}
+
+// accountIDFromRoleARN extracts the 12-digit account ID from a configured
+// role ARN (arn:aws:iam::123456789012:role/name). Returns "" when the ARN is
+// absent or malformed, e.g. an account collected with default credentials.
+func accountIDFromRoleARN(roleARN string) string {
+	parts := strings.Split(roleARN, ":")
+	if len(parts) < 5 {
+		return ""
+	}
+	id := parts[4]
+	if len(id) != 12 {
+		return ""
+	}
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return id
 }
 
 // formatAccountError creates a diagnostic error message for a failed account collection.

@@ -39,11 +39,23 @@ type AccountConfig struct {
 
 // Output represents the complete collector output.
 type Output struct {
-	SchemaVersion    string           `json:"schema_version"`
-	CollectedAt      string           `json:"collected_at"`
-	CollectedAtLevel string           `json:"collected_at_level"`
-	Accounts         []AccountPosture `json:"accounts"`
-	Diagnostics      *Diagnostics     `json:"diagnostics,omitempty"`
+	SchemaVersion    string                `json:"schema_version"`
+	CollectedAt      string                `json:"collected_at"`
+	CollectedAtLevel string                `json:"collected_at_level"`
+	Accounts         []AccountPosture      `json:"accounts"`
+	FailedAccounts   []FailedAccountRecord `json:"failed_accounts,omitempty"`
+	Diagnostics      *Diagnostics          `json:"diagnostics,omitempty"`
+}
+
+// FailedAccountRecord is a configured account whose collection failed
+// entirely, so no AccountPosture exists for it. AccountID is parsed from the
+// configured role ARN when derivable; ErrorCode is the upstream error code.
+// Consumers use these to distinguish "N healthy accounts" from "N of M
+// answered".
+type FailedAccountRecord struct {
+	AccountID string `json:"account_id,omitempty"`
+	RoleARN   string `json:"role_arn,omitempty"`
+	ErrorCode string `json:"error_code"`
 }
 
 // Diagnostics contains warnings and errors encountered during collection.
@@ -79,11 +91,23 @@ type AccountPosture struct {
 // report and role-list calls. Internal-level fields add per-user temporal data
 // (last login, key last used) drawn from the same credential report.
 type IAMMetrics struct {
-	// Trust:
+	// Trust: the user aggregates below are derived from the IAM credential
+	// report and are meaningful only when credential_report_evaluated is true.
+	// On collection failure they hold zero values (which would otherwise read
+	// as worst-case posture) and credential_report_error_code carries the cause.
+	CredentialReportEvaluated bool   `json:"credential_report_evaluated"`
+	CredentialReportErrorCode string `json:"credential_report_error_code,omitempty"`
+
 	IAMUsersPresent    bool `json:"iam_users_present"`
 	MFAEnabled         int  `json:"mfa_enabled"`
 	HardwareMFAEnabled int  `json:"hardware_mfa_enabled"`
 	AccessKeysRotated  int  `json:"access_keys_rotated"`
+
+	// Root credential state comes from the credential report's root row or the
+	// account summary; the Root* fields below are meaningful only when
+	// root_credential_state_evaluated is true (i.e., at least one source
+	// succeeded).
+	RootCredentialStateEvaluated bool `json:"root_credential_state_evaluated"`
 
 	RootMFAEnabled                 bool `json:"root_mfa_enabled"`
 	RootCredentialsPresent         bool `json:"root_credentials_present"`
@@ -97,6 +121,13 @@ type IAMMetrics struct {
 	RootCredentialsManagementFeatureEnabled bool   `json:"root_credentials_management_feature_enabled"`
 	RootSessionsFeatureEnabled              bool   `json:"root_sessions_feature_enabled"`
 	RootOrganizationsFeaturesErrorCode      string `json:"root_organizations_features_error_code,omitempty"`
+
+	// Audit: the per-role external_trust_in_org determinations are meaningful
+	// only when organization_accounts_evaluated is true. Expected failures
+	// (member accounts without Organizations visibility) record the error code
+	// without a warning.
+	OrganizationAccountsEvaluated bool   `json:"organization_accounts_evaluated"`
+	OrganizationAccountsErrorCode string `json:"organization_accounts_error_code,omitempty"`
 
 	// Audit: present (possibly []) when collected at audit+; null when not collected.
 	Users []IAMUser `json:"users"`
@@ -150,12 +181,26 @@ type IAMUser struct {
 }
 
 // IAMRole is a per-role audit-level inventory row.
-// HasExternalTrust indicates the role's trust policy permits principals outside
-// the current account (cross-account or wildcard principals).
+//
+// HasExternalTrust indicates the role's trust policy permits principals
+// outside the current account (cross-account or wildcard principals).
+// ExternalTrustAccountIDs lists the foreign account IDs found as principals;
+// HasWildcardPrincipal separately flags a wildcard principal, which is not
+// account-scoped. ExternalTrustInOrg is a three-state determination: true
+// when every foreign account is a member of the same AWS Organization, false
+// when at least one is not, absent when membership could not be determined
+// (no Organizations visibility, or the external trust is wildcard-only).
+// TrustPolicyJSON carries the decoded trust policy document at internal only.
 type IAMRole struct {
-	RoleName         string `json:"role_name"`
-	ARN              string `json:"arn"`
-	HasExternalTrust bool   `json:"has_external_trust"`
+	RoleName                string   `json:"role_name"`
+	ARN                     string   `json:"arn"`
+	HasExternalTrust        bool     `json:"has_external_trust"`
+	HasWildcardPrincipal    bool     `json:"has_wildcard_principal"`
+	ExternalTrustAccountIDs []string `json:"external_trust_account_ids,omitempty"`
+	ExternalTrustInOrg      *bool    `json:"external_trust_in_org,omitempty"`
+
+	// Internal:
+	TrustPolicyJSON string `json:"trust_policy_json,omitempty"`
 }
 
 // S3Metrics contains S3 security posture.
@@ -165,7 +210,17 @@ type IAMRole struct {
 // rows the percentages were computed from (no extra API calls; the collector
 // already iterates buckets to derive the aggregates).
 type S3Metrics struct {
-	// Trust:
+	// Trust: the bucket aggregates below are derived from the bucket listing
+	// and are meaningful only when bucket_listing_evaluated is true. On listing
+	// failure they hold zero values (which would otherwise read as worst-case
+	// posture) and bucket_listing_error_code carries the cause.
+	BucketListingEvaluated bool   `json:"bucket_listing_evaluated"`
+	BucketListingErrorCode string `json:"bucket_listing_error_code,omitempty"`
+
+	// AccountPublicAccessBlockEnabled is meaningful only when
+	// account_public_access_block_evaluated is true.
+	AccountPublicAccessBlockEvaluated bool `json:"account_public_access_block_evaluated"`
+
 	BucketCount                     int  `json:"bucket_count"`
 	PublicAccessBlocked             int  `json:"public_access_blocked"`
 	PublicAccessBlockUnknownCount   int  `json:"public_access_block_unknown_count"`
@@ -247,7 +302,14 @@ type S3LifecycleRule struct {
 // Trust-level fields are aggregates across regions. Audit-level Instances /
 // Clusters surface the per-resource rows the percentages were computed from.
 type RDSMetrics struct {
-	// Trust:
+	// Trust: the aggregates cover only regions that evaluated successfully.
+	// They are meaningful only when regions_failed is empty. DatabaseCount is
+	// the instance + cluster total, so a consumer can tell vacuous aggregates
+	// (zero databases) from real ones.
+	RegionsEvaluatedCount int      `json:"regions_evaluated_count"`
+	RegionsFailed         []string `json:"regions_failed,omitempty"`
+	DatabaseCount         int      `json:"database_count"`
+
 	EncryptedAtRest         int `json:"encrypted_at_rest"`
 	PubliclyAccessible      int `json:"publicly_accessible"`
 	DeletionProtection      int `json:"deletion_protection"`
@@ -302,7 +364,12 @@ type RDSCluster struct {
 // and SecurityGroups surface per-resource rows. Per-VPC flow log status and
 // per-SG ingress rule detail are internal-level only.
 type NetworkMetrics struct {
-	// Trust:
+	// Trust: the exposure aggregates cover only regions that evaluated
+	// successfully. They are meaningful only when regions_failed is empty,
+	// since partial coverage can only understate exposure.
+	RegionsEvaluatedCount int      `json:"regions_evaluated_count"`
+	RegionsFailed         []string `json:"regions_failed,omitempty"`
+
 	OpenToWorldSSH int `json:"open_to_world_ssh"`
 	OpenToWorldRDP int `json:"open_to_world_rdp"`
 
@@ -367,7 +434,13 @@ type AccountSecurity struct {
 // surfaces the per-trail rows the booleans were derived from; no extra API
 // calls are needed.
 type CloudTrailStatus struct {
-	// Trust:
+	// Trust: the summary booleans below are derived from the trail listing and
+	// are meaningful only when trail_listing_evaluated is true. On listing
+	// failure they hold zero values (which would otherwise read as worst-case
+	// posture) and trail_listing_error_code carries the cause.
+	TrailListingEvaluated bool   `json:"trail_listing_evaluated"`
+	TrailListingErrorCode string `json:"trail_listing_error_code,omitempty"`
+
 	Enabled                   bool `json:"enabled"`
 	MultiRegionEnabled        bool `json:"multi_region_enabled"`
 	OrganizationTrailEnabled  bool `json:"organization_trail_enabled"`
@@ -546,7 +619,13 @@ type CISComplianceByLevel struct {
 // distinguish "no findings" from "few unpatched resources out of many" without
 // re-deriving from the percentage.
 type InspectorStatus struct {
-	// Trust:
+	// Trust: Enabled and UnpatchedServerPercent are meaningful only when
+	// status_evaluated is true. On collection failure they hold zero values
+	// and status_error_code carries the cause. Evaluated true with Enabled
+	// false means Inspector was genuinely observed as not enabled.
+	StatusEvaluated bool   `json:"status_evaluated"`
+	StatusErrorCode string `json:"status_error_code,omitempty"`
+
 	Enabled                bool `json:"enabled"`
 	UnpatchedServerPercent int  `json:"unpatched_server_percent"`
 
@@ -562,9 +641,12 @@ type InspectorStatus struct {
 // posture.
 //
 // Trust fields tell you whether IdC is enabled and how big it is. Audit
-// surfaces per-permission-set rows (the unit of access an admin grants);
-// internal adds per-user and per-group inventory plus the managed-policy ARNs
-// attached to each permission set so a reviewer can answer "who can do what".
+// surfaces the access model itself: per-permission-set rows (the unit of
+// access an admin grants), the user and group inventory, group membership
+// edges, and the account assignment edges. Joining users, member_user_ids,
+// account_assignments, and permission_sets reconstructs who can access which
+// account with which permission set, entirely within the pack. Internal adds
+// the managed-policy ARNs attached to each permission set.
 type IdentityCenterStatus struct {
 	// Trust: resource-conditional sub-fields keep omitempty because their
 	// absence means "the IdC resource itself doesn't exist" (Enabled=false),
@@ -578,19 +660,25 @@ type IdentityCenterStatus struct {
 	PermissionSetCount int    `json:"permission_set_count,omitempty"`
 
 	// Audit: present (possibly []) when collected at audit+ and IdC is
-	// enabled; null when not collected.
-	PermissionSets []IdentityCenterPermissionSetRow `json:"permission_sets"`
-
-	// Internal: present (possibly []) when collected at internal and IdC is
-	// enabled; null when not collected.
-	Users  []IdentityCenterUserRow  `json:"users"`
-	Groups []IdentityCenterGroupRow `json:"groups"`
+	// enabled; null when not collected at this level. AccountAssignments rows
+	// are meaningful only when assignments_evaluated is true: on listing
+	// failure the array is empty, the marker is false, and a diagnostic names
+	// the cause. Truncation companions emit at the same level.
+	PermissionSets          []IdentityCenterPermissionSetRow `json:"permission_sets"`
+	Users                   []IdentityCenterUserRow          `json:"users"`
+	Groups                  []IdentityCenterGroupRow         `json:"groups"`
+	AccountAssignments      []IdentityCenterAssignmentRow    `json:"account_assignments"`
+	AssignmentsEvaluated    bool                             `json:"assignments_evaluated"`
+	AssignmentsTruncated    bool                             `json:"assignments_truncated"`
+	AssignmentsDroppedCount int                              `json:"assignments_dropped_count"`
 }
 
 // IdentityCenterPermissionSetRow is a per-permission-set audit-level row.
-// SessionDurationISO8601 is the raw "PT8H" style string AWS returns; ManagedPolicyARNs
-// is empty at audit and populated at internal. HasInlinePolicy is presence-only
-// (never the document) since inline policies may encode tenant-specific authz logic.
+// SessionDurationISO8601 is the raw "PT8H" style string AWS returns;
+// ProvisionedAccountIDs lists the accounts the set is provisioned to.
+// ManagedPolicyARNs is empty at audit and populated at internal.
+// HasInlinePolicy is presence-only (never the document) since inline policies
+// may encode tenant-specific authz logic.
 type IdentityCenterPermissionSetRow struct {
 	Name                   string   `json:"name"`
 	ARN                    string   `json:"arn"`
@@ -598,12 +686,14 @@ type IdentityCenterPermissionSetRow struct {
 	SessionDurationISO8601 string   `json:"session_duration_iso8601,omitempty"`
 	ManagedPoliciesCount   int      `json:"managed_policies_count"`
 	AccountsAssignedCount  int      `json:"accounts_assigned_count"`
+	ProvisionedAccountIDs  []string `json:"provisioned_account_ids"`
 	ManagedPolicyARNs      []string `json:"managed_policy_arns,omitempty"`
 	HasInlinePolicy        bool     `json:"has_inline_policy,omitempty"`
 }
 
-// IdentityCenterUserRow is a per-user internal-level row from the identity
+// IdentityCenterUserRow is a per-user audit-level row from the identity
 // store. PrimaryEmail is empty when no email is marked Primary on the user.
+// No PII beyond the primary email is collected at any level.
 type IdentityCenterUserRow struct {
 	UserID       string `json:"user_id"`
 	UserName     string `json:"user_name"`
@@ -611,13 +701,25 @@ type IdentityCenterUserRow struct {
 	PrimaryEmail string `json:"primary_email,omitempty"`
 }
 
-// IdentityCenterGroupRow is a per-group internal-level row. MemberCount is
-// the number of direct members (users + nested groups treated equally).
+// IdentityCenterGroupRow is a per-group audit-level row. MemberUserIDs holds
+// the direct user members (join against users[].user_id); MemberCount is its
+// length. Both are null when membership enrichment failed.
 type IdentityCenterGroupRow struct {
-	GroupID     string `json:"group_id"`
-	DisplayName string `json:"display_name"`
-	Description string `json:"description,omitempty"`
-	MemberCount int    `json:"member_count"`
+	GroupID       string   `json:"group_id"`
+	DisplayName   string   `json:"display_name"`
+	Description   string   `json:"description,omitempty"`
+	MemberCount   int      `json:"member_count"`
+	MemberUserIDs []string `json:"member_user_ids"`
+}
+
+// IdentityCenterAssignmentRow is one principal-to-permission-set-to-account
+// edge at audit level. PrincipalType is USER or GROUP; GROUP edges resolve to
+// users via groups[].member_user_ids.
+type IdentityCenterAssignmentRow struct {
+	AccountID        string `json:"account_id"`
+	PermissionSetARN string `json:"permission_set_arn"`
+	PrincipalType    string `json:"principal_type"`
+	PrincipalID      string `json:"principal_id"`
 }
 
 // LambdaMetrics contains Lambda posture across all collected regions.

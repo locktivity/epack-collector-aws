@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/identitystore"
+	idstoretypes "github.com/aws/aws-sdk-go-v2/service/identitystore/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssoadmin"
 )
 
@@ -57,11 +58,12 @@ func (c *AWSClient) ListIdentityCenterPermissionSets(ctx context.Context, region
 		if err != nil {
 			return nil, err
 		}
-		assigned, err := countAccountsForPermissionSet(ctx, client, instanceARN, arn)
+		accountIDs, err := listAccountsForPermissionSet(ctx, client, instanceARN, arn)
 		if err != nil {
 			return nil, err
 		}
-		ps.AccountsAssignedCount = assigned
+		ps.AccountsAssignedCount = len(accountIDs)
+		ps.ProvisionedAccountIDs = accountIDs
 
 		mp, err := listManagedPoliciesForPermissionSet(ctx, client, instanceARN, arn)
 		if err != nil {
@@ -120,8 +122,8 @@ func describePermissionSetForAudit(ctx context.Context, client *ssoadmin.Client,
 	}, nil
 }
 
-func countAccountsForPermissionSet(ctx context.Context, client *ssoadmin.Client, instanceARN, psARN string) (int, error) {
-	var count int
+func listAccountsForPermissionSet(ctx context.Context, client *ssoadmin.Client, instanceARN, psARN string) ([]string, error) {
+	accountIDs := []string{}
 	var nextToken *string
 	for {
 		resp, err := client.ListAccountsForProvisionedPermissionSet(ctx, &ssoadmin.ListAccountsForProvisionedPermissionSetInput{
@@ -130,11 +132,46 @@ func countAccountsForPermissionSet(ctx context.Context, client *ssoadmin.Client,
 			NextToken:        nextToken,
 		})
 		if err != nil {
-			return 0, fmt.Errorf("listing accounts for permission set %s: %w", psARN, err)
+			return nil, fmt.Errorf("listing accounts for permission set %s: %w", psARN, err)
 		}
-		count += len(resp.AccountIds)
+		accountIDs = append(accountIDs, resp.AccountIds...)
 		if resp.NextToken == nil || *resp.NextToken == "" {
-			return count, nil
+			return accountIDs, nil
+		}
+		nextToken = resp.NextToken
+	}
+}
+
+// ListIdentityCenterAccountAssignments returns the principal-to-permission-set
+// edges for one permission set in one account. Callers iterate a permission
+// set's provisioned accounts to build the full assignment inventory.
+func (c *AWSClient) ListIdentityCenterAccountAssignments(ctx context.Context, region, instanceARN, accountID, permissionSetARN string) ([]IdentityCenterAssignment, error) {
+	cfg := c.cfg.Copy()
+	cfg.Region = region
+	client := ssoadmin.NewFromConfig(cfg)
+
+	assignments := []IdentityCenterAssignment{}
+	var nextToken *string
+	for {
+		resp, err := client.ListAccountAssignments(ctx, &ssoadmin.ListAccountAssignmentsInput{
+			InstanceArn:      aws.String(instanceARN),
+			AccountId:        aws.String(accountID),
+			PermissionSetArn: aws.String(permissionSetARN),
+			NextToken:        nextToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("listing account assignments for permission set %s in account %s: %w", permissionSetARN, accountID, err)
+		}
+		for _, a := range resp.AccountAssignments {
+			assignments = append(assignments, IdentityCenterAssignment{
+				AccountID:        aws.ToString(a.AccountId),
+				PermissionSetARN: aws.ToString(a.PermissionSetArn),
+				PrincipalType:    string(a.PrincipalType),
+				PrincipalID:      aws.ToString(a.PrincipalId),
+			})
+		}
+		if resp.NextToken == nil || *resp.NextToken == "" {
+			return assignments, nil
 		}
 		nextToken = resp.NextToken
 	}
@@ -213,9 +250,9 @@ func (c *AWSClient) ListIdentityStoreUsers(ctx context.Context, region, identity
 }
 
 // ListIdentityStoreGroups returns all groups in the identity store. When
-// withMemberCounts is true, ListGroupMemberships is called per group to compute
-// MemberCount; otherwise MemberCount stays zero.
-func (c *AWSClient) ListIdentityStoreGroups(ctx context.Context, region, identityStoreID string, withMemberCounts bool) ([]IdentityStoreGroup, error) {
+// withMembers is true, ListGroupMemberships is called per group to populate
+// MemberUserIDs and MemberCount; otherwise both stay zero.
+func (c *AWSClient) ListIdentityStoreGroups(ctx context.Context, region, identityStoreID string, withMembers bool) ([]IdentityStoreGroup, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	client := identitystore.NewFromConfig(cfg)
@@ -243,22 +280,23 @@ func (c *AWSClient) ListIdentityStoreGroups(ctx context.Context, region, identit
 		nextToken = resp.NextToken
 	}
 
-	if !withMemberCounts {
+	if !withMembers {
 		return groups, nil
 	}
 
 	for i := range groups {
-		count, err := countGroupMembers(ctx, client, identityStoreID, groups[i].GroupID)
+		memberIDs, err := listGroupMembers(ctx, client, identityStoreID, groups[i].GroupID)
 		if err != nil {
 			return nil, err
 		}
-		groups[i].MemberCount = count
+		groups[i].MemberUserIDs = memberIDs
+		groups[i].MemberCount = len(memberIDs)
 	}
 	return groups, nil
 }
 
-func countGroupMembers(ctx context.Context, client *identitystore.Client, identityStoreID, groupID string) (int, error) {
-	var count int
+func listGroupMembers(ctx context.Context, client *identitystore.Client, identityStoreID, groupID string) ([]string, error) {
+	memberIDs := []string{}
 	var nextToken *string
 	for {
 		resp, err := client.ListGroupMemberships(ctx, &identitystore.ListGroupMembershipsInput{
@@ -267,11 +305,15 @@ func countGroupMembers(ctx context.Context, client *identitystore.Client, identi
 			NextToken:       nextToken,
 		})
 		if err != nil {
-			return 0, fmt.Errorf("listing memberships for group %s: %w", groupID, err)
+			return nil, fmt.Errorf("listing memberships for group %s: %w", groupID, err)
 		}
-		count += len(resp.GroupMemberships)
+		for _, m := range resp.GroupMemberships {
+			if userID, ok := m.MemberId.(*idstoretypes.MemberIdMemberUserId); ok {
+				memberIDs = append(memberIDs, userID.Value)
+			}
+		}
 		if resp.NextToken == nil || *resp.NextToken == "" {
-			return count, nil
+			return memberIDs, nil
 		}
 		nextToken = resp.NextToken
 	}

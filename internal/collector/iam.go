@@ -3,8 +3,9 @@ package collector
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,23 +21,39 @@ type roleLister interface {
 	ListRoles(ctx context.Context, callback func([]aws.Role) error) error
 }
 
+// iamClient is the slice of the AWS client used by collectIAMMetrics,
+// extracted so the failure paths can be tested without AWS.
+type iamClient interface {
+	GetCredentialReport(ctx context.Context) (*aws.CredentialReport, error)
+	GetAccountSummary(ctx context.Context) (*aws.AccountSummary, error)
+	ListOrganizationsFeatures(ctx context.Context) (*aws.OrganizationFeatures, error)
+	ListOrganizationAccountIDs(ctx context.Context) ([]string, error)
+	mfaDeviceLister
+	roleLister
+}
+
 // collectIAMMetrics collects IAM-related security metrics.
 //
 // At trust, only aggregates and root-account flags are populated.
 // At audit, per-user and per-role inventory rows are populated from the same
 // credential report (no extra API calls for users) plus ListRoles for the role
 // inventory.
-func (c *Collector) collectIAMMetrics(ctx context.Context, client *aws.AWSClient, accountID string, level componentsdk.Level) (*IAMMetrics, error) {
+//
+// Failures never abort the surface: each source degrades independently, with
+// the evaluated flags on IAMMetrics recording which sources succeeded so a
+// consumer never mistakes an uncollected aggregate for a genuine zero.
+func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, accountID string, level componentsdk.Level) *IAMMetrics {
 	metrics := &IAMMetrics{}
 
-	// Get credential report
-	report, err := client.GetCredentialReport(ctx)
-	if err != nil {
-		return metrics, fmt.Errorf("getting credential report: %w", err)
+	report, reportErr := client.GetCredentialReport(ctx)
+	if reportErr != nil {
+		metrics.CredentialReportErrorCode = credentialReportErrorCode(reportErr)
+		c.warn("account %s: failed to collect IAM credential report: %v", accountID, reportErr)
+	} else {
+		c.processCredentialReport(report, metrics)
+		metrics.CredentialReportEvaluated = true
 	}
 
-	// Process credential report (always produces trust-level aggregates)
-	c.processCredentialReport(report, metrics)
 	summary, err := client.GetAccountSummary(ctx)
 	if err != nil {
 		c.warn("account %s: failed to collect IAM account summary: %v", accountID, err)
@@ -52,18 +69,32 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client *aws.AWSClient
 	} else {
 		processRootOrganizationsFeatures(features, nil, metrics)
 	}
-	metrics.HardwareMFAEnabled = c.collectHardwareMFAMetrics(ctx, client, report, accountID)
-
-	if level.AtLeast(componentsdk.LevelAudit) {
-		metrics.Users = c.iamUsersFromReport(report)
-		metrics.Roles = c.collectIAMRoles(ctx, client, accountID)
+	if report != nil {
+		metrics.HardwareMFAEnabled = c.collectHardwareMFAMetrics(ctx, client, report, accountID)
 	}
 
-	if level.AtLeast(componentsdk.LevelInternal) {
+	if level.AtLeast(componentsdk.LevelAudit) {
+		if report != nil {
+			metrics.Users = c.iamUsersFromReport(report)
+		}
+		orgAccounts := c.collectOrganizationAccounts(ctx, client, accountID, metrics)
+		metrics.Roles = c.collectIAMRoles(ctx, client, accountID, level, orgAccounts)
+	}
+
+	if level.AtLeast(componentsdk.LevelInternal) && report != nil {
 		metrics.CredentialReport = credentialReportToInternal(report)
 	}
 
-	return metrics, nil
+	return metrics
+}
+
+// credentialReportErrorCode maps a credential report failure to a stable code
+// for the credential_report_error_code field.
+func credentialReportErrorCode(err error) string {
+	if errors.Is(err, aws.ErrCredentialReportTimeout) {
+		return "CredentialReportTimeout"
+	}
+	return apiErrorCode(err)
 }
 
 // credentialReportToInternal projects the credential report onto the
@@ -156,15 +187,25 @@ func (c *Collector) iamUsersFromReport(report *aws.CredentialReport) []IAMUser {
 // on success-with-no-roles so the audit artifact emits `[]` not `null`; returns
 // nil on collection failure so the artifact emits `null` (paired with a
 // diagnostic warning) — null and `[]` are intentionally distinguishable.
-func (c *Collector) collectIAMRoles(ctx context.Context, client roleLister, accountID string) []IAMRole {
+func (c *Collector) collectIAMRoles(ctx context.Context, client roleLister, accountID string, level componentsdk.Level, orgAccounts *organizationAccounts) []IAMRole {
 	roles := []IAMRole{}
 	err := client.ListRoles(ctx, func(batch []aws.Role) error {
 		for _, r := range batch {
-			roles = append(roles, IAMRole{
-				RoleName:         r.RoleName,
-				ARN:              r.ARN,
-				HasExternalTrust: hasExternalTrust(r.AssumeRolePolicyDocument, accountID),
-			})
+			analysis := analyzeTrustPolicy(r.AssumeRolePolicyDocument, accountID)
+			row := IAMRole{
+				RoleName:                r.RoleName,
+				ARN:                     r.ARN,
+				HasExternalTrust:        analysis.hasExternalTrust,
+				HasWildcardPrincipal:    analysis.hasWildcardPrincipal,
+				ExternalTrustAccountIDs: analysis.externalAccountIDs,
+			}
+			if len(analysis.externalAccountIDs) > 0 {
+				row.ExternalTrustInOrg = orgAccounts.membership(analysis.externalAccountIDs)
+			}
+			if level.AtLeast(componentsdk.LevelInternal) {
+				row.TrustPolicyJSON = analysis.decodedPolicy
+			}
+			roles = append(roles, row)
 		}
 		return nil
 	})
@@ -177,6 +218,58 @@ func (c *Collector) collectIAMRoles(ctx context.Context, client roleLister, acco
 		return nil
 	}
 	return roles
+}
+
+// organizationAccounts is the in-org membership context for one account run.
+// A nil / unevaluated receiver yields absent determinations, never guesses.
+type organizationAccounts struct {
+	evaluated bool
+	ids       map[string]struct{}
+}
+
+// membership returns true when every given account ID belongs to the
+// organization, false when at least one does not, and nil when the
+// organization roster was not evaluated.
+func (o *organizationAccounts) membership(accountIDs []string) *bool {
+	if o == nil || !o.evaluated {
+		return nil
+	}
+	for _, id := range accountIDs {
+		if _, ok := o.ids[id]; !ok {
+			return boolPtr(false)
+		}
+	}
+	return boolPtr(true)
+}
+
+// collectOrganizationAccounts fetches the organization account roster used to
+// classify cross-account trust, recording the outcome on the sentinels.
+// Expected failures from accounts without Organizations visibility record the
+// code without a warning.
+func (c *Collector) collectOrganizationAccounts(ctx context.Context, client iamClient, accountID string, metrics *IAMMetrics) *organizationAccounts {
+	accountIDs, err := client.ListOrganizationAccountIDs(ctx)
+	if err != nil {
+		metrics.OrganizationAccountsErrorCode = apiErrorCode(err)
+		if !isAccessDeniedErr(err) && shouldWarnOrganizationAccountsError(metrics.OrganizationAccountsErrorCode) {
+			c.warn("account %s: failed to list organization accounts: %v", accountID, err)
+		}
+		return &organizationAccounts{}
+	}
+	metrics.OrganizationAccountsEvaluated = true
+	ids := make(map[string]struct{}, len(accountIDs))
+	for _, id := range accountIDs {
+		ids[id] = struct{}{}
+	}
+	return &organizationAccounts{evaluated: true, ids: ids}
+}
+
+// shouldWarnOrganizationAccountsError suppresses warnings for error codes
+// that simply mean this account has no Organizations visibility (the common
+// member-account case) rather than a misconfiguration worth surfacing.
+// Access denial is additionally suppressed via isAccessDeniedErr at the call
+// site, which also catches untyped errors.
+func shouldWarnOrganizationAccountsError(code string) bool {
+	return code != "AWSOrganizationsNotInUseException"
 }
 
 // processCredentialReport analyzes the credential report and populates user metrics.
@@ -264,6 +357,7 @@ func processRootAccountSummary(summary *aws.AccountSummary, metrics *IAMMetrics)
 
 func processRootCredentialState(metrics *IAMMetrics, mfaActive, passwordPresent, accessKeysPresent, signingCertificatesPresent bool) {
 	credentialsPresent := passwordPresent || accessKeysPresent || signingCertificatesPresent
+	metrics.RootCredentialStateEvaluated = true
 	metrics.RootPasswordPresent = passwordPresent
 	metrics.RootAccessKeysExist = accessKeysPresent
 	metrics.RootSigningCertificatesPresent = signingCertificatesPresent
@@ -380,32 +474,82 @@ func isHardwareMFASerial(serial string) bool {
 	return !strings.Contains(serial, ":mfa/")
 }
 
-// hasExternalTrust checks if a role's trust policy allows external accounts.
-func hasExternalTrust(policyDoc string, currentAccount string) bool {
+// trustAnalysis is the parsed external-trust view of one role's trust policy.
+// externalAccountIDs is sorted and deduplicated; decodedPolicy is the
+// URL-decoded document ("" when the document was absent or undecodable).
+type trustAnalysis struct {
+	hasExternalTrust     bool
+	hasWildcardPrincipal bool
+	externalAccountIDs   []string
+	decodedPolicy        string
+}
+
+// analyzeTrustPolicy extracts the external-trust facts from a role's trust
+// policy: which foreign accounts appear as principals in allow statements
+// (as full ARNs or bare account IDs) and whether a wildcard principal grants
+// to everyone. Service principals are never external.
+func analyzeTrustPolicy(policyDoc string, currentAccount string) trustAnalysis {
+	analysis := trustAnalysis{}
 	if policyDoc == "" {
-		return false
+		return analysis
 	}
 
 	decoded, err := url.QueryUnescape(policyDoc)
 	if err != nil {
-		return false
+		return analysis
 	}
+	analysis.decodedPolicy = decoded
 
 	var policy trustPolicy
 	if err := json.Unmarshal([]byte(decoded), &policy); err != nil {
-		return false
+		return analysis
 	}
 
+	seen := map[string]struct{}{}
 	for _, stmt := range policy.Statement {
 		if stmt.Effect != TrustPolicyEffectAllow {
 			continue
 		}
-		if hasExternalPrincipal(stmt.Principal, currentAccount) {
-			return true
+		for _, p := range extractPrincipals(stmt.Principal) {
+			switch {
+			case p == TrustPolicyPrincipalAll:
+				analysis.hasExternalTrust = true
+				analysis.hasWildcardPrincipal = true
+			case strings.HasPrefix(p, TrustPolicyARNPrefix):
+				parts := strings.Split(p, ":")
+				if len(parts) >= 5 && parts[4] != "" && parts[4] != currentAccount {
+					analysis.hasExternalTrust = true
+					seen[parts[4]] = struct{}{}
+				}
+			case isBareAccountID(p) && p != currentAccount:
+				analysis.hasExternalTrust = true
+				seen[p] = struct{}{}
+			}
 		}
 	}
 
-	return false
+	if len(seen) > 0 {
+		analysis.externalAccountIDs = make([]string, 0, len(seen))
+		for id := range seen {
+			analysis.externalAccountIDs = append(analysis.externalAccountIDs, id)
+		}
+		sort.Strings(analysis.externalAccountIDs)
+	}
+	return analysis
+}
+
+// isBareAccountID reports whether a principal string is a bare 12-digit AWS
+// account ID (shorthand for that account's root principal).
+func isBareAccountID(p string) bool {
+	if len(p) != 12 {
+		return false
+	}
+	for _, r := range p {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // trustPolicy represents an IAM trust policy document.
@@ -417,22 +561,6 @@ type trustPolicy struct {
 type trustStatement struct {
 	Effect    string `json:"Effect"`
 	Principal any    `json:"Principal"`
-}
-
-// hasExternalPrincipal checks if the principal field contains external accounts.
-func hasExternalPrincipal(principal any, currentAccount string) bool {
-	for _, p := range extractPrincipals(principal) {
-		if p == TrustPolicyPrincipalAll {
-			return true
-		}
-		if strings.HasPrefix(p, TrustPolicyARNPrefix) {
-			parts := strings.Split(p, ":")
-			if len(parts) >= 5 && parts[4] != currentAccount {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // extractPrincipals extracts principal strings from the Principal field.
