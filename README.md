@@ -88,6 +88,7 @@ collectors:
       auth_mode: "assume_role"
       role_arn: "arn:aws:iam::123456789012:role/EpackCollectorRole"
       external_id: "unique-external-id"
+      label: "production"
       regions:
         - us-east-1
         - us-west-2

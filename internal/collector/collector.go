@@ -3,6 +3,7 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -16,6 +17,12 @@ type Collector struct {
 	tokenSource *aws.GitHubOIDCTokenSource // Cached token source for OIDC mode
 	warnings    []string                   // Service-level warnings accumulated during collection
 }
+
+// ErrNoUsableAccounts means no accounts were configured and the implicit
+// default-credentials account could not be collected either. The remedy is
+// configuration (add accounts or working AWS credentials), so callers map
+// this to a config error rather than a network error.
+var ErrNoUsableAccounts = errors.New("no accounts configured and default AWS credentials are unavailable")
 
 // warn records a service-level warning for diagnostics.
 func (c *Collector) warn(format string, args ...interface{}) {
@@ -84,11 +91,13 @@ func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Out
 			output.FailedAccounts = append(output.FailedAccounts, FailedAccountRecord{
 				AccountID: accountIDFromRoleARN(acct.RoleARN),
 				RoleARN:   acct.RoleARN,
+				Label:     acct.Label,
 				ErrorCode: apiErrorCode(err),
 			})
 			c.status(errMsg)
 			continue
 		}
+		posture.AccountLabel = acct.Label
 		output.Accounts = append(output.Accounts, *posture)
 	}
 
@@ -105,7 +114,13 @@ func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Out
 
 	// Partial failure emits stubs and succeeds; total failure must not exit 0
 	// with an empty artifact (COL-034: exit 0 only when collection succeeds).
+	// With no accounts configured, the implicit default-credentials account
+	// failing is a configuration problem, not a collection one: report it as
+	// such so an unconfigured run exits with the config error code.
 	if len(output.Accounts) == 0 && len(accountErrors) > 0 {
+		if len(c.config.Accounts) == 0 {
+			return nil, fmt.Errorf("%w: %s", ErrNoUsableAccounts, strings.Join(accountErrors, "; "))
+		}
 		return nil, fmt.Errorf("all %d configured accounts failed: %s", len(accounts), strings.Join(accountErrors, "; "))
 	}
 
@@ -481,6 +496,9 @@ func formatAccountError(acct AccountConfig, err error) string {
 	roleInfo := "default credentials"
 	if acct.RoleARN != "" {
 		roleInfo = acct.RoleARN
+	}
+	if acct.Label != "" {
+		roleInfo = acct.Label + ": " + roleInfo
 	}
 	return fmt.Sprintf("failed to collect account (%s): %v", roleInfo, err)
 }

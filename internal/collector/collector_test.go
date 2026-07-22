@@ -1,6 +1,10 @@
 package collector
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestWarnAccumulatesWarnings(t *testing.T) {
 	c := &Collector{}
@@ -35,5 +39,19 @@ func TestWarningsResetBetweenCollections(t *testing.T) {
 	c.warn("fresh warning")
 	if len(c.warnings) != 1 {
 		t.Fatalf("expected 1 warning after reset, got %d", len(c.warnings))
+	}
+}
+
+func TestFormatAccountError_IncludesLabel(t *testing.T) {
+	acct := AccountConfig{RoleARN: "arn:aws:iam::111111111111:role/collector", Label: "production"}
+	msg := formatAccountError(acct, errors.New("boom"))
+	if !strings.Contains(msg, "production: arn:aws:iam::111111111111:role/collector") {
+		t.Errorf("message %q missing labeled role info", msg)
+	}
+
+	unlabeled := AccountConfig{RoleARN: "arn:aws:iam::111111111111:role/collector"}
+	msg = formatAccountError(unlabeled, errors.New("boom"))
+	if strings.Contains(msg, ": arn:aws:iam::111111111111:role/collector): boom") == false && !strings.Contains(msg, "(arn:aws:iam::111111111111:role/collector)") {
+		t.Errorf("unlabeled message %q should carry the bare role ARN", msg)
 	}
 }

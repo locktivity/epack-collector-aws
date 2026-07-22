@@ -20,6 +20,7 @@ type CloudPosture struct {
 // healthy with no findings" from "account never answered".
 type CloudPostureAccount struct {
 	AccountID           string                   `json:"account_id,omitempty"`
+	AccountLabel        string                   `json:"account_label,omitempty"`
 	CollectionErrorCode string                   `json:"collection_error_code,omitempty"`
 	IAM                 CloudPostureIAM          `json:"iam"`
 	Storage             CloudPostureStorage      `json:"storage"`
@@ -89,6 +90,7 @@ func (o *Output) ToCloudPosture() *CloudPosture {
 	for _, acct := range o.Accounts {
 		posture.Accounts = append(posture.Accounts, CloudPostureAccount{
 			AccountID:    acct.AccountID,
+			AccountLabel: acct.AccountLabel,
 			IAM:          normalizedIAM(acct.IAM),
 			Storage:      normalizedStorage(acct.S3),
 			Logging:      normalizedLogging(acct.AccountSecurity.CloudTrail),
@@ -101,6 +103,7 @@ func (o *Output) ToCloudPosture() *CloudPosture {
 	for _, failed := range o.FailedAccounts {
 		posture.Accounts = append(posture.Accounts, CloudPostureAccount{
 			AccountID:           failed.AccountID,
+			AccountLabel:        failed.Label,
 			CollectionErrorCode: failed.ErrorCode,
 		})
 	}

@@ -642,3 +642,60 @@ func TestAccountIDFromRoleARN(t *testing.T) {
 		}
 	}
 }
+
+func TestToCloudPosture_AccountLabelPropagates(t *testing.T) {
+	// The operator-supplied label rides both artifacts, including a failed
+	// account's stub entry, so downstream consumers can tell which
+	// environment an entry (or an outage) belongs to.
+	healthy := evaluatedAccountFixture()
+	healthy.AccountLabel = "production"
+	output := &Output{
+		SchemaVersion: "1.0.0",
+		Accounts:      []AccountPosture{healthy},
+		FailedAccounts: []FailedAccountRecord{
+			{AccountID: "222222222222", Label: "staging", ErrorCode: "AccessDenied"},
+		},
+	}
+
+	cloudPosture := output.ToCloudPosture()
+
+	if cloudPosture.Accounts[0].AccountLabel != "production" {
+		t.Errorf("Accounts[0].AccountLabel = %q, want production", cloudPosture.Accounts[0].AccountLabel)
+	}
+	if cloudPosture.Accounts[1].AccountLabel != "staging" {
+		t.Errorf("stub AccountLabel = %q, want staging", cloudPosture.Accounts[1].AccountLabel)
+	}
+
+	jsonBytes, err := json.Marshal(cloudPosture)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(jsonBytes, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	first := data["accounts"].([]any)[0].(map[string]any)
+	if first["account_label"] != "production" {
+		t.Errorf("account_label = %v, want production", first["account_label"])
+	}
+}
+
+func TestToCloudPosture_NoLabelOmitted(t *testing.T) {
+	output := &Output{
+		SchemaVersion: "1.0.0",
+		Accounts:      []AccountPosture{evaluatedAccountFixture()},
+	}
+
+	jsonBytes, err := json.Marshal(output.ToCloudPosture())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(jsonBytes, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	first := data["accounts"].([]any)[0].(map[string]any)
+	if _, present := first["account_label"]; present {
+		t.Error("account_label serialized without a configured label; want omitted")
+	}
+}

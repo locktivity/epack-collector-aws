@@ -35,6 +35,7 @@ type Config struct {
 type AccountConfig struct {
 	RoleARN    string `json:"role_arn"`    // IAM role to assume
 	ExternalID string `json:"external_id"` // External ID for assume role (optional)
+	Label      string `json:"label"`       // Operator-supplied label (e.g. production, staging) carried into the artifacts (optional)
 }
 
 // Output represents the complete collector output.
@@ -55,6 +56,7 @@ type Output struct {
 type FailedAccountRecord struct {
 	AccountID string `json:"account_id,omitempty"`
 	RoleARN   string `json:"role_arn,omitempty"`
+	Label     string `json:"label,omitempty"`
 	ErrorCode string `json:"error_code"`
 }
 
@@ -66,9 +68,13 @@ type Diagnostics struct {
 }
 
 // AccountPosture represents the collected security posture of a single AWS account.
+// AccountLabel is the operator-supplied label from the account's config entry,
+// passed through verbatim so downstream consumers can segment accounts
+// (production, staging, management) without an external mapping.
 type AccountPosture struct {
 	AccountID       string                `json:"account_id"`
 	AccountAlias    *string               `json:"account_alias,omitempty"`
+	AccountLabel    string                `json:"account_label,omitempty"`
 	Regions         []string              `json:"regions"`
 	IAM             IAMMetrics            `json:"iam"`
 	S3              S3Metrics             `json:"s3"`

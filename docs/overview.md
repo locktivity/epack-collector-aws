@@ -188,8 +188,13 @@ collectors:
     config:
       accounts:
         - role_arn: "arn:aws:iam::111111111111:role/EpackCollectorRole"
+          label: "production"
         - role_arn: "arn:aws:iam::222222222222:role/EpackCollectorRole"
+          label: "staging"
 ```
+
+The optional `label` is operator-supplied and rides each account's output as
+`account_label`, including failed-account records.
 
 Each account's posture is collected independently and included in the output.
 An account that fails entirely is recorded under `failed_accounts` (with the

@@ -69,11 +69,20 @@ collectors:
       accounts:
         - role_arn: "arn:aws:iam::111111111111:role/EpackCollectorRole"
           external_id: "prod"
+          label: "production"
         - role_arn: "arn:aws:iam::222222222222:role/EpackCollectorRole"
           external_id: "staging"
+          label: "staging"
         - role_arn: "arn:aws:iam::333333333333:role/EpackCollectorRole"
           external_id: "dev"
+          label: "development"
 ```
+
+`label` is optional, operator-supplied free text (e.g. production, staging,
+management). It is carried verbatim onto the account's entries in both
+artifacts as `account_label` (and onto a failed account's `failed_accounts`
+record), so downstream consumers can segment accounts without an external
+mapping.
 
 ## Specific Regions Only
 

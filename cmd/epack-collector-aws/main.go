@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"time"
 
 	"github.com/locktivity/epack-collector-aws/internal/collector"
@@ -47,6 +48,7 @@ func run(ctx componentsdk.CollectorContext) error {
 				config.Accounts = append(config.Accounts, collector.AccountConfig{
 					RoleARN:    getString(acctMap, "role_arn"),
 					ExternalID: getString(acctMap, "external_id"),
+					Label:      getString(acctMap, "label"),
 				})
 			}
 		}
@@ -55,6 +57,7 @@ func run(ctx componentsdk.CollectorContext) error {
 		config.Accounts = []collector.AccountConfig{{
 			RoleARN:    roleARN,
 			ExternalID: getString(cfg, "external_id"),
+			Label:      getString(cfg, "label"),
 		}}
 	}
 	// If no accounts specified, collector will use default credentials
@@ -67,6 +70,9 @@ func run(ctx componentsdk.CollectorContext) error {
 
 	output, err := c.Collect(ctx.Context(), ctx.Level())
 	if err != nil {
+		if errors.Is(err, collector.ErrNoUsableAccounts) {
+			return componentsdk.NewConfigError("collecting posture: %v", err)
+		}
 		return componentsdk.NewNetworkError("collecting posture: %v", err)
 	}
 

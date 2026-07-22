@@ -36,6 +36,7 @@
         "properties": {
           "account_id": { "type": "string", "pattern": "^[0-9]{12}$", "description": "Parsed from the configured role ARN; absent when not derivable (e.g. default credentials)." },
           "role_arn": { "type": "string" },
+          "label": { "type": "string", "description": "Operator-supplied label from the account's config entry." },
           "error_code": { "type": "string" }
         }
       }
@@ -60,6 +61,7 @@
       "properties": {
         "account_id": { "type": "string", "pattern": "^[0-9]{12}$" },
         "account_alias": { "type": ["string", "null"] },
+        "account_label": { "type": "string", "description": "Operator-supplied label from the account's config entry (e.g. production, staging), passed through verbatim. Absent when not configured." },
         "regions": { "type": "array", "items": { "type": "string" } },
         "iam": { "$ref": "#/definitions/IAMMetrics" },
         "s3": { "$ref": "#/definitions/S3Metrics" },
