@@ -104,7 +104,9 @@ collectors:
       auth_mode: "oidc"  # or "assume_role"
       accounts:
         - role_arn: "arn:aws:iam::111111111111:role/EpackCollectorRole"
+          label: "production"
         - role_arn: "arn:aws:iam::222222222222:role/EpackCollectorRole"
+          label: "staging"
       regions:
         - us-east-1
         - us-west-2
