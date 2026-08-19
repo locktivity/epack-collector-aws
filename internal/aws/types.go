@@ -91,6 +91,14 @@ type PasswordPolicy struct {
 	HardExpiry                 bool
 }
 
+// EBSVolumeState is the per-volume state the collector joins onto instances
+// and aggregates for unattached volumes. Deliberately two booleans rather than
+// the full Volume object, which would bloat memory in volume-heavy regions.
+type EBSVolumeState struct {
+	Encrypted bool
+	Attached  bool
+}
+
 // MFADevice represents an MFA device assigned to an IAM user.
 type MFADevice struct {
 	UserName     string
@@ -154,6 +162,13 @@ type DBInstance struct {
 	BackupRetentionPeriod   int
 	MultiAZ                 bool
 	AutoMinorVersionUpgrade bool
+	PreferredBackupWindow   string
+
+	// ParameterApplyStatus matters for any claim built on parameter values:
+	// pending-reboot means the group's desired values are not in force.
+	ParameterGroupName   string
+	ParameterApplyStatus string
+	LogExports           []string
 
 	// LatestRestorableTime is the most recent point-in-time recovery target
 	// (PITR). Nil for instances without PITR support or when AWS has not yet
@@ -216,6 +231,21 @@ type BucketLifecycleRule struct {
 	Prefix      string
 	Transitions []string
 	Expiration  string
+
+	// Structured expiration for classification: the display string above is
+	// for reading, these are for deciding. Days is zero when the rule expires
+	// by date or not at all; ExpirationIsDate distinguishes the two.
+	ExpirationDays   int32
+	ExpirationIsDate bool
+}
+
+// ObjectLockConfig is a bucket's object lock default retention. A locked
+// trail bucket is the immutability claim: nobody shortens retention, not even
+// an administrator when the mode is COMPLIANCE.
+type ObjectLockConfig struct {
+	Mode  string
+	Days  int32
+	Years int32
 }
 
 // VPC represents a VPC with security settings.
@@ -281,6 +311,7 @@ type Trail struct {
 	TrailARN                  string
 	HomeRegion                string
 	S3BucketName              string
+	S3KeyPrefix               string
 	IsMultiRegionTrail        bool
 	IsOrganizationTrail       bool
 	LogFileValidationEnabled  bool
@@ -377,11 +408,17 @@ type InspectorSummary struct {
 
 // AccessAnalyzer represents an IAM Access Analyzer.
 type AccessAnalyzer struct {
-	Name          string
-	ARN           string
-	Type          string // ACCOUNT or ORGANIZATION
-	Status        string
-	FindingsCount int
+	Name   string
+	ARN    string
+	Type   string // ACCOUNT or ORGANIZATION
+	Status string
+
+	// Findings split by triage state: archived findings mean someone looks at
+	// them. FindingsUnresolved marks a failed listing, so an unreadable
+	// analyzer is never mistaken for a clean one.
+	ActiveFindingsCount   int
+	ArchivedFindingsCount int
+	FindingsUnresolved    bool
 }
 
 // IdentityCenterInstance is a single AWS IAM Identity Center (formerly AWS SSO)

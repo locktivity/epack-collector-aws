@@ -755,6 +755,8 @@ type fakeIAMClient struct {
 	rolesErr       error
 	orgAccountIDs  []string
 	orgAccountsErr error
+	passwordPolicy *aws.PasswordPolicy
+	passwordErr    error
 }
 
 func (f fakeIAMClient) GetCredentialReport(_ context.Context) (*aws.CredentialReport, error) {
@@ -763,6 +765,10 @@ func (f fakeIAMClient) GetCredentialReport(_ context.Context) (*aws.CredentialRe
 
 func (f fakeIAMClient) GetAccountSummary(_ context.Context) (*aws.AccountSummary, error) {
 	return f.summary, f.summaryErr
+}
+
+func (f fakeIAMClient) GetPasswordPolicy(_ context.Context) (*aws.PasswordPolicy, error) {
+	return f.passwordPolicy, f.passwordErr
 }
 
 func (f fakeIAMClient) ListOrganizationsFeatures(_ context.Context) (*aws.OrganizationFeatures, error) {
@@ -1004,4 +1010,78 @@ func TestCollectOrganizationAccounts_Success(t *testing.T) {
 	if got := orgAccounts.membership([]string{"999999999999"}); got == nil || *got {
 		t.Errorf("expected in-org false for unknown account, got %v", got)
 	}
+}
+
+func TestCollectIAMMetricsPasswordPolicyStates(t *testing.T) {
+	maxAge := 90
+	reuse := 5
+
+	t.Run("configured policy is projected onto the artifact", func(t *testing.T) {
+		c := &Collector{}
+		metrics := c.collectIAMMetrics(context.Background(), fakeIAMClient{
+			report: &aws.CredentialReport{},
+			passwordPolicy: &aws.PasswordPolicy{
+				MinimumPasswordLength:   14,
+				RequireSymbols:          true,
+				RequireNumbers:          true,
+				RequireUppercase:        true,
+				RequireLowercase:        true,
+				ExpirePasswords:         true,
+				MaxPasswordAge:          &maxAge,
+				PasswordReusePrevention: &reuse,
+			},
+		}, "123456789012", componentsdk.LevelTrust)
+
+		if !metrics.PasswordPolicyEvaluated {
+			t.Fatal("PasswordPolicyEvaluated = false, want true")
+		}
+		if metrics.PasswordPolicy == nil {
+			t.Fatal("PasswordPolicy = nil, want the configured policy")
+		}
+		if metrics.PasswordPolicy.MinimumLength != 14 {
+			t.Errorf("MinimumLength = %d, want 14", metrics.PasswordPolicy.MinimumLength)
+		}
+		if got := metrics.PasswordPolicy.MaxPasswordAgeDays; got == nil || *got != 90 {
+			t.Errorf("MaxPasswordAgeDays = %v, want 90", got)
+		}
+		if got := metrics.PasswordPolicy.PasswordReusePrevention; got == nil || *got != 5 {
+			t.Errorf("PasswordReusePrevention = %v, want 5", got)
+		}
+	})
+
+	// AWS answers "no policy" by succeeding with nothing. That is a finding,
+	// not a gap: the account falls back to AWS's own default of eight
+	// characters with no complexity requirement.
+	t.Run("no policy configured is an answer, not a failure", func(t *testing.T) {
+		c := &Collector{}
+		metrics := c.collectIAMMetrics(context.Background(), fakeIAMClient{report: &aws.CredentialReport{}}, "123456789012", componentsdk.LevelTrust)
+
+		if !metrics.PasswordPolicyEvaluated {
+			t.Fatal("PasswordPolicyEvaluated = false, want true when AWS reports no policy")
+		}
+		if metrics.PasswordPolicy != nil {
+			t.Fatalf("PasswordPolicy = %+v, want nil when none is configured", metrics.PasswordPolicy)
+		}
+		if metrics.PasswordPolicyErrorCode != "" {
+			t.Errorf("PasswordPolicyErrorCode = %q, want empty", metrics.PasswordPolicyErrorCode)
+		}
+	})
+
+	t.Run("a failed lookup stays distinguishable from no policy", func(t *testing.T) {
+		c := &Collector{}
+		metrics := c.collectIAMMetrics(context.Background(), fakeIAMClient{
+			report:      &aws.CredentialReport{},
+			passwordErr: errors.New("AccessDenied: not authorized to perform iam:GetAccountPasswordPolicy"),
+		}, "123456789012", componentsdk.LevelTrust)
+
+		if metrics.PasswordPolicyEvaluated {
+			t.Fatal("PasswordPolicyEvaluated = true, want false when the lookup failed")
+		}
+		if metrics.PasswordPolicy != nil {
+			t.Fatalf("PasswordPolicy = %+v, want nil", metrics.PasswordPolicy)
+		}
+		if metrics.PasswordPolicyErrorCode == "" {
+			t.Error("PasswordPolicyErrorCode is empty, want the cause recorded")
+		}
+	})
 }

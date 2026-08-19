@@ -46,6 +46,27 @@ func (c *Collector) collectS3Metrics(ctx context.Context, client s3Client, accou
 	}
 	metrics.BucketListingEvaluated = true
 
+	transport := c.classifyBucketTransport(ctx, client, buckets)
+	for _, verdict := range transport {
+		switch verdict {
+		case tlsEnforcementEnforced:
+			metrics.TLSEnforcedBucketCount++
+		case tlsEnforcementPartial:
+			metrics.TLSEnforcementPartialBucketCount++
+		case tlsEnforcementNone:
+			metrics.TLSUnenforcedBucketCount++
+		case tlsEnforcementUnknown:
+			metrics.TLSEnforcementUnknownBucketCount++
+		}
+	}
+	if metrics.TLSEnforcementUnknownBucketCount > 0 {
+		c.warn(
+			"account %s: failed to read the bucket policy for %d bucket(s); their TLS enforcement is unknown, not unenforced",
+			accountID,
+			metrics.TLSEnforcementUnknownBucketCount,
+		)
+	}
+
 	publicAccessUnknownCount := applyEffectivePublicAccessBlock(buckets, accountPublicAccessBlock)
 	metrics.PublicAccessBlockUnknownCount = publicAccessUnknownCount
 	summarizeS3Buckets(metrics, buckets)
@@ -71,6 +92,9 @@ func (c *Collector) collectS3Metrics(ctx context.Context, client s3Client, accou
 			return a.Name < b.Name
 		})
 		metrics.Buckets = kept
+		for i := range metrics.Buckets {
+			metrics.Buckets[i].TLSEnforcement = transport[metrics.Buckets[i].Name]
+		}
 		if truncated {
 			c.warn("account %s: S3 bucket inventory truncated to %d (dropped %d)", accountID, S3BucketsCap, dropped)
 		}

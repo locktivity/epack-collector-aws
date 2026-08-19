@@ -72,6 +72,13 @@
         "lambda": { "$ref": "#/definitions/LambdaMetrics" },
         "ec2": { "$ref": "#/definitions/EC2Metrics" },
         "cloudwatch_logs": { "$ref": "#/definitions/CloudWatchLogsMetrics" },
+        "monitoring": { "$ref": "#/definitions/MonitoringMetrics" },
+        "stored_images": { "$ref": "#/definitions/StoredImageMetrics" },
+        "load_balancers": { "$ref": "#/definitions/LoadBalancerMetrics" },
+        "cloudfront": { "$ref": "#/definitions/CloudFrontMetrics" },
+        "ses": { "$ref": "#/definitions/SESMetrics" },
+        "ecs": { "$ref": "#/definitions/ECSMetrics" },
+        "auto_scaling": { "$ref": "#/definitions/AutoScalingMetrics" },
         "kms": { "$ref": "#/definitions/KMSMetrics" },
         "secrets_manager": { "$ref": "#/definitions/SecretsManagerMetrics" },
         "ssm_parameters": { "$ref": "#/definitions/SSMParametersMetrics" }
@@ -97,6 +104,25 @@
         "credential_report_evaluated": { "type": "boolean", "description": "True when the IAM credential report was collected. The user aggregates (iam_users_present, mfa_enabled, hardware_mfa_enabled, access_keys_rotated) are meaningful only when true; on collection failure they hold zero values." },
         "credential_report_error_code": { "type": "string", "description": "Present when the credential report was not evaluated (e.g. CredentialReportTimeout)." },
         "iam_users_present": { "type": "boolean" },
+        "password_policy_evaluated": { "type": "boolean", "description": "True when the account password policy was read, whether or not one is configured. False means the lookup failed; see password_policy_error_code." },
+        "password_policy_error_code": { "type": "string", "description": "Why the account password policy could not be read." },
+        "password_policy": {
+          "type": "object",
+          "description": "The configured account password policy for IAM console sign-in. Absent while password_policy_evaluated is true means no policy is configured and AWS's own default applies, which is a finding rather than missing data.",
+          "required": ["minimum_length", "require_symbols", "require_numbers", "require_uppercase", "require_lowercase", "allow_users_to_change_password", "expire_passwords", "hard_expiry"],
+          "properties": {
+            "minimum_length": { "type": "integer", "description": "Shortest console password the account accepts." },
+            "require_symbols": { "type": "boolean" },
+            "require_numbers": { "type": "boolean" },
+            "require_uppercase": { "type": "boolean" },
+            "require_lowercase": { "type": "boolean" },
+            "allow_users_to_change_password": { "type": "boolean" },
+            "expire_passwords": { "type": "boolean" },
+            "hard_expiry": { "type": "boolean", "description": "Whether users are locked out rather than prompted once a password expires." },
+            "max_password_age_days": { "type": "integer", "minimum": 1, "description": "Absent means passwords do not expire." },
+            "password_reuse_prevention": { "type": "integer", "minimum": 1, "description": "Absent means previous passwords may be reused." }
+          }
+        },
         "mfa_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
         "hardware_mfa_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
         "access_keys_rotated": { "type": "integer", "minimum": 0, "maximum": 100 },
@@ -138,6 +164,10 @@
         "bucket_listing_error_code": { "type": "string", "description": "Present when the bucket listing was not evaluated." },
         "account_public_access_block_evaluated": { "type": "boolean", "description": "True when the account-level S3 Block Public Access settings were read. account_public_access_block_enabled is meaningful only when true." },
         "bucket_count": { "type": "integer", "minimum": 0, "description": "Total S3 buckets returned by ListBuckets." },
+        "tls_enforced_bucket_count": { "type": "integer", "minimum": 0, "description": "Buckets whose policy conclusively denies plaintext access for every principal, every S3 action, and the whole bucket." },
+        "tls_enforcement_partial_bucket_count": { "type": "integer", "minimum": 0, "description": "Buckets with a transport deny that does not conclusively cover the whole bucket: scoped principals, subset actions, extra conditions, or partial resources." },
+        "tls_unenforced_bucket_count": { "type": "integer", "minimum": 0, "description": "Buckets whose policy says nothing about transport, or that have no policy. S3 endpoints answer HTTP, so plaintext requests are allowed." },
+        "tls_enforcement_unknown_bucket_count": { "type": "integer", "minimum": 0, "description": "Buckets whose policy could not be read. Unknown is never reported as unenforced." },
         "public_access_blocked": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets whose effective S3 Block Public Access settings block public access." },
         "public_access_block_unknown_count": { "type": "integer", "minimum": 0, "description": "Buckets whose effective S3 Block Public Access setting could not be fully evaluated." },
         "default_encryption_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets whose default encryption was evaluated and enabled." },
@@ -148,7 +178,7 @@
         "logging_enabled": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percentage of buckets with server access logging enabled. Log sink buckets (targets of other buckets' logging) are excluded from the denominator." },
         "log_sink_bucket_count": { "type": "integer", "minimum": 0, "description": "Buckets identified as server access log destinations for at least one other bucket. These are excluded from the logging_enabled denominator." },
         "account_public_access_block_enabled": { "type": "boolean" },
-        "buckets": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-bucket rows with is_log_sink flag. Per-bucket policy/acl/lifecycle attached at internal." }
+        "buckets": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-bucket rows with is_log_sink flag and tls_enforcement verdict. Per-bucket policy/acl/lifecycle attached at internal." }
       }
     },
 
@@ -157,6 +187,17 @@
       "required": ["instances", "clusters"],
       "properties": {
         "regions_evaluated_count": { "type": "integer", "minimum": 0, "description": "Regions whose RDS listing succeeded. The aggregates cover only these regions and are meaningful only when regions_failed is absent." },
+        "event_subscription_count": { "type": "integer", "minimum": 0 },
+        "backup_failure_alerting_subscription_count": { "type": "integer", "minimum": 0, "description": "Enabled subscriptions that would carry a backup failure. Empty event categories cover everything, so subscribe-to-all subscriptions count." },
+        "backup_failure_alerting_reaching_subscriber_count": { "type": "integer", "minimum": 0, "description": "Subscriptions where the chain completes: covering backup failures and delivering to a topic with a confirmed subscriber." },
+        "backup_alerting_topics_unresolved_count": { "type": "integer", "minimum": 0, "description": "Covering subscriptions whose topic subscribers could not be read, so their reach is unproven." },
+        "event_subscriptions_unresolved_region_count": { "type": "integer", "minimum": 0, "description": "Regions where event subscriptions could not be listed." },
+        "dml_logging_configured_count": { "type": "integer", "minimum": 0, "description": "Postgres instances whose engine configuration logs data changes and exports the log off the instance: pgaudit with write coverage or log_statement at mod or all, parameter group in sync." },
+        "dml_logging_not_exported_count": { "type": "integer", "minimum": 0, "description": "Instances logging data changes into a log that never leaves the instance." },
+        "dml_logging_pending_count": { "type": "integer", "minimum": 0, "description": "Instances whose logging configuration awaits a reboot: desired, not in force." },
+        "dml_logging_not_configured_count": { "type": "integer", "minimum": 0, "description": "Postgres instances whose engine configuration does not log data changes." },
+        "dml_logging_unknown_count": { "type": "integer", "minimum": 0, "description": "Instances whose parameters could not be read. Unknown is never reported as not configured." },
+        "dml_logging_not_classified_count": { "type": "integer", "minimum": 0, "description": "Engines this classifier does not interpret, including aurora-postgresql, whose settings live in cluster parameter groups." },
         "regions_failed": { "type": "array", "items": { "type": "string" }, "description": "Regions whose RDS listing failed. Absent when every region evaluated." },
         "database_count": { "type": "integer", "minimum": 0, "description": "Instances plus clusters across evaluated regions, so vacuous aggregates (zero databases) are distinguishable from real ones." },
         "encrypted_at_rest": { "type": "integer", "minimum": 0, "maximum": 100 },
@@ -187,6 +228,15 @@
       "type": "object",
       "required": ["cloudtrail", "config", "guardduty", "security_hub", "inspector"],
       "properties": {
+            "trail_buckets_retained_indefinitely_count": { "type": "integer", "minimum": 0, "description": "Trail delivery buckets with no covering lifecycle expiration: audit logs are kept until someone deletes them. Meets a retain-for-N requirement and fails a delete-after-N one." },
+            "trail_buckets_expiring_count": { "type": "integer", "minimum": 0 },
+            "trail_bucket_min_expiration_days": { "type": "integer", "minimum": 0, "description": "The shortest covering expiration across trail buckets: the binding retention number. Transitions to colder storage preserve data and are not counted as expiration." },
+            "trail_buckets_not_in_account_count": { "type": "integer", "minimum": 0, "description": "Delivery buckets outside this account, the normal shape for organization trails delivering to a log archive account. Enroll that account to make them readable." },
+            "trail_buckets_retention_unknown_count": { "type": "integer", "minimum": 0 },
+            "trail_buckets_object_locked_count": { "type": "integer", "minimum": 0, "description": "Delivery buckets with object lock default retention: nobody shortens audit log retention, not even an administrator when the mode is COMPLIANCE." },
+            "trail_buckets_public_access_blocked_count": { "type": "integer", "minimum": 0, "description": "Delivery buckets with an effective public access block, from the account level or the bucket level." },
+            "trail_buckets_public_access_not_blocked_count": { "type": "integer", "minimum": 0, "description": "Delivery buckets with no effective public access block. A trail bucket has no legitimate public readership, so this is an unambiguous finding. The block is the shield: bucket policy and ACL exposure are examined separately at internal level." },
+            "trail_buckets_public_access_unknown_count": { "type": "integer", "minimum": 0, "description": "Delivery buckets whose block state could not be fully read. Not-blocked needs both the account and bucket sides known, because the unreadable side could be the one that blocks." },
         "cloudtrail": {
           "type": "object",
           "required": ["enabled", "multi_region_enabled", "trails"],
@@ -224,6 +274,23 @@
             "findings": { "$ref": "#/definitions/LevelGatedArray", "description": "Internal: unarchived high-or-critical finding rows. Capped at 5000 per detector." },
             "findings_truncated": { "type": "boolean" },
             "findings_dropped_count": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "access_analyzer": {
+          "type": "object",
+          "description": "IAM Access Analyzer coverage, region by region. Only an ACTIVE analyzer analyzes anything, and in an organization the analyzer often lives in a delegated administrator account, so absence here is not absence of coverage.",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "analyzer_count": { "type": "integer", "minimum": 0 },
+            "regions_evaluated_count": { "type": "integer", "minimum": 0 },
+            "regions_with_active_analyzer_count": { "type": "integer", "minimum": 0 },
+            "regions_unresolved_count": { "type": "integer", "minimum": 0 },
+            "inactive_analyzer_count": { "type": "integer", "minimum": 0, "description": "Analyzers that are creating, disabled, or failed: configuration present, coverage absent." },
+            "organization_analyzer_present": { "type": "boolean" },
+            "active_findings_count": { "type": "integer", "minimum": 0 },
+            "archived_findings_count": { "type": "integer", "minimum": 0, "description": "Archived findings mean someone triages them; a pile of stale active findings means nobody looks." },
+            "analyzers_with_unresolved_findings_count": { "type": "integer", "minimum": 0, "description": "Active analyzers whose findings could not be listed. Excluded from the finding counts rather than counted as zero." },
+            "analyzers": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
           }
         },
         "security_hub": {
@@ -319,6 +386,8 @@
         "imdsv2_required_count": { "type": "integer", "minimum": 0 },
         "public_ip_count": { "type": "integer", "minimum": 0 },
         "default_vpc_count": { "type": "integer", "minimum": 0 },
+        "unattached_volume_count": { "type": "integer", "minimum": 0, "description": "EBS volumes attached to no instance. They retain their data and are not covered by the instance figure below." },
+        "unattached_unencrypted_volume_count": { "type": "integer", "minimum": 0, "description": "Unattached volumes without encryption at rest." },
         "instances_with_unencrypted_volume_count": { "type": "integer", "minimum": 0 },
         "instances": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-instance rows; internal adds iam_instance_profile_arn / key_name / tags / attached_volume_ids." },
         "instances_truncated": { "type": "boolean" },
@@ -326,6 +395,283 @@
       }
     },
 
+    "AutoScalingMetrics": {
+      "type": "object",
+      "description": "EC2 auto scaling groups: the instance-based sibling of the ECS capacity evidence.",
+      "required": ["group_count", "single_instance_group_count", "groups_with_scaling_policy_count"],
+      "properties": {
+        "group_count": { "type": "integer", "minimum": 0 },
+        "single_instance_group_count": { "type": "integer", "minimum": 0, "description": "Groups whose minimum size is one instance: zero redundancy. Sometimes deliberate, as in the bastion pattern where the group exists for self-healing rather than capacity." },
+        "single_zone_group_count": { "type": "integer", "minimum": 0, "description": "Groups spanning one availability zone." },
+        "groups_with_scaling_policy_count": { "type": "integer", "minimum": 0, "description": "Groups with at least one scaling policy. A group without one holds capacity but only changes it when told to." },
+        "groups_with_suspended_processes_count": { "type": "integer", "minimum": 0, "description": "Groups with scaling processes suspended: the configuration is present but inert." },
+        "groups_with_elb_health_check_count": { "type": "integer", "minimum": 0, "description": "Groups replacing instances on load balancer health, so an instance is replaced when the application stops answering rather than only when the VM dies." },
+        "load_balanced_groups_without_elb_health_check_count": { "type": "integer", "minimum": 0, "description": "Load-balanced groups still on EC2-only health checks. The target group stops routing to a hung application, but the instance is never replaced because the VM reports healthy: detection without response." },
+        "groups_on_launch_configurations_count": { "type": "integer", "minimum": 0, "description": "Groups still on launch configurations, which AWS has deprecated in favor of launch templates." },
+        "groups": { "type": "array", "items": { "$ref": "#/definitions/AutoScalingGroupRow" } }
+      }
+    },
+    "AutoScalingGroupRow": {
+      "type": "object",
+      "required": ["name", "region", "min_size", "max_size", "desired_capacity", "policy_count"],
+      "properties": {
+        "name": { "type": "string" },
+        "region": { "type": "string" },
+        "min_size": { "type": "integer", "minimum": 0 },
+        "max_size": { "type": "integer", "minimum": 0 },
+        "desired_capacity": { "type": "integer", "minimum": 0 },
+        "availability_zone_count": { "type": "integer", "minimum": 0 },
+        "health_check_type": { "type": "string" },
+        "health_check_grace_period_seconds": { "type": "integer", "minimum": 0, "description": "How long a new instance is exempt from health replacement while it boots. Too short causes replacement loops; too long delays detection." },
+        "uses_launch_template": { "type": "boolean" },
+        "load_balanced": { "type": "boolean" },
+        "suspended_process_count": { "type": "integer", "minimum": 0 },
+        "policy_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ECSMetrics": {
+      "type": "object",
+      "description": "Container service capacity: how services scale and how deployments fail safe. Task definitions are never read, because container definitions embed environment variables that routinely hold credentials.",
+      "required": ["cluster_count", "service_count", "services_with_autoscaling_count", "services_with_scaling_policy_count", "single_task_service_count"],
+      "properties": {
+        "cluster_count": { "type": "integer", "minimum": 0 },
+        "service_count": { "type": "integer", "minimum": 0 },
+        "fargate_service_count": { "type": "integer", "minimum": 0 },
+        "services_with_autoscaling_count": { "type": "integer", "minimum": 0, "description": "Services with a registered capacity range." },
+        "services_with_scaling_policy_count": { "type": "integer", "minimum": 0, "description": "Services where the chain is complete: capacity bounds registered and a policy that moves the service between them." },
+        "single_task_service_count": { "type": "integer", "minimum": 0, "description": "Services whose capacity floor is one task: the scaling minimum where registered, otherwise the desired count. One task is zero redundancy." },
+        "services_with_circuit_breaker_count": { "type": "integer", "minimum": 0, "description": "Services whose deployments stop automatically when new tasks fail to become healthy." },
+        "services_with_public_ip_count": { "type": "integer", "minimum": 0, "description": "Services whose tasks receive public IP addresses. Zero corroborates a private-subnet architecture." },
+        "load_balanced_service_count": { "type": "integer", "minimum": 0 },
+        "scaling_unresolved_service_count": { "type": "integer", "minimum": 0, "description": "Services whose scaling state could not be read. Excluded from the capacity findings rather than counted as unscaled." },
+        "services": { "type": "array", "items": { "$ref": "#/definitions/ECSServiceRow" } }
+      }
+    },
+    "ECSServiceRow": {
+      "type": "object",
+      "required": ["cluster", "name", "region", "desired_count", "running_count", "auto_scaled"],
+      "properties": {
+        "cluster": { "type": "string" },
+        "name": { "type": "string" },
+        "region": { "type": "string" },
+        "launch_type": { "type": "string" },
+        "desired_count": { "type": "integer", "minimum": 0 },
+        "running_count": { "type": "integer", "minimum": 0 },
+        "auto_scaled": { "type": "boolean" },
+        "min_capacity": { "type": "integer", "minimum": 0 },
+        "max_capacity": { "type": "integer", "minimum": 0 },
+        "scaling_policy_types": { "type": "array", "items": { "type": "string" } },
+        "scaling_metrics": { "type": "array", "items": { "type": "string" }, "description": "The metrics the scaling policies track, predefined or custom." },
+        "circuit_breaker_enabled": { "type": "boolean" },
+        "circuit_breaker_rollback": { "type": "boolean" },
+        "minimum_healthy_percent": { "type": "integer", "minimum": 0 },
+        "maximum_percent": { "type": "integer", "minimum": 0 },
+        "assigns_public_ip": { "type": "boolean" },
+        "subnet_count": { "type": "integer", "minimum": 0 },
+        "load_balanced": { "type": "boolean" },
+        "health_check_grace_period_seconds": { "type": "integer", "minimum": 0, "description": "How long new tasks are exempt from load balancer health replacement while they start." },
+        "scaling_unresolved": { "type": "boolean" }
+      }
+    },
+    "TargetGroupRow": {
+      "type": "object",
+      "required": ["name", "region", "health_check_enabled", "attached"],
+      "properties": {
+        "name": { "type": "string" },
+        "region": { "type": "string" },
+        "protocol": { "type": "string" },
+        "target_type": { "type": "string" },
+        "health_check_enabled": { "type": "boolean" },
+        "health_check_interval_seconds": { "type": "integer", "minimum": 0 },
+        "healthy_threshold_count": { "type": "integer", "minimum": 0 },
+        "unhealthy_threshold_count": { "type": "integer", "minimum": 0 },
+        "attached": { "type": "boolean", "description": "Whether any load balancer uses this target group." }
+      }
+    },
+    "SESMetrics": {
+      "type": "object",
+      "description": "Outbound mail transport enforcement. SES attempts TLS on every delivery and falls back to plaintext unless a configuration set says REQUIRE, so only REQUIRE counts as enforced.",
+      "required": ["configuration_set_count", "configuration_sets_requiring_tls_count", "identity_count", "identities_requiring_tls_count"],
+      "properties": {
+        "configuration_set_count": { "type": "integer", "minimum": 0 },
+        "configuration_sets_requiring_tls_count": { "type": "integer", "minimum": 0 },
+        "configuration_sets_opportunistic_tls_count": { "type": "integer", "minimum": 0, "description": "Sets whose policy is OPTIONAL or unset. Both mean TLS is attempted and plaintext is the fallback." },
+        "configuration_sets_unresolved_count": { "type": "integer", "minimum": 0, "description": "Sets whose details could not be read, so their policy is unproven rather than opportunistic." },
+        "identity_count": { "type": "integer", "minimum": 0 },
+        "identities_requiring_tls_count": { "type": "integer", "minimum": 0, "description": "Sending-enabled identities whose default configuration set requires TLS, so mail naming no set at send time is covered. A send that names its own set can override this; that choice is per message and not visible in config." },
+        "sending_disabled_identity_count": { "type": "integer", "minimum": 0 },
+        "identities_unresolved_count": { "type": "integer", "minimum": 0 },
+        "configuration_sets": { "type": "array", "items": { "$ref": "#/definitions/SESConfigurationSetRow" } },
+        "identities": { "type": "array", "items": { "$ref": "#/definitions/SESIdentityRow" } }
+      }
+    },
+    "SESConfigurationSetRow": {
+      "type": "object",
+      "required": ["name", "region"],
+      "properties": {
+        "name": { "type": "string" },
+        "region": { "type": "string" },
+        "tls_policy": { "type": "string" },
+        "unresolved": { "type": "boolean" }
+      }
+    },
+    "SESIdentityRow": {
+      "type": "object",
+      "required": ["name", "region", "type", "sending_enabled", "default_requires_tls"],
+      "properties": {
+        "name": { "type": "string" },
+        "region": { "type": "string" },
+        "type": { "type": "string" },
+        "sending_enabled": { "type": "boolean" },
+        "default_configuration_set": { "type": "string" },
+        "default_requires_tls": { "type": "boolean" },
+        "unresolved": { "type": "boolean" }
+      }
+    },
+    "CloudFrontMetrics": {
+      "type": "object",
+      "description": "CloudFront distribution transport enforcement on both hops: viewer to edge, and edge to origin. Meaningful only when distributions_evaluated is true, so an unread account is never mistaken for one with no distributions.",
+      "required": ["distributions_evaluated", "distribution_count", "distributions_allowing_plaintext_viewers_count"],
+      "properties": {
+        "distributions_evaluated": { "type": "boolean" },
+        "distributions_error_code": { "type": "string" },
+        "distribution_count": { "type": "integer", "minimum": 0 },
+        "disabled_distribution_count": { "type": "integer", "minimum": 0, "description": "Distributions that are switched off. Their configuration is latent, so they are excluded from the findings below." },
+        "distributions_allowing_plaintext_viewers_count": { "type": "integer", "minimum": 0, "description": "Enabled distributions where any cache behavior, default or path-scoped, is set to allow-all. Redirect-to-HTTPS and HTTPS-only both deliver content over TLS." },
+        "distributions_with_http_only_origin_count": { "type": "integer", "minimum": 0, "description": "Enabled distributions fetching from at least one custom origin over plaintext regardless of the viewer policy." },
+        "distributions_with_match_viewer_origin_count": { "type": "integer", "minimum": 0, "description": "Enabled distributions whose origin fetch mirrors the viewer's scheme, so the origin hop is plaintext whenever the viewer request was." },
+        "distributions_by_minimum_tls": { "type": "object", "additionalProperties": { "type": "integer" }, "description": "Enabled distributions by minimum viewer TLS version." },
+        "distributions": { "type": "array", "items": { "$ref": "#/definitions/CloudFrontDistributionRow" } }
+      }
+    },
+    "CloudFrontDistributionRow": {
+      "type": "object",
+      "required": ["id", "domain", "enabled", "allows_plaintext_viewers"],
+      "properties": {
+        "id": { "type": "string" },
+        "domain": { "type": "string" },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "enabled": { "type": "boolean" },
+        "allows_plaintext_viewers": { "type": "boolean" },
+        "minimum_protocol_version": { "type": "string" },
+        "http_only_origin_count": { "type": "integer", "minimum": 0 },
+        "match_viewer_origin_count": { "type": "integer", "minimum": 0 },
+        "https_only_origin_count": { "type": "integer", "minimum": 0 },
+        "s3_origin_count": { "type": "integer", "minimum": 0, "description": "S3 REST origins, which declare no protocol in config and so are counted rather than classified." }
+      }
+    },
+    "LoadBalancerMetrics": {
+      "type": "object",
+      "description": "Load balancer transport enforcement: which hops force TLS toward the client and which accept plaintext.",
+      "required": ["load_balancer_count", "alb_count", "albs_serving_plaintext_count", "nlb_count"],
+      "properties": {
+        "load_balancer_count": { "type": "integer", "minimum": 0 },
+        "alb_count": { "type": "integer", "minimum": 0, "description": "Application load balancers." },
+        "albs_serving_plaintext_count": { "type": "integer", "minimum": 0, "description": "ALBs with at least one HTTP listener whose default action is not a redirect to HTTPS. Listener rules beyond the default action are not inspected." },
+        "internet_facing_albs_serving_plaintext_count": { "type": "integer", "minimum": 0, "description": "The subset of plaintext-serving ALBs reachable from the internet." },
+        "albs_without_https_listener_count": { "type": "integer", "minimum": 0, "description": "ALBs with readable listeners and no HTTPS listener at all." },
+        "nlb_count": { "type": "integer", "minimum": 0, "description": "Network load balancers." },
+        "nlb_tls_listener_count": { "type": "integer", "minimum": 0, "description": "NLB listeners terminating TLS at the load balancer." },
+        "nlb_tcp_passthrough_listener_count": { "type": "integer", "minimum": 0, "description": "NLB listeners forwarding bytes untouched. Whether the stream is encrypted is decided by the endpoints, not this hop." },
+        "single_zone_load_balancer_count": { "type": "integer", "minimum": 0, "description": "Load balancers spanning one availability zone: no zone redundancy. ALBs cannot be single-zone by AWS rule, so this in practice counts network load balancers." },
+        "target_group_count": { "type": "integer", "minimum": 0 },
+        "target_groups_without_health_check_count": { "type": "integer", "minimum": 0, "description": "Target groups with health checking off, so the load balancer cannot detect a dead backend." },
+        "target_group_listing_failed_region_count": { "type": "integer", "minimum": 0, "description": "Regions where target groups could not be listed, so their health-check posture is unproven." },
+        "tls_listeners_by_policy": { "type": "object", "additionalProperties": { "type": "integer" }, "description": "TLS-terminating listeners by security policy name. The policy fixes the minimum TLS version the listener accepts." },
+        "listeners_unresolved_count": { "type": "integer", "minimum": 0, "description": "Load balancers whose listeners could not be read, so their transport posture is unproven rather than clean." },
+        "load_balancers": { "type": "array", "items": { "$ref": "#/definitions/LoadBalancerRow" } },
+        "target_groups": { "type": "array", "items": { "$ref": "#/definitions/TargetGroupRow" } }
+      }
+    },
+    "LoadBalancerRow": {
+      "type": "object",
+      "required": ["name", "region", "type", "scheme"],
+      "properties": {
+        "name": { "type": "string" },
+        "region": { "type": "string" },
+        "type": { "type": "string" },
+        "scheme": { "type": "string" },
+        "availability_zone_count": { "type": "integer", "minimum": 0 },
+        "listeners": { "type": "array", "items": { "$ref": "#/definitions/ListenerRow" } },
+        "listeners_unresolved": { "type": "boolean" }
+      }
+    },
+    "ListenerRow": {
+      "type": "object",
+      "required": ["port", "protocol", "redirects_to_https"],
+      "properties": {
+        "port": { "type": "integer" },
+        "protocol": { "type": "string" },
+        "ssl_policy": { "type": "string" },
+        "redirects_to_https": { "type": "boolean" }
+      }
+    },
+    "StoredImageMetrics": {
+      "type": "object",
+      "description": "Owned EBS snapshots and AMIs: public exposure and encryption at rest. Volumes attached to running instances are covered under ec2 instead.",
+      "required": ["snapshot_count", "public_snapshot_count", "image_count", "public_image_count"],
+      "properties": {
+        "snapshot_count": { "type": "integer", "minimum": 0, "description": "Snapshots owned by this account. Snapshots owned by others are never listed." },
+        "unencrypted_snapshot_count": { "type": "integer", "minimum": 0 },
+        "public_snapshot_count": { "type": "integer", "minimum": 0, "description": "Owned snapshots that anyone can restore." },
+        "snapshot_exposure_unknown": { "type": "boolean", "description": "The public-exposure check failed in at least one region, so a zero public count is unproven rather than clean." },
+        "image_count": { "type": "integer", "minimum": 0, "description": "AMIs owned by this account." },
+        "images_with_unencrypted_volume_count": { "type": "integer", "minimum": 0, "description": "Images with at least one unencrypted EBS device. Instance-store images have no EBS device and are counted in neither direction." },
+        "public_image_count": { "type": "integer", "minimum": 0, "description": "Owned AMIs that anyone can launch." },
+        "image_exposure_unknown": { "type": "boolean", "description": "The AMI lookup failed in at least one region, so a zero public count is unproven." },
+        "public_snapshots": { "type": "array", "items": { "$ref": "#/definitions/PublicResourceRow" } },
+        "public_images": { "type": "array", "items": { "$ref": "#/definitions/PublicResourceRow" } }
+      }
+    },
+    "PublicResourceRow": {
+      "type": "object",
+      "required": ["id", "region", "encrypted"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "region": { "type": "string" },
+        "encrypted": { "type": "boolean" },
+        "created_at": { "type": "string" }
+      }
+    },
+    "MonitoringMetrics": {
+      "type": "object",
+      "description": "CloudWatch alarms and how far their notifications travel. Zero alarms is not evidence that nobody is paged: escalation through EventBridge or a third-party monitor is not visible here.",
+      "required": ["alarm_count", "alarms_reaching_subscriber_count", "notification_topic_count"],
+      "properties": {
+        "alarm_count": { "type": "integer", "minimum": 0 },
+        "alarms_with_actions_disabled_count": { "type": "integer", "minimum": 0, "description": "Alarms that evaluate but take no action." },
+        "alarms_without_notification_count": { "type": "integer", "minimum": 0, "description": "Alarms with no notification topic attached." },
+        "alarms_insufficient_data_count": { "type": "integer", "minimum": 0, "description": "Alarms that have never had enough data to evaluate." },
+        "alarms_reaching_subscriber_count": { "type": "integer", "minimum": 0, "description": "Alarms whose escalation chain is unbroken: actions enabled, a notification topic attached, and that topic holding at least one confirmed subscriber." },
+        "notification_topic_count": { "type": "integer", "minimum": 0 },
+        "topics_without_confirmed_subscriber_count": { "type": "integer", "minimum": 0, "description": "Topics that would notify nobody." },
+        "topics_unresolved_count": { "type": "integer", "minimum": 0, "description": "Topics whose subscriptions could not be read." },
+        "subscriptions_by_protocol": { "type": "object", "additionalProperties": { "type": "integer" }, "description": "Subscriber counts per protocol. Endpoints are never collected: they are personal contact details, and an HTTPS endpoint is routinely a webhook URL that is itself a credential." },
+        "subscriptions_pending_confirmation_count": { "type": "integer", "minimum": 0, "description": "Subscriptions that never deliver until confirmed." },
+        "alarms": { "type": "array", "items": { "$ref": "#/definitions/CloudWatchAlarmRow" } },
+        "alarms_truncated": { "type": "boolean" },
+        "alarms_dropped_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "CloudWatchAlarmRow": {
+      "type": "object",
+      "required": ["name", "region", "actions_enabled", "state_value", "reaches_subscriber"],
+      "properties": {
+        "name": { "type": "string" },
+        "region": { "type": "string" },
+        "namespace": { "type": "string" },
+        "metric_name": { "type": "string" },
+        "comparison_operator": { "type": "string" },
+        "threshold": { "type": "number" },
+        "evaluation_periods": { "type": "integer" },
+        "actions_enabled": { "type": "boolean" },
+        "state_value": { "type": "string" },
+        "notification_topics": { "type": "integer", "minimum": 0, "description": "Count of SNS topics this alarm notifies." },
+        "reaches_subscriber": { "type": "boolean" },
+        "other_action_count": { "type": "integer", "minimum": 0, "description": "Alarm actions that are not SNS topics, counted but not named." }
+      }
+    },
     "CloudWatchLogsMetrics": {
       "type": "object",
       "required": [
@@ -333,9 +679,9 @@
         "log_groups", "log_groups_truncated", "log_groups_dropped_count"
       ],
       "properties": {
-        "log_group_count": { "type": "integer", "minimum": 0 },
-        "log_groups_without_retention_count": { "type": "integer", "minimum": 0 },
-        "log_groups_without_customer_kms_count": { "type": "integer", "minimum": 0 },
+        "log_group_count": { "description": "Total log groups across scanned regions.", "type": "integer", "minimum": 0 },
+        "log_groups_without_retention_count": { "description": "Log groups with no retention setting, which in CloudWatch Logs means they retain indefinitely. Read as a data-minimisation finding, not a retention gap: a group counted here keeps everything forever, so it satisfies a retain-for-N-months requirement while failing a delete-after-N-months one.", "type": "integer", "minimum": 0 },
+        "log_groups_without_customer_kms_count": { "description": "Log groups encrypted with an AWS-managed key rather than a customer-managed KMS key.", "type": "integer", "minimum": 0 },
         "log_groups": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-log-group rows; internal adds arn and kms_key_arn." },
         "log_groups_truncated": { "type": "boolean" },
         "log_groups_dropped_count": { "type": "integer", "minimum": 0 }

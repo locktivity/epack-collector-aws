@@ -97,11 +97,11 @@ type Client interface {
 	LambdaFunctionHasResourcePolicy(ctx context.Context, region, functionName string) (bool, error)
 	LambdaFunctionURLAuthType(ctx context.Context, region, functionName string) (hasURL bool, authType string, err error)
 
-	// EC2 instances (regional). ListEC2Volumes returns a volumeID→encrypted
+	// EC2 instances (regional). ListEC2Volumes returns a volumeID→state
 	// lookup so callers can enrich instances without holding the full Volume
 	// objects (encryption is the only volume-level posture signal we use).
 	ListEC2Instances(ctx context.Context, region string) ([]EC2Instance, error)
-	ListEC2Volumes(ctx context.Context, region string) (map[string]bool, error)
+	ListEC2Volumes(ctx context.Context, region string) (map[string]EBSVolumeState, error)
 
 	// CloudWatch Logs (regional). All posture-relevant metadata comes from the
 	// single paginated DescribeLogGroups response; no per-group follow-up calls.
@@ -863,6 +863,11 @@ func toLifecycleRule(r s3types.LifecycleRule) BucketLifecycleRule {
 	}
 	if r.Filter != nil && r.Filter.Prefix != nil {
 		rule.Prefix = aws.ToString(r.Filter.Prefix)
+	} else if r.Prefix != nil { //nolint:staticcheck // legacy rules still return this field
+		// Legacy rules carry the prefix at the top level, deprecated but still
+		// served. Dropping it would make a scoped rule read as covering the
+		// whole bucket.
+		rule.Prefix = aws.ToString(r.Prefix) //nolint:staticcheck // see above
 	}
 	for _, tr := range r.Transitions {
 		if s := formatLifecycleTransition(tr); s != "" {
@@ -870,7 +875,49 @@ func toLifecycleRule(r s3types.LifecycleRule) BucketLifecycleRule {
 		}
 	}
 	rule.Expiration = formatLifecycleExpiration(r.Expiration)
+	if r.Expiration != nil {
+		rule.ExpirationDays = aws.ToInt32(r.Expiration.Days)
+		rule.ExpirationIsDate = r.Expiration.Date != nil
+	}
 	return rule
+}
+
+// GetBucketRegion resolves a bucket's region. Fails for buckets outside the
+// account, which is how a cross-account trail delivery bucket announces
+// itself.
+func (c *AWSClient) GetBucketRegion(ctx context.Context, bucket string) (string, error) {
+	s3Client := s3.NewFromConfig(c.cfg)
+	out, err := s3Client.GetBucketLocation(ctx, &s3.GetBucketLocationInput{Bucket: aws.String(bucket)})
+	if err != nil {
+		return "", fmt.Errorf("locating bucket %s: %w", bucket, err)
+	}
+	region := string(out.LocationConstraint)
+	if region == "" {
+		region = "us-east-1"
+	}
+	return region, nil
+}
+
+// GetBucketObjectLock returns the bucket's object lock default retention, or
+// nil when object lock is not configured.
+func (c *AWSClient) GetBucketObjectLock(ctx context.Context, region, bucket string) (*ObjectLockConfig, error) {
+	s3Client := s3.NewFromConfig(c.s3ConfigForRegion(region))
+	out, err := s3Client.GetObjectLockConfiguration(ctx, &s3.GetObjectLockConfigurationInput{Bucket: aws.String(bucket)})
+	if err != nil {
+		if isAPIErrorCode(err, "ObjectLockConfigurationNotFoundError") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting object lock for %s: %w", bucket, err)
+	}
+	if out.ObjectLockConfiguration == nil || out.ObjectLockConfiguration.Rule == nil || out.ObjectLockConfiguration.Rule.DefaultRetention == nil {
+		return nil, nil
+	}
+	retention := out.ObjectLockConfiguration.Rule.DefaultRetention
+	return &ObjectLockConfig{
+		Mode:  string(retention.Mode),
+		Days:  aws.ToInt32(retention.Days),
+		Years: aws.ToInt32(retention.Years),
+	}, nil
 }
 
 func formatLifecycleTransition(tr s3types.Transition) string {
@@ -922,6 +969,14 @@ func (c *AWSClient) GetAccountPublicAccessBlock(ctx context.Context, accountID s
 	}
 
 	return pab, nil
+}
+
+// GetBucketPublicAccessBlock returns one bucket's public access block, for
+// joins that need it outside the full bucket listing.
+func (c *AWSClient) GetBucketPublicAccessBlock(ctx context.Context, region, bucket string) PublicAccessBlockSettings {
+	s3Client := s3.NewFromConfig(c.s3ConfigForRegion(region))
+	out, err := s3Client.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{Bucket: aws.String(bucket)})
+	return s3BucketPublicAccessBlockEvaluation(out, err)
 }
 
 func s3BucketPublicAccessBlockEvaluation(output *s3.GetPublicAccessBlockOutput, err error) PublicAccessBlockSettings {
@@ -994,7 +1049,7 @@ func (c *AWSClient) ListDBInstances(ctx context.Context, region string) ([]DBIns
 		}
 
 		for _, db := range output.DBInstances {
-			instances = append(instances, DBInstance{
+			instance := DBInstance{
 				DBInstanceIdentifier:    aws.ToString(db.DBInstanceIdentifier),
 				Engine:                  aws.ToString(db.Engine),
 				EngineVersion:           aws.ToString(db.EngineVersion),
@@ -1004,8 +1059,15 @@ func (c *AWSClient) ListDBInstances(ctx context.Context, region string) ([]DBIns
 				BackupRetentionPeriod:   int(aws.ToInt32(db.BackupRetentionPeriod)),
 				MultiAZ:                 aws.ToBool(db.MultiAZ),
 				AutoMinorVersionUpgrade: aws.ToBool(db.AutoMinorVersionUpgrade),
+				PreferredBackupWindow:   aws.ToString(db.PreferredBackupWindow),
+				LogExports:              db.EnabledCloudwatchLogsExports,
 				LatestRestorableTime:    db.LatestRestorableTime,
-			})
+			}
+			if len(db.DBParameterGroups) > 0 {
+				instance.ParameterGroupName = aws.ToString(db.DBParameterGroups[0].DBParameterGroupName)
+				instance.ParameterApplyStatus = aws.ToString(db.DBParameterGroups[0].ParameterApplyStatus)
+			}
+			instances = append(instances, instance)
 		}
 	}
 
@@ -1180,6 +1242,7 @@ func (c *AWSClient) DescribeTrails(ctx context.Context) ([]Trail, error) {
 			TrailARN:                  aws.ToString(t.TrailARN),
 			HomeRegion:                aws.ToString(t.HomeRegion),
 			S3BucketName:              aws.ToString(t.S3BucketName),
+			S3KeyPrefix:               aws.ToString(t.S3KeyPrefix),
 			IsMultiRegionTrail:        aws.ToBool(t.IsMultiRegionTrail),
 			IsOrganizationTrail:       aws.ToBool(t.IsOrganizationTrail),
 			LogFileValidationEnabled:  aws.ToBool(t.LogFileValidationEnabled),
@@ -1928,38 +1991,61 @@ func inspectorServerResourceKey(resource securityhubtypes.Resource) string {
 	return *resource.Id
 }
 
-// ListAccessAnalyzers returns IAM Access Analyzer analyzers in the specified region.
+// ListAccessAnalyzers returns IAM Access Analyzer analyzers in the specified
+// region, with findings counted only for active analyzers: an analyzer that is
+// creating, disabled, or failed evidences nothing.
 func (c *AWSClient) ListAccessAnalyzers(ctx context.Context, region string) ([]AccessAnalyzer, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	aaClient := accessanalyzer.NewFromConfig(cfg)
 
-	listOutput, err := aaClient.ListAnalyzers(ctx, &accessanalyzer.ListAnalyzersInput{})
-	if err != nil {
-		return nil, fmt.Errorf("listing access analyzers: %w", err)
-	}
-
-	analyzers := make([]AccessAnalyzer, 0, len(listOutput.Analyzers))
-	for _, a := range listOutput.Analyzers {
-		analyzer := AccessAnalyzer{
-			Name:   aws.ToString(a.Name),
-			ARN:    aws.ToString(a.Arn),
-			Type:   string(a.Type),
-			Status: string(a.Status),
+	var analyzers []AccessAnalyzer
+	paginator := accessanalyzer.NewListAnalyzersPaginator(aaClient, &accessanalyzer.ListAnalyzersInput{})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing access analyzers in %s: %w", region, err)
 		}
-
-		// Get findings count
-		findingsOutput, err := aaClient.ListFindings(ctx, &accessanalyzer.ListFindingsInput{
-			AnalyzerArn: a.Arn,
-		})
-		if err == nil {
-			analyzer.FindingsCount = len(findingsOutput.Findings)
+		for _, a := range page.Analyzers {
+			analyzer := AccessAnalyzer{
+				Name:   aws.ToString(a.Name),
+				ARN:    aws.ToString(a.Arn),
+				Type:   string(a.Type),
+				Status: string(a.Status),
+			}
+			if analyzer.Status == "ACTIVE" {
+				c.countAnalyzerFindings(ctx, aaClient, &analyzer)
+			}
+			analyzers = append(analyzers, analyzer)
 		}
-
-		analyzers = append(analyzers, analyzer)
 	}
-
 	return analyzers, nil
+}
+
+// countAnalyzerFindings buckets the analyzer's findings by triage state. A
+// failed listing marks the analyzer unresolved rather than reporting zero: an
+// AccessDenied here must never read as a clean analyzer.
+func (c *AWSClient) countAnalyzerFindings(ctx context.Context, client *accessanalyzer.Client, analyzer *AccessAnalyzer) {
+	paginator := accessanalyzer.NewListFindingsPaginator(client, &accessanalyzer.ListFindingsInput{
+		AnalyzerArn: aws.String(analyzer.ARN),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			analyzer.FindingsUnresolved = true
+			analyzer.ActiveFindingsCount = 0
+			analyzer.ArchivedFindingsCount = 0
+			return
+		}
+		for _, f := range page.Findings {
+			switch string(f.Status) {
+			case "ACTIVE":
+				analyzer.ActiveFindingsCount++
+			case "ARCHIVED":
+				analyzer.ArchivedFindingsCount++
+			}
+		}
+	}
 }
 
 func isAPIErrorCode(err error, code string) bool {

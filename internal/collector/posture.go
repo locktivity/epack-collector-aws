@@ -85,6 +85,13 @@ type AccountPosture struct {
 	Lambda          LambdaMetrics         `json:"lambda"`
 	EC2             EC2Metrics            `json:"ec2"`
 	CloudWatchLogs  CloudWatchLogsMetrics `json:"cloudwatch_logs"`
+	Monitoring      MonitoringMetrics     `json:"monitoring"`
+	StoredImages    StoredImageMetrics    `json:"stored_images"`
+	LoadBalancers   LoadBalancerMetrics   `json:"load_balancers"`
+	CloudFront      CloudFrontMetrics     `json:"cloudfront"`
+	SES             SESMetrics            `json:"ses"`
+	ECS             ECSMetrics            `json:"ecs"`
+	AutoScaling     AutoScalingMetrics    `json:"auto_scaling"`
 	KMS             KMSMetrics            `json:"kms"`
 	SecretsManager  SecretsManagerMetrics `json:"secrets_manager"`
 	SSMParameters   SSMParametersMetrics  `json:"ssm_parameters"`
@@ -103,6 +110,17 @@ type IAMMetrics struct {
 	// as worst-case posture) and credential_report_error_code carries the cause.
 	CredentialReportEvaluated bool   `json:"credential_report_evaluated"`
 	CredentialReportErrorCode string `json:"credential_report_error_code,omitempty"`
+
+	// The account password policy governs IAM console passwords only, so it is
+	// meaningful only where iam_users_present is true. Three states, kept
+	// distinct because conflating any pair states something untrue:
+	// evaluated=false means the call failed; evaluated=true with no policy
+	// object means no policy is configured and AWS's own default applies (eight
+	// characters, no complexity requirement, no expiry), which is a finding
+	// rather than missing data; a policy object means it is configured.
+	PasswordPolicyEvaluated bool               `json:"password_policy_evaluated"`
+	PasswordPolicyErrorCode string             `json:"password_policy_error_code,omitempty"`
+	PasswordPolicy          *IAMPasswordPolicy `json:"password_policy,omitempty"`
 
 	IAMUsersPresent    bool `json:"iam_users_present"`
 	MFAEnabled         int  `json:"mfa_enabled"`
@@ -227,17 +245,28 @@ type S3Metrics struct {
 	// account_public_access_block_evaluated is true.
 	AccountPublicAccessBlockEvaluated bool `json:"account_public_access_block_evaluated"`
 
-	BucketCount                     int  `json:"bucket_count"`
-	PublicAccessBlocked             int  `json:"public_access_blocked"`
-	PublicAccessBlockUnknownCount   int  `json:"public_access_block_unknown_count"`
-	DefaultEncryptionEnabled        int  `json:"default_encryption_enabled"`
-	DefaultEncryptionEvaluatedCount int  `json:"default_encryption_evaluated_count"`
-	DefaultEncryptionInferredCount  int  `json:"default_encryption_inferred_count"`
-	DefaultEncryptionUnknownCount   int  `json:"default_encryption_unknown_count"`
-	VersioningEnabled               int  `json:"versioning_enabled"`
-	LoggingEnabled                  int  `json:"logging_enabled"`
-	LogSinkBucketCount              int  `json:"log_sink_bucket_count"`
-	AccountPublicAccessBlockEnabled bool `json:"account_public_access_block_enabled"`
+	BucketCount int `json:"bucket_count"`
+
+	// Transport enforcement at the bucket layer. S3 endpoints answer HTTP and
+	// HTTPS alike, so only a policy deny on aws:SecureTransport forces TLS.
+	// Unenforced is determinate (nothing in the policy addresses transport);
+	// partial means a transport statement exists but does not conclusively
+	// cover every principal, action, and resource; unknown means the policy
+	// could not be read and must never be reported as unenforced.
+	TLSEnforcedBucketCount           int  `json:"tls_enforced_bucket_count"`
+	TLSEnforcementPartialBucketCount int  `json:"tls_enforcement_partial_bucket_count"`
+	TLSUnenforcedBucketCount         int  `json:"tls_unenforced_bucket_count"`
+	TLSEnforcementUnknownBucketCount int  `json:"tls_enforcement_unknown_bucket_count,omitempty"`
+	PublicAccessBlocked              int  `json:"public_access_blocked"`
+	PublicAccessBlockUnknownCount    int  `json:"public_access_block_unknown_count"`
+	DefaultEncryptionEnabled         int  `json:"default_encryption_enabled"`
+	DefaultEncryptionEvaluatedCount  int  `json:"default_encryption_evaluated_count"`
+	DefaultEncryptionInferredCount   int  `json:"default_encryption_inferred_count"`
+	DefaultEncryptionUnknownCount    int  `json:"default_encryption_unknown_count"`
+	VersioningEnabled                int  `json:"versioning_enabled"`
+	LoggingEnabled                   int  `json:"logging_enabled"`
+	LogSinkBucketCount               int  `json:"log_sink_bucket_count"`
+	AccountPublicAccessBlockEnabled  bool `json:"account_public_access_block_enabled"`
 
 	// Audit: present (possibly []) when collected at audit+; null when not collected.
 	Buckets []S3Bucket `json:"buckets"`
@@ -248,6 +277,7 @@ type S3Metrics struct {
 type S3Bucket struct {
 	// Audit:
 	Name                       string `json:"name"`
+	TLSEnforcement             string `json:"tls_enforcement,omitempty"`
 	Region                     string `json:"region,omitempty"`
 	PublicAccessBlocked        bool   `json:"public_access_blocked"`
 	DefaultEncryptionEnabled   *bool  `json:"default_encryption_enabled"`
@@ -314,7 +344,25 @@ type RDSMetrics struct {
 	// (zero databases) from real ones.
 	RegionsEvaluatedCount int      `json:"regions_evaluated_count"`
 	RegionsFailed         []string `json:"regions_failed,omitempty"`
-	DatabaseCount         int      `json:"database_count"`
+
+	// Backup-failure alerting: the chain is a subscription enabled and
+	// covering backup failures, delivering to a topic with a confirmed
+	// subscriber. Empty event categories cover everything, so the covering
+	// count includes subscribe-to-all subscriptions.
+	EventSubscriptionCount                       int `json:"event_subscription_count"`
+	BackupFailureAlertingSubscriptionCount       int `json:"backup_failure_alerting_subscription_count"`
+	BackupFailureAlertingReachingSubscriberCount int `json:"backup_failure_alerting_reaching_subscriber_count"`
+	BackupAlertingTopicsUnresolvedCount          int `json:"backup_alerting_topics_unresolved_count,omitempty"`
+	EventSubscriptionsUnresolvedRegionCount      int `json:"event_subscriptions_unresolved_region_count,omitempty"`
+
+	// Data-change logging classification across postgres instances.
+	DMLLoggingConfiguredCount    int `json:"dml_logging_configured_count"`
+	DMLLoggingNotExportedCount   int `json:"dml_logging_not_exported_count"`
+	DMLLoggingPendingCount       int `json:"dml_logging_pending_count"`
+	DMLLoggingNotConfiguredCount int `json:"dml_logging_not_configured_count"`
+	DMLLoggingUnknownCount       int `json:"dml_logging_unknown_count,omitempty"`
+	DMLLoggingNotClassifiedCount int `json:"dml_logging_not_classified_count"`
+	DatabaseCount                int `json:"database_count"`
 
 	EncryptedAtRest         int `json:"encrypted_at_rest"`
 	PubliclyAccessible      int `json:"publicly_accessible"`
@@ -340,7 +388,9 @@ type RDSInstance struct {
 	PubliclyAccessible    bool   `json:"publicly_accessible"`
 	DeletionProtection    bool   `json:"deletion_protection"`
 	BackupRetentionPeriod int    `json:"backup_retention_period"`
+	PreferredBackupWindow string `json:"preferred_backup_window,omitempty"`
 	MultiAZ               bool   `json:"multi_az"`
+	DMLLogging            string `json:"dml_logging,omitempty"`
 
 	// Internal:
 	LatestRestorableTime string `json:"latest_restorable_time,omitempty"`
@@ -427,11 +477,12 @@ type SGIngressRule struct {
 
 // AccountSecurity contains account-level security services status.
 type AccountSecurity struct {
-	CloudTrail  CloudTrailStatus  `json:"cloudtrail"`
-	Config      ConfigStatus      `json:"config"`
-	GuardDuty   GuardDutyStatus   `json:"guardduty"`
-	SecurityHub SecurityHubStatus `json:"security_hub"`
-	Inspector   InspectorStatus   `json:"inspector"`
+	CloudTrail     CloudTrailStatus     `json:"cloudtrail"`
+	Config         ConfigStatus         `json:"config"`
+	GuardDuty      GuardDutyStatus      `json:"guardduty"`
+	AccessAnalyzer AccessAnalyzerStatus `json:"access_analyzer"`
+	SecurityHub    SecurityHubStatus    `json:"security_hub"`
+	Inspector      InspectorStatus      `json:"inspector"`
 }
 
 // CloudTrailStatus contains CloudTrail configuration status.
@@ -440,6 +491,22 @@ type AccountSecurity struct {
 // surfaces the per-trail rows the booleans were derived from; no extra API
 // calls are needed.
 type CloudTrailStatus struct {
+	// Retention of the trail delivery buckets themselves: the S3 side of
+	// CloudTrail retention. Not-in-account is the normal shape for
+	// organization trails delivering to a log archive account.
+	TrailBucketsRetainedIndefinitelyCount int   `json:"trail_buckets_retained_indefinitely_count"`
+	TrailBucketsExpiringCount             int   `json:"trail_buckets_expiring_count"`
+	TrailBucketMinExpirationDays          int32 `json:"trail_bucket_min_expiration_days,omitempty"`
+	TrailBucketsNotInAccountCount         int   `json:"trail_buckets_not_in_account_count"`
+	TrailBucketsRetentionUnknownCount     int   `json:"trail_buckets_retention_unknown_count,omitempty"`
+	TrailBucketsObjectLockedCount         int   `json:"trail_buckets_object_locked_count"`
+
+	// Public access on the delivery buckets. A trail bucket has no legitimate
+	// public readership, so not-blocked here is an unambiguous finding.
+	TrailBucketsPublicAccessBlockedCount    int `json:"trail_buckets_public_access_blocked_count"`
+	TrailBucketsPublicAccessNotBlockedCount int `json:"trail_buckets_public_access_not_blocked_count"`
+	TrailBucketsPublicAccessUnknownCount    int `json:"trail_buckets_public_access_unknown_count,omitempty"`
+
 	// Trust: the summary booleans below are derived from the trail listing and
 	// are meaningful only when trail_listing_evaluated is true. On listing
 	// failure they hold zero values (which would otherwise read as worst-case
@@ -469,6 +536,11 @@ type CloudTrailTrail struct {
 	TrailARN                 string `json:"trail_arn,omitempty"`
 	HomeRegion               string `json:"home_region,omitempty"`
 	S3BucketName             string `json:"s3_bucket_name,omitempty"`
+	S3KeyPrefix              string `json:"s3_key_prefix,omitempty"`
+	BucketRetention          string `json:"bucket_retention,omitempty"`
+	BucketExpirationDays     int32  `json:"bucket_expiration_days,omitempty"`
+	BucketObjectLockMode     string `json:"bucket_object_lock_mode,omitempty"`
+	BucketPublicAccess       string `json:"bucket_public_access,omitempty"`
 	IsMultiRegionTrail       bool   `json:"is_multi_region_trail"`
 	IsOrganizationTrail      bool   `json:"is_organization_trail"`
 	LogFileValidationEnabled bool   `json:"log_file_validation_enabled"`
@@ -530,6 +602,45 @@ type ConfigRuleRow struct {
 	SourceIdentifier string `json:"source_identifier,omitempty"`
 	ComplianceState  string `json:"compliance_state,omitempty"`
 	LastEvaluated    string `json:"last_evaluated,omitempty"`
+}
+
+// AccessAnalyzerStatus contains IAM Access Analyzer coverage: whether
+// unintended external access is being analyzed, region by region. In an
+// organization the analyzer often lives in a delegated administrator account,
+// so an absence here is not an absence of coverage.
+type AccessAnalyzerStatus struct {
+	// Trust:
+	Enabled                        bool `json:"enabled"`
+	AnalyzerCount                  int  `json:"analyzer_count"`
+	RegionsEvaluatedCount          int  `json:"regions_evaluated_count"`
+	RegionsWithActiveAnalyzerCount int  `json:"regions_with_active_analyzer_count"`
+	RegionsUnresolvedCount         int  `json:"regions_unresolved_count,omitempty"`
+
+	// An analyzer that is creating, disabled, or failed analyzes nothing:
+	// configuration present, coverage absent.
+	InactiveAnalyzerCount       int  `json:"inactive_analyzer_count"`
+	OrganizationAnalyzerPresent bool `json:"organization_analyzer_present"`
+
+	// Findings split by triage state. Archived findings mean someone looks;
+	// stale active ones mean nobody does. Unresolved analyzers are excluded
+	// from both counts rather than counted as zero.
+	ActiveFindingsCount                  int `json:"active_findings_count"`
+	ArchivedFindingsCount                int `json:"archived_findings_count"`
+	AnalyzersWithUnresolvedFindingsCount int `json:"analyzers_with_unresolved_findings_count,omitempty"`
+
+	// Audit:
+	Analyzers []AccessAnalyzerRow `json:"analyzers,omitempty"`
+}
+
+// AccessAnalyzerRow is an audit-level analyzer inventory row.
+type AccessAnalyzerRow struct {
+	Name                  string `json:"name"`
+	Region                string `json:"region"`
+	Type                  string `json:"type"`
+	Status                string `json:"status"`
+	ActiveFindingsCount   int    `json:"active_findings_count"`
+	ArchivedFindingsCount int    `json:"archived_findings_count"`
+	FindingsUnresolved    bool   `json:"findings_unresolved,omitempty"`
 }
 
 // GuardDutyStatus contains GuardDuty status and high-severity finding counts.
@@ -641,6 +752,349 @@ type InspectorStatus struct {
 	UnpatchedFindings      int `json:"unpatched_findings,omitempty"`
 	TotalAffectedResources int `json:"total_affected_resources,omitempty"`
 	UnpatchedResources     int `json:"unpatched_resources,omitempty"`
+}
+
+// AutoScalingMetrics covers EC2 auto scaling groups: the instance-based
+// sibling of the ECS capacity evidence.
+type AutoScalingMetrics struct {
+	GroupCount int `json:"group_count"`
+
+	// A minimum of one instance is zero redundancy. Sometimes deliberate: the
+	// bastion pattern uses a single-instance group for self-healing rather
+	// than capacity, so read this against what each group is for.
+	SingleInstanceGroupCount int `json:"single_instance_group_count"`
+	SingleZoneGroupCount     int `json:"single_zone_group_count"`
+
+	// A group with no policy holds capacity but only changes it when told to.
+	GroupsWithScalingPolicyCount int `json:"groups_with_scaling_policy_count"`
+	// Suspended scaling processes mean the configuration is present but
+	// inert, which reads as scaled while acting as fixed.
+	GroupsWithSuspendedProcessesCount int `json:"groups_with_suspended_processes_count"`
+
+	GroupsWithELBHealthCheckCount int `json:"groups_with_elb_health_check_count"`
+	// Load-balanced groups still on EC2-only health checks: the target group
+	// stops routing to a hung application, but the instance is never replaced
+	// because the VM reports healthy. Detection without response.
+	LoadBalancedGroupsWithoutELBHealthCheckCount int `json:"load_balanced_groups_without_elb_health_check_count"`
+	GroupsOnLaunchConfigurationsCount            int `json:"groups_on_launch_configurations_count"`
+
+	Groups []AutoScalingGroupRow `json:"groups,omitempty"`
+}
+
+// AutoScalingGroupRow is an audit-level group inventory row.
+type AutoScalingGroupRow struct {
+	Name                          string `json:"name"`
+	Region                        string `json:"region"`
+	MinSize                       int32  `json:"min_size"`
+	MaxSize                       int32  `json:"max_size"`
+	DesiredCapacity               int32  `json:"desired_capacity"`
+	AvailabilityZoneCount         int    `json:"availability_zone_count"`
+	HealthCheckType               string `json:"health_check_type,omitempty"`
+	HealthCheckGracePeriodSeconds int32  `json:"health_check_grace_period_seconds,omitempty"`
+	UsesLaunchTemplate            bool   `json:"uses_launch_template"`
+	LoadBalanced                  bool   `json:"load_balanced"`
+	SuspendedProcessCount         int    `json:"suspended_process_count,omitempty"`
+	PolicyCount                   int    `json:"policy_count"`
+}
+
+// ECSMetrics covers container service capacity: how services scale and how
+// deployments fail safe. Task definitions are never read, because container
+// definitions embed environment variables that routinely hold credentials.
+type ECSMetrics struct {
+	ClusterCount        int `json:"cluster_count"`
+	ServiceCount        int `json:"service_count"`
+	FargateServiceCount int `json:"fargate_service_count"`
+
+	// Autoscaling counts a registered capacity range; the scaling-policy count
+	// requires the chain complete: bounds registered and a policy that moves
+	// the service between them.
+	ServicesWithAutoscalingCount   int `json:"services_with_autoscaling_count"`
+	ServicesWithScalingPolicyCount int `json:"services_with_scaling_policy_count"`
+
+	// A capacity floor of one task: no redundancy. The floor is the scaling
+	// minimum where registered, otherwise the desired count.
+	SingleTaskServiceCount int `json:"single_task_service_count"`
+
+	ServicesWithCircuitBreakerCount int `json:"services_with_circuit_breaker_count"`
+	ServicesWithPublicIPCount       int `json:"services_with_public_ip_count"`
+	LoadBalancedServiceCount        int `json:"load_balanced_service_count"`
+
+	// Services whose scaling state could not be read. They are excluded from
+	// the autoscaling and single-task findings rather than counted unscaled.
+	ScalingUnresolvedServiceCount int `json:"scaling_unresolved_service_count,omitempty"`
+
+	Services []ECSServiceRow `json:"services,omitempty"`
+}
+
+// ECSServiceRow is an audit-level service inventory row.
+type ECSServiceRow struct {
+	Cluster                       string   `json:"cluster"`
+	Name                          string   `json:"name"`
+	Region                        string   `json:"region"`
+	LaunchType                    string   `json:"launch_type,omitempty"`
+	DesiredCount                  int32    `json:"desired_count"`
+	RunningCount                  int32    `json:"running_count"`
+	AutoScaled                    bool     `json:"auto_scaled"`
+	MinCapacity                   int32    `json:"min_capacity,omitempty"`
+	MaxCapacity                   int32    `json:"max_capacity,omitempty"`
+	ScalingPolicyTypes            []string `json:"scaling_policy_types,omitempty"`
+	ScalingMetrics                []string `json:"scaling_metrics,omitempty"`
+	CircuitBreakerEnabled         bool     `json:"circuit_breaker_enabled"`
+	CircuitBreakerRollback        bool     `json:"circuit_breaker_rollback"`
+	MinimumHealthyPercent         int32    `json:"minimum_healthy_percent,omitempty"`
+	MaximumPercent                int32    `json:"maximum_percent,omitempty"`
+	AssignsPublicIP               bool     `json:"assigns_public_ip"`
+	SubnetCount                   int      `json:"subnet_count,omitempty"`
+	LoadBalanced                  bool     `json:"load_balanced"`
+	HealthCheckGracePeriodSeconds int32    `json:"health_check_grace_period_seconds,omitempty"`
+	ScalingUnresolved             bool     `json:"scaling_unresolved,omitempty"`
+}
+
+// SESMetrics covers outbound mail transport enforcement. SES attempts TLS on
+// every delivery and falls back to plaintext unless a configuration set says
+// REQUIRE, so only REQUIRE counts as enforced here.
+type SESMetrics struct {
+	ConfigurationSetCount                  int `json:"configuration_set_count"`
+	ConfigurationSetsRequiringTLSCount     int `json:"configuration_sets_requiring_tls_count"`
+	ConfigurationSetsOpportunisticTLSCount int `json:"configuration_sets_opportunistic_tls_count"`
+	ConfigurationSetsUnresolvedCount       int `json:"configuration_sets_unresolved_count,omitempty"`
+
+	IdentityCount int `json:"identity_count"`
+	// Identities whose default configuration set requires TLS, so mail that
+	// names no set at send time is covered. A send that names its own set can
+	// still override this; that choice is per message and not visible in
+	// config.
+	IdentitiesRequiringTLSCount  int `json:"identities_requiring_tls_count"`
+	SendingDisabledIdentityCount int `json:"sending_disabled_identity_count"`
+	IdentitiesUnresolvedCount    int `json:"identities_unresolved_count,omitempty"`
+
+	ConfigurationSets []SESConfigurationSetRow `json:"configuration_sets,omitempty"`
+	Identities        []SESIdentityRow         `json:"identities,omitempty"`
+}
+
+// SESConfigurationSetRow is an audit-level configuration set row.
+type SESConfigurationSetRow struct {
+	Name       string `json:"name"`
+	Region     string `json:"region"`
+	TLSPolicy  string `json:"tls_policy,omitempty"`
+	Unresolved bool   `json:"unresolved,omitempty"`
+}
+
+// SESIdentityRow is an audit-level sending identity row.
+type SESIdentityRow struct {
+	Name                    string `json:"name"`
+	Region                  string `json:"region"`
+	Type                    string `json:"type"`
+	SendingEnabled          bool   `json:"sending_enabled"`
+	DefaultConfigurationSet string `json:"default_configuration_set,omitempty"`
+	DefaultRequiresTLS      bool   `json:"default_requires_tls"`
+	Unresolved              bool   `json:"unresolved,omitempty"`
+}
+
+// CloudFrontMetrics covers distribution transport enforcement on both hops:
+// viewer to edge, and edge to origin. Meaningful only when
+// distributions_evaluated is true; on failure the error code carries the cause
+// so an unread account is never mistaken for one with no distributions.
+type CloudFrontMetrics struct {
+	DistributionsEvaluated bool   `json:"distributions_evaluated"`
+	DistributionsErrorCode string `json:"distributions_error_code,omitempty"`
+
+	DistributionCount         int `json:"distribution_count"`
+	DisabledDistributionCount int `json:"disabled_distribution_count"`
+
+	// Findings cover enabled distributions only. A distribution allows
+	// plaintext viewers when any cache behavior, default or path-scoped, is
+	// set to allow-all.
+	DistributionsAllowingPlaintextViewersCount int `json:"distributions_allowing_plaintext_viewers_count"`
+
+	// The edge-to-origin hop. An http-only custom origin is fetched in
+	// plaintext regardless of the viewer policy; match-viewer is plaintext
+	// whenever the viewer request was. S3 REST origins declare no protocol in
+	// config, so they are counted in rows rather than classified.
+	DistributionsWithHTTPOnlyOriginCount    int `json:"distributions_with_http_only_origin_count"`
+	DistributionsWithMatchViewerOriginCount int `json:"distributions_with_match_viewer_origin_count"`
+
+	DistributionsByMinimumTLS map[string]int `json:"distributions_by_minimum_tls,omitempty"`
+
+	Distributions []CloudFrontDistributionRow `json:"distributions,omitempty"`
+}
+
+// CloudFrontDistributionRow is an audit-level distribution inventory row.
+type CloudFrontDistributionRow struct {
+	ID                     string   `json:"id"`
+	Domain                 string   `json:"domain"`
+	Aliases                []string `json:"aliases,omitempty"`
+	Enabled                bool     `json:"enabled"`
+	AllowsPlaintextViewers bool     `json:"allows_plaintext_viewers"`
+	MinimumProtocolVersion string   `json:"minimum_protocol_version,omitempty"`
+	HTTPOnlyOriginCount    int      `json:"http_only_origin_count,omitempty"`
+	MatchViewerOriginCount int      `json:"match_viewer_origin_count,omitempty"`
+	HTTPSOnlyOriginCount   int      `json:"https_only_origin_count,omitempty"`
+	S3OriginCount          int      `json:"s3_origin_count,omitempty"`
+}
+
+// LoadBalancerMetrics covers load balancer transport enforcement: which hops
+// force TLS toward the client and which accept plaintext.
+type LoadBalancerMetrics struct {
+	LoadBalancerCount int `json:"load_balancer_count"`
+
+	ALBCount int `json:"alb_count"`
+	// Judged by each HTTP listener's default action. Listener rules are not
+	// inspected, so a path-scoped plaintext rule behind a redirecting default
+	// action is not visible here.
+	ALBsServingPlaintextCount               int `json:"albs_serving_plaintext_count"`
+	InternetFacingALBsServingPlaintextCount int `json:"internet_facing_albs_serving_plaintext_count"`
+	ALBsWithoutHTTPSListenerCount           int `json:"albs_without_https_listener_count"`
+
+	NLBCount            int `json:"nlb_count"`
+	NLBTLSListenerCount int `json:"nlb_tls_listener_count"`
+	// TCP and UDP listeners forward bytes untouched, so whether the stream is
+	// encrypted is decided by the endpoints, not by this hop.
+	NLBTCPPassthroughListenerCount int `json:"nlb_tcp_passthrough_listener_count"`
+
+	// Zone redundancy. One zone is a categorical boundary: ALBs cannot be
+	// single-zone by AWS rule, so this in practice counts network LBs.
+	SingleZoneLoadBalancerCount int `json:"single_zone_load_balancer_count"`
+
+	TargetGroupCount                    int `json:"target_group_count"`
+	TargetGroupsWithoutHealthCheckCount int `json:"target_groups_without_health_check_count"`
+	TargetGroupListingFailedRegionCount int `json:"target_group_listing_failed_region_count,omitempty"`
+
+	TLSListenersByPolicy map[string]int `json:"tls_listeners_by_policy,omitempty"`
+
+	// Load balancers whose listeners could not be read. Their transport
+	// posture is unproven rather than clean.
+	ListenersUnresolvedCount int `json:"listeners_unresolved_count,omitempty"`
+
+	LoadBalancers []LoadBalancerRow `json:"load_balancers,omitempty"`
+	TargetGroups  []TargetGroupRow  `json:"target_groups,omitempty"`
+}
+
+// LoadBalancerRow is an audit-level load balancer inventory row.
+type LoadBalancerRow struct {
+	Name                  string        `json:"name"`
+	Region                string        `json:"region"`
+	Type                  string        `json:"type"`
+	Scheme                string        `json:"scheme"`
+	AvailabilityZoneCount int           `json:"availability_zone_count"`
+	Listeners             []ListenerRow `json:"listeners,omitempty"`
+	ListenersUnresolved   bool          `json:"listeners_unresolved,omitempty"`
+}
+
+// TargetGroupRow is an audit-level target group row: how the load balancer
+// decides a backend is dead.
+type TargetGroupRow struct {
+	Name                       string `json:"name"`
+	Region                     string `json:"region"`
+	Protocol                   string `json:"protocol,omitempty"`
+	TargetType                 string `json:"target_type,omitempty"`
+	HealthCheckEnabled         bool   `json:"health_check_enabled"`
+	HealthCheckIntervalSeconds int32  `json:"health_check_interval_seconds,omitempty"`
+	HealthyThresholdCount      int32  `json:"healthy_threshold_count,omitempty"`
+	UnhealthyThresholdCount    int32  `json:"unhealthy_threshold_count,omitempty"`
+	Attached                   bool   `json:"attached"`
+}
+
+// ListenerRow is one listener's transport configuration.
+type ListenerRow struct {
+	Port             int32  `json:"port"`
+	Protocol         string `json:"protocol"`
+	SSLPolicy        string `json:"ssl_policy,omitempty"`
+	RedirectsToHTTPS bool   `json:"redirects_to_https"`
+}
+
+// StoredImageMetrics covers owned EBS snapshots and AMIs: whether they are
+// exposed publicly and whether they are encrypted. Volumes attached to running
+// instances are covered by EC2Metrics instead.
+//
+// The *ExposureUnknown flags exist so a failed lookup is never readable as
+// "nothing is public", which is the reading that would matter most.
+type StoredImageMetrics struct {
+	SnapshotCount            int  `json:"snapshot_count"`
+	UnencryptedSnapshotCount int  `json:"unencrypted_snapshot_count"`
+	PublicSnapshotCount      int  `json:"public_snapshot_count"`
+	SnapshotExposureUnknown  bool `json:"snapshot_exposure_unknown,omitempty"`
+
+	ImageCount                       int  `json:"image_count"`
+	ImagesWithUnencryptedVolumeCount int  `json:"images_with_unencrypted_volume_count"`
+	PublicImageCount                 int  `json:"public_image_count"`
+	ImageExposureUnknown             bool `json:"image_exposure_unknown,omitempty"`
+
+	// Audit: only the exposed resources, which are the actionable ones.
+	PublicSnapshots []PublicResourceRow `json:"public_snapshots,omitempty"`
+	PublicImages    []PublicResourceRow `json:"public_images,omitempty"`
+}
+
+// PublicResourceRow identifies a resource anyone can read.
+type PublicResourceRow struct {
+	ID        string `json:"id"`
+	Name      string `json:"name,omitempty"`
+	Region    string `json:"region"`
+	Encrypted bool   `json:"encrypted"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
+// MonitoringMetrics covers CloudWatch alarms and how far their notifications
+// travel. Zero alarms is not evidence that nobody is paged: many teams escalate
+// through EventBridge or a third-party monitor instead, which this surface does
+// not see.
+type MonitoringMetrics struct {
+	AlarmCount                     int `json:"alarm_count"`
+	AlarmsWithActionsDisabledCount int `json:"alarms_with_actions_disabled_count"`
+	AlarmsWithoutNotificationCount int `json:"alarms_without_notification_count"`
+	AlarmsInsufficientDataCount    int `json:"alarms_insufficient_data_count"`
+
+	// The end-to-end answer: actions enabled, a notification topic attached,
+	// and that topic holding at least one confirmed subscriber.
+	AlarmsReachingSubscriberCount int `json:"alarms_reaching_subscriber_count"`
+
+	NotificationTopicCount                int `json:"notification_topic_count"`
+	TopicsWithoutConfirmedSubscriberCount int `json:"topics_without_confirmed_subscriber_count"`
+	TopicsUnresolvedCount                 int `json:"topics_unresolved_count,omitempty"`
+
+	// Counts only. Subscription endpoints are never collected: they are email
+	// addresses and phone numbers, and an HTTPS endpoint is routinely a webhook
+	// URL that is itself a credential.
+	SubscriptionsByProtocol               map[string]int `json:"subscriptions_by_protocol,omitempty"`
+	SubscriptionsPendingConfirmationCount int            `json:"subscriptions_pending_confirmation_count"`
+
+	Alarms             []CloudWatchAlarmRow `json:"alarms,omitempty"`
+	AlarmsTruncated    bool                 `json:"alarms_truncated,omitempty"`
+	AlarmsDroppedCount int                  `json:"alarms_dropped_count,omitempty"`
+}
+
+// CloudWatchAlarmRow is an audit-level alarm definition.
+type CloudWatchAlarmRow struct {
+	Name               string   `json:"name"`
+	Region             string   `json:"region"`
+	Namespace          string   `json:"namespace"`
+	MetricName         string   `json:"metric_name"`
+	ComparisonOperator string   `json:"comparison_operator"`
+	Threshold          *float64 `json:"threshold,omitempty"`
+	EvaluationPeriods  int32    `json:"evaluation_periods"`
+	ActionsEnabled     bool     `json:"actions_enabled"`
+	StateValue         string   `json:"state_value"`
+	NotificationTopics int      `json:"notification_topics"`
+	ReachesSubscriber  bool     `json:"reaches_subscriber"`
+	OtherActionCount   int      `json:"other_action_count,omitempty"`
+}
+
+// IAMPasswordPolicy is the account password policy for IAM console sign-in.
+// Present only when one is configured; see IAMMetrics for the absent case.
+type IAMPasswordPolicy struct {
+	MinimumLength              int  `json:"minimum_length"`
+	RequireSymbols             bool `json:"require_symbols"`
+	RequireNumbers             bool `json:"require_numbers"`
+	RequireUppercase           bool `json:"require_uppercase"`
+	RequireLowercase           bool `json:"require_lowercase"`
+	AllowUsersToChangePassword bool `json:"allow_users_to_change_password"`
+	ExpirePasswords            bool `json:"expire_passwords"`
+	HardExpiry                 bool `json:"hard_expiry"`
+
+	// Present only when set. Absent means passwords do not expire and previous
+	// passwords may be reused respectively.
+	MaxPasswordAgeDays      *int `json:"max_password_age_days,omitempty"`
+	PasswordReusePrevention *int `json:"password_reuse_prevention,omitempty"`
 }
 
 // IdentityCenterStatus contains AWS IAM Identity Center (formerly AWS SSO)
@@ -800,6 +1254,11 @@ type EC2Metrics struct {
 	DefaultVPCCount                     int `json:"default_vpc_count"`
 	InstancesWithUnencryptedVolumeCount int `json:"instances_with_unencrypted_volume_count"`
 
+	// Volumes attached to nothing. They keep their data, are invisible to the
+	// instance join above, and are where forgotten unencrypted data sits.
+	UnattachedVolumeCount            int `json:"unattached_volume_count"`
+	UnattachedUnencryptedVolumeCount int `json:"unattached_unencrypted_volume_count"`
+
 	// Audit: present (possibly []) when collected at audit+; null when not
 	// collected. Truncation companions emit at the same level.
 	Instances             []EC2InstanceRow `json:"instances"`
@@ -850,7 +1309,12 @@ type EC2InstanceRow struct {
 // ever collected.
 type CloudWatchLogsMetrics struct {
 	// Trust:
-	LogGroupCount                    int `json:"log_group_count"`
+	LogGroupCount int `json:"log_group_count"`
+	// No retention setting in CloudWatch Logs means retain indefinitely, so this
+	// counts groups that never delete anything. That satisfies a retain-for-N
+	// requirement and fails a delete-after-N one; the name reads like a gap in
+	// only the second sense. Kept as-is because packs already in the field carry
+	// this key.
 	LogGroupsWithoutRetentionCount   int `json:"log_groups_without_retention_count"`
 	LogGroupsWithoutCustomerKMSCount int `json:"log_groups_without_customer_kms_count"`
 

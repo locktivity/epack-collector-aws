@@ -16,13 +16,17 @@ func (c *Collector) collectAccountSecurity(ctx context.Context, client *aws.AWSC
 	security := &AccountSecurity{}
 
 	c.status("Checking CloudTrail...")
-	c.collectCloudTrailStatus(ctx, client, accountID, &security.CloudTrail, level)
+	trails := c.collectCloudTrailStatus(ctx, client, accountID, &security.CloudTrail, level)
+	c.resolveTrailBucketRetention(ctx, client, accountID, trails, &security.CloudTrail)
 
 	c.status("Checking AWS Config...")
 	c.collectConfigStatus(ctx, client, primaryRegion, accountID, &security.Config, level)
 
 	c.status("Checking GuardDuty...")
 	c.collectGuardDutyStatus(ctx, client, regions, accountID, &security.GuardDuty, level)
+
+	c.status("Checking IAM Access Analyzer...")
+	c.collectAccessAnalyzerStatus(ctx, client, regions, accountID, &security.AccessAnalyzer, level)
 
 	c.status("Checking Security Hub...")
 	c.collectSecurityHubStatus(ctx, client, primaryRegion, accountID, &security.SecurityHub, level)
@@ -40,14 +44,14 @@ type trailDescriber interface {
 }
 
 // collectCloudTrailStatus collects CloudTrail configuration status.
-func (c *Collector) collectCloudTrailStatus(ctx context.Context, client trailDescriber, accountID string, status *CloudTrailStatus, level componentsdk.Level) {
+func (c *Collector) collectCloudTrailStatus(ctx context.Context, client trailDescriber, accountID string, status *CloudTrailStatus, level componentsdk.Level) []aws.Trail {
 	trails, err := client.DescribeTrails(ctx)
 	if err != nil {
 		var statusErr *aws.TrailStatusUnavailableError
 		if !errors.As(err, &statusErr) || len(trails) == 0 {
 			status.TrailListingErrorCode = apiErrorCode(err)
 			c.warn("account %s: failed to collect CloudTrail status: %v", accountID, err)
-			return
+			return nil
 		}
 		c.warn("account %s: failed to collect one or more CloudTrail trail statuses: %v", accountID, err)
 	}
@@ -58,6 +62,7 @@ func (c *Collector) collectCloudTrailStatus(ctx context.Context, client trailDes
 	if level.AtLeast(componentsdk.LevelAudit) {
 		status.Trails = trailsToInventory(trails, level)
 	}
+	return trails
 }
 
 func summarizeCloudTrailStatus(status *CloudTrailStatus, trails []aws.Trail) {
@@ -96,6 +101,7 @@ func trailsToInventory(trails []aws.Trail, level componentsdk.Level) []CloudTrai
 			TrailARN:                 t.TrailARN,
 			HomeRegion:               t.HomeRegion,
 			S3BucketName:             t.S3BucketName,
+			S3KeyPrefix:              t.S3KeyPrefix,
 			IsMultiRegionTrail:       t.IsMultiRegionTrail,
 			IsOrganizationTrail:      t.IsOrganizationTrail,
 			LogFileValidationEnabled: t.LogFileValidationEnabled,
@@ -236,46 +242,85 @@ func configRecordersToInventory(recorders []aws.ConfigRecorder, region string) [
 	return out
 }
 
+// guardDutyRegionScan holds one region's GuardDuty results and the warnings
+// emitted while collecting them, so regions can be scanned concurrently and
+// assembled in region order.
+type guardDutyRegionScan struct {
+	detectors []aws.GuardDutyDetector
+	listErr   error
+	findings  []GuardDutyFindingRow
+	truncated bool
+	dropped   int
+	warnings  []string
+}
+
+// scanGuardDutyRegion collects one region's detectors and, at internal level,
+// their findings. It runs on its own Collector copy so concurrent regions
+// buffer warnings independently; the caller replays them in region order.
+func (c *Collector) scanGuardDutyRegion(ctx context.Context, client *aws.AWSClient, region, accountID string, level componentsdk.Level) guardDutyRegionScan {
+	rc := &Collector{config: c.config, tokenSource: c.tokenSource}
+	var s guardDutyRegionScan
+
+	s.detectors, s.listErr = client.ListGuardDutyDetectors(ctx, region)
+	if s.listErr != nil {
+		rc.warn("account %s region %s: failed to collect GuardDuty status: %v", accountID, region, s.listErr)
+		s.warnings = rc.warnings
+		return s
+	}
+
+	if level.AtLeast(componentsdk.LevelInternal) {
+		for _, d := range s.detectors {
+			findings, truncated, err := client.ListGuardDutyFindings(ctx, region, d.DetectorID, GuardDutyFindingsCap)
+			if err != nil {
+				rc.warn("account %s region %s detector %s: failed to collect GuardDuty findings: %v", accountID, region, d.DetectorID, err)
+				continue
+			}
+			for _, f := range findings {
+				s.findings = append(s.findings, guardDutyFindingToRow(f, region))
+			}
+			if truncated {
+				s.truncated = true
+				s.dropped += d.HighOrCriticalFindings - len(findings)
+				rc.warn("account %s region %s detector %s: GuardDuty findings truncated at %d (detector reports %d total)",
+					accountID, region, d.DetectorID, GuardDutyFindingsCap, d.HighOrCriticalFindings)
+			}
+		}
+	}
+
+	s.warnings = rc.warnings
+	return s
+}
+
 // collectGuardDutyStatus collects GuardDuty status across all regions.
 func (c *Collector) collectGuardDutyStatus(ctx context.Context, client *aws.AWSClient, regions []string, accountID string, status *GuardDutyStatus, level componentsdk.Level) {
-	for _, region := range regions {
-		detectors, err := client.ListGuardDutyDetectors(ctx, region)
-		if err != nil {
-			c.warn("account %s region %s: failed to collect GuardDuty status: %v", accountID, region, err)
-			continue
-		}
-		if len(detectors) == 0 {
+	scans := mapConcurrent(regions, regionConcurrency, func(region string) guardDutyRegionScan {
+		return c.scanGuardDutyRegion(ctx, client, region, accountID, level)
+	})
+
+	for i, region := range regions {
+		s := scans[i]
+		c.warnings = append(c.warnings, s.warnings...)
+		if s.listErr != nil || len(s.detectors) == 0 {
 			continue
 		}
 
 		status.Enabled = true
-		for _, d := range detectors {
+		for _, d := range s.detectors {
 			status.UnremediatedFindingsOver48Hours += d.HighOrCriticalFindingsOlderThan48Hours
 		}
 
 		if level.AtLeast(componentsdk.LevelAudit) {
-			for _, d := range detectors {
+			for _, d := range s.detectors {
 				status.Detectors = append(status.Detectors, guardDutyDetectorToRow(d, region))
 			}
 		}
 
 		if level.AtLeast(componentsdk.LevelInternal) {
-			for _, d := range detectors {
-				findings, truncated, err := client.ListGuardDutyFindings(ctx, region, d.DetectorID, GuardDutyFindingsCap)
-				if err != nil {
-					c.warn("account %s region %s detector %s: failed to collect GuardDuty findings: %v", accountID, region, d.DetectorID, err)
-					continue
-				}
-				for _, f := range findings {
-					status.Findings = append(status.Findings, guardDutyFindingToRow(f, region))
-				}
-				if truncated {
-					status.FindingsTruncated = true
-					status.FindingsDroppedCount += d.HighOrCriticalFindings - len(findings)
-					c.warn("account %s region %s detector %s: GuardDuty findings truncated at %d (detector reports %d total)",
-						accountID, region, d.DetectorID, GuardDutyFindingsCap, d.HighOrCriticalFindings)
-				}
+			status.Findings = append(status.Findings, s.findings...)
+			if s.truncated {
+				status.FindingsTruncated = true
 			}
+			status.FindingsDroppedCount += s.dropped
 		}
 	}
 }

@@ -401,64 +401,15 @@ variable "external_id" {
 
 ### Collector Policy (shared by both)
 
-The list below is the trust-level (default) set. The authoritative, level-tiered permission reference lives in the README under Required IAM Permissions; add the audit or internal actions from there when your pipeline collects at those levels.
+The policy file is the trust-level (default) set from the [configuration page](configuration.md#required-iam-permissions); add the audit or internal actions listed there when your pipeline collects at those levels.
 
 ```hcl
 resource "aws_iam_policy" "epack_collector" {
   name        = "EpackCollectorPolicy"
   description = "Read-only access for epack AWS collector"
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "iam:GetAccountPasswordPolicy",
-          "iam:GetAccountSummary",
-          "iam:GetCredentialReport",
-          "iam:GenerateCredentialReport",
-          "iam:ListOrganizationsFeatures",
-          "iam:ListUsers",
-          "iam:ListMFADevices",
-          "iam:ListRoles",
-          "iam:GetRole",
-          "iam:ListAccountAliases",
-          "s3:ListAllMyBuckets",
-          "s3:GetBucket*",
-          "s3:GetEncryptionConfiguration",
-          "s3:GetAccountPublicAccessBlock",
-          "rds:DescribeDB*",
-          "ec2:DescribeVpcs",
-          "ec2:DescribeSecurityGroups",
-          "ec2:DescribeFlowLogs",
-          "ec2:DescribeRegions",
-          "cloudtrail:DescribeTrails",
-          "cloudtrail:GetTrailStatus",
-          "config:Describe*",
-          "guardduty:ListDetectors",
-          "guardduty:GetDetector",
-          "guardduty:ListFindings",
-          "securityhub:Describe*",
-          "securityhub:Get*",
-          "securityhub:List*",
-          "sso:ListInstances",
-          "sso:ListPermissionSets",
-          "identitystore:ListUsers",
-          "identitystore:ListGroups",
-          "lambda:ListFunctions",
-          "logs:DescribeLogGroups",
-          "kms:ListKeys",
-          "kms:DescribeKey",
-          "kms:GetKeyRotationStatus",
-          "secretsmanager:ListSecrets",
-          "ssm:DescribeParameters",
-          "access-analyzer:ListAnalyzers",
-          "sts:GetCallerIdentity"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
+  # Save the trust-level policy from the configuration page's Required IAM
+  # Permissions section as epack-collector-policy.json next to this module.
+  policy = file("${path.module}/epack-collector-policy.json")
 }
 ```

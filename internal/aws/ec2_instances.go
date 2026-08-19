@@ -88,13 +88,13 @@ func projectEC2Instance(inst ec2types.Instance, state string) EC2Instance {
 // ListEC2Volumes returns a volumeID→encrypted map for every EBS volume in the
 // region. The encryption flag is the only volume attribute we surface; full
 // Volume objects aren't needed and would significantly bloat memory in
-// volume-heavy regions.
-func (c *AWSClient) ListEC2Volumes(ctx context.Context, region string) (map[string]bool, error) {
+// volume-heavy regions; two booleans per volume keeps that property.
+func (c *AWSClient) ListEC2Volumes(ctx context.Context, region string) (map[string]EBSVolumeState, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	client := ec2.NewFromConfig(cfg)
 
-	out := map[string]bool{}
+	out := map[string]EBSVolumeState{}
 	paginator := ec2.NewDescribeVolumesPaginator(client, &ec2.DescribeVolumesInput{})
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
@@ -102,7 +102,10 @@ func (c *AWSClient) ListEC2Volumes(ctx context.Context, region string) (map[stri
 			return nil, fmt.Errorf("describing ec2 volumes in %s: %w", region, err)
 		}
 		for _, v := range page.Volumes {
-			out[aws.ToString(v.VolumeId)] = aws.ToBool(v.Encrypted)
+			out[aws.ToString(v.VolumeId)] = EBSVolumeState{
+				Encrypted: aws.ToBool(v.Encrypted),
+				Attached:  len(v.Attachments) > 0,
+			}
 		}
 	}
 	return out, nil

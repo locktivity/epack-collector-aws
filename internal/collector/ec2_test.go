@@ -77,7 +77,11 @@ func TestEC2InstanceToRow_DefensiveCopyOnSlices(t *testing.T) {
 }
 
 func TestInstanceHasUnencryptedVolume(t *testing.T) {
-	encrypted := map[string]bool{"vol-1": true, "vol-2": false, "vol-3": true}
+	encrypted := map[string]aws.EBSVolumeState{
+		"vol-1": {Encrypted: true, Attached: true},
+		"vol-2": {Encrypted: false, Attached: true},
+		"vol-3": {Encrypted: true, Attached: true},
+	}
 
 	if !instanceHasUnencryptedVolume(aws.EC2Instance{AttachedVolumeIDs: []string{"vol-1", "vol-2"}}, encrypted) {
 		t.Errorf("instance with vol-2 (unencrypted) should return true")
@@ -132,5 +136,33 @@ func TestMergeEC2Metrics_SumsAggregatesAndConcatsInstances(t *testing.T) {
 	}
 	if got.Instances[0].InstanceID != "i-east-1" || got.Instances[2].InstanceID != "i-west-1" {
 		t.Errorf("merge did not preserve insertion order: %+v", got.Instances)
+	}
+}
+
+// Unattached volumes keep their data but are invisible to the instance join,
+// so they are counted separately rather than folded into the instance figure.
+func TestCountUnattachedVolumes(t *testing.T) {
+	volumes := map[string]aws.EBSVolumeState{
+		"vol-attached-enc":   {Encrypted: true, Attached: true},
+		"vol-attached-plain": {Encrypted: false, Attached: true},
+		"vol-loose-enc":      {Encrypted: true, Attached: false},
+		"vol-loose-plain":    {Encrypted: false, Attached: false},
+		"vol-loose-plain-2":  {Encrypted: false, Attached: false},
+	}
+
+	total, unencrypted := countUnattachedVolumes(volumes)
+
+	if total != 3 {
+		t.Errorf("total = %d, want 3 unattached volumes", total)
+	}
+	if unencrypted != 2 {
+		t.Errorf("unencrypted = %d, want 2", unencrypted)
+	}
+}
+
+func TestCountUnattachedVolumesEmpty(t *testing.T) {
+	total, unencrypted := countUnattachedVolumes(map[string]aws.EBSVolumeState{})
+	if total != 0 || unencrypted != 0 {
+		t.Fatalf("got %d and %d, want 0 and 0", total, unencrypted)
 	}
 }

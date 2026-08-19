@@ -8,6 +8,14 @@
 #   - secretsmanager:GetSecretValue   (Secrets Manager secret values)
 #   - ssm:GetParameter / GetParameters with SecureString type   (SSM SecureString values)
 #
+# Forbidden fields:
+#   - SNS subscription Endpoint values. These are email addresses and phone
+#     numbers, and an HTTPS endpoint is routinely a Slack or PagerDuty webhook
+#     URL, which is a credential. The collector emits subscriber counts only.
+#   - ecs:DescribeTaskDefinition. Container definitions embed environment
+#     variables, which routinely hold credentials. Capacity and scaling
+#     evidence never needs the task definition.
+#
 # Escape hatch: prefix the call site with `// LINT-ALLOW: <reason>` if a future
 # change has a legitimate reason to mention the symbol (e.g., a test asserting it
 # was never invoked).
@@ -17,7 +25,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 violations=$(
-  grep -rn -E 'GetSecretValue|GetParameter\(|GetParameters\(|GetParametersByPath\(' \
+  grep -rn -E 'GetSecretValue|GetParameter\(|GetParameters\(|GetParametersByPath\(|\.Endpoint\b|DescribeTaskDefinition' \
     internal/ \
     --include='*.go' \
     | grep -v '_test.go' \

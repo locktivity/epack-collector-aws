@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 	"github.com/locktivity/epack/componentsdk"
@@ -161,12 +162,18 @@ func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig
 	c.collectGlobalMetrics(ctx, client, accountID, posture, level)
 
 	// Collect regional metrics (RDS, Network, Lambda, EC2, CloudWatch Logs, KMS, Secrets Manager, SSM)
-	rdsMetrics, networkMetrics, lambdaMetrics, ec2Metrics, cwLogsMetrics, kmsMetrics, secretsMetrics, ssmMetrics := c.collectRegionalMetrics(ctx, client, regions, accountID, level)
+	rdsMetrics, networkMetrics, lambdaMetrics, ec2Metrics, cwLogsMetrics, kmsMetrics, secretsMetrics, ssmMetrics, monitoringMetrics, storedImageMetrics, loadBalancerMetrics, sesMetrics, ecsMetrics, autoScalingMetrics := c.collectRegionalMetrics(ctx, client, regions, accountID, level)
 	posture.RDS = rdsMetrics.RDSMetrics
 	posture.Network = networkMetrics.NetworkMetrics
 	posture.Lambda = lambdaMetrics
 	posture.EC2 = ec2Metrics
 	posture.CloudWatchLogs = cwLogsMetrics
+	posture.Monitoring = monitoringMetrics
+	posture.StoredImages = storedImageMetrics
+	posture.LoadBalancers = loadBalancerMetrics
+	posture.SES = sesMetrics
+	posture.ECS = ecsMetrics
+	posture.AutoScaling = autoScalingMetrics
 	posture.KMS = kmsMetrics
 	posture.SecretsManager = secretsMetrics
 	posture.SSMParameters = ssmMetrics
@@ -238,18 +245,115 @@ func (c *Collector) collectGlobalMetrics(ctx context.Context, client *aws.AWSCli
 	// S3 metrics (global bucket list)
 	c.status("Collecting S3 metrics...")
 	posture.S3 = *c.collectS3Metrics(ctx, client, accountID, level)
+	posture.CloudFront = *c.collectCloudFrontMetrics(ctx, client, accountID, level)
+}
+
+// regionScan holds one region's raw surface results and the warnings emitted
+// while collecting them. Regions are scanned concurrently, so per-region
+// results are assembled into the account aggregates afterward, in region
+// order, keeping the output identical to a serial scan.
+type regionScan struct {
+	rds              *rdsMetricsWithCounts
+	rdsErr           error
+	network          *networkMetricsWithCounts
+	networkErr       error
+	lambda           *LambdaMetrics
+	lambdaErr        error
+	ec2              *EC2Metrics
+	ec2Err           error
+	cwLogs           *CloudWatchLogsMetrics
+	cwLogsErr        error
+	monitoring       *MonitoringMetrics
+	monitoringErr    error
+	storedImages     *StoredImageMetrics
+	storedImagesErr  error
+	loadBalancers    *LoadBalancerMetrics
+	loadBalancersErr error
+	ses              *SESMetrics
+	sesErr           error
+	ecs              *ECSMetrics
+	ecsErr           error
+	autoScaling      *AutoScalingMetrics
+	autoScalingErr   error
+	kms              *KMSMetrics
+	kmsErr           error
+	secrets          *SecretsManagerMetrics
+	secretsErr       error
+	ssm              *SSMParametersMetrics
+	ssmErr           error
+	warnings         []string
+}
+
+// scanRegion collects every regional surface for one region. It runs on its
+// own Collector copy so concurrent regions buffer warnings independently; the
+// caller replays them in region order.
+func (c *Collector) scanRegion(ctx context.Context, client *aws.AWSClient, region, accountID string, level componentsdk.Level) regionScan {
+	rc := &Collector{config: c.config, tokenSource: c.tokenSource}
+	var s regionScan
+
+	if s.rds, s.rdsErr = rc.collectRDSMetrics(ctx, client, region, level); s.rdsErr != nil {
+		rc.warn("account %s region %s: failed to collect RDS metrics: %v", accountID, region, s.rdsErr)
+	}
+	if s.network, s.networkErr = rc.collectNetworkMetrics(ctx, client, region, accountID, level); s.networkErr != nil {
+		rc.warn("account %s region %s: failed to collect network metrics: %v", accountID, region, s.networkErr)
+	}
+	if s.lambda, s.lambdaErr = rc.collectLambdaMetrics(ctx, client, region, accountID, level); s.lambdaErr != nil {
+		rc.warn("account %s region %s: failed to collect Lambda metrics: %v", accountID, region, s.lambdaErr)
+	}
+	if s.ec2, s.ec2Err = rc.collectEC2Metrics(ctx, client, region, accountID, level); s.ec2Err != nil {
+		rc.warn("account %s region %s: failed to collect EC2 metrics: %v", accountID, region, s.ec2Err)
+	}
+	if s.cwLogs, s.cwLogsErr = rc.collectCloudWatchLogsMetrics(ctx, client, region, accountID, level); s.cwLogsErr != nil {
+		rc.warn("account %s region %s: failed to collect CloudWatch Logs metrics: %v", accountID, region, s.cwLogsErr)
+	}
+	if s.monitoring, s.monitoringErr = rc.collectMonitoringMetrics(ctx, client, region, accountID, level); s.monitoringErr != nil {
+		rc.warn("account %s region %s: failed to collect monitoring metrics: %v", accountID, region, s.monitoringErr)
+	}
+	if s.storedImages, s.storedImagesErr = rc.collectStoredImageMetrics(ctx, client, region, accountID, level); s.storedImagesErr != nil {
+		rc.warn("account %s region %s: failed to collect snapshot and AMI metrics: %v", accountID, region, s.storedImagesErr)
+	}
+	if s.loadBalancers, s.loadBalancersErr = rc.collectLoadBalancerMetrics(ctx, client, region, accountID, level); s.loadBalancersErr != nil {
+		rc.warn("account %s region %s: failed to collect load balancer metrics: %v", accountID, region, s.loadBalancersErr)
+	}
+	if s.ses, s.sesErr = rc.collectSESMetrics(ctx, client, region, accountID, level); s.sesErr != nil {
+		rc.warn("account %s region %s: failed to collect SES metrics: %v", accountID, region, s.sesErr)
+	}
+	if s.ecs, s.ecsErr = rc.collectECSMetrics(ctx, client, region, accountID, level); s.ecsErr != nil {
+		rc.warn("account %s region %s: failed to collect ECS metrics: %v", accountID, region, s.ecsErr)
+	}
+	if s.autoScaling, s.autoScalingErr = rc.collectAutoScalingMetrics(ctx, client, region, accountID, level); s.autoScalingErr != nil {
+		rc.warn("account %s region %s: failed to collect auto scaling metrics: %v", accountID, region, s.autoScalingErr)
+	}
+	if s.kms, s.kmsErr = rc.collectKMSMetrics(ctx, client, region, accountID, level); s.kmsErr != nil {
+		rc.warn("account %s region %s: failed to collect KMS metrics: %v", accountID, region, s.kmsErr)
+	}
+	if s.secrets, s.secretsErr = rc.collectSecretsManagerMetrics(ctx, client, region, accountID, level); s.secretsErr != nil {
+		rc.warn("account %s region %s: failed to collect Secrets Manager metrics: %v", accountID, region, s.secretsErr)
+	}
+	if s.ssm, s.ssmErr = rc.collectSSMParameters(ctx, client, region, accountID, level); s.ssmErr != nil {
+		rc.warn("account %s region %s: failed to collect SSM parameters: %v", accountID, region, s.ssmErr)
+	}
+
+	s.warnings = rc.warnings
+	return s
 }
 
 // collectRegionalMetrics collects RDS, network, Lambda, EC2, CloudWatch Logs,
 // KMS, Secrets Manager, and SSM Parameter Store metrics across all regions.
 // level is passed through to per-surface collectors that gate audit / internal
 // fields.
-func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSClient, regions []string, accountID string, level componentsdk.Level) (rdsMetricsWithCounts, networkMetricsWithCounts, LambdaMetrics, EC2Metrics, CloudWatchLogsMetrics, KMSMetrics, SecretsManagerMetrics, SSMParametersMetrics) {
+func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSClient, regions []string, accountID string, level componentsdk.Level) (rdsMetricsWithCounts, networkMetricsWithCounts, LambdaMetrics, EC2Metrics, CloudWatchLogsMetrics, KMSMetrics, SecretsManagerMetrics, SSMParametersMetrics, MonitoringMetrics, StoredImageMetrics, LoadBalancerMetrics, SESMetrics, ECSMetrics, AutoScalingMetrics) {
 	var rdsMetrics rdsMetricsWithCounts
 	var networkMetrics networkMetricsWithCounts
 	var lambdaMetrics LambdaMetrics
 	var ec2Metrics EC2Metrics
 	var cwLogsMetrics CloudWatchLogsMetrics
+	var monitoringMetrics MonitoringMetrics
+	var storedImageMetrics StoredImageMetrics
+	var loadBalancerMetrics LoadBalancerMetrics
+	var sesMetrics SESMetrics
+	var ecsMetrics ECSMetrics
+	var autoScalingMetrics AutoScalingMetrics
 	var kmsMetrics KMSMetrics
 	var secretsMetrics SecretsManagerMetrics
 	var ssmMetrics SSMParametersMetrics
@@ -257,59 +361,69 @@ func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSC
 	var rdsRegionsFailed, networkRegionsFailed []string
 
 	total := int64(len(regions))
-	for i, region := range regions {
-		c.progress(int64(i+1), total, fmt.Sprintf("Scanning region %s", region))
+	var scanned int64
+	var progressMu sync.Mutex
+	scans := mapConcurrent(regions, regionConcurrency, func(region string) regionScan {
+		progressMu.Lock()
+		scanned++
+		c.progress(scanned, total, fmt.Sprintf("Scanning region %s", region))
+		progressMu.Unlock()
+		return c.scanRegion(ctx, client, region, accountID, level)
+	})
 
-		if rds, err := c.collectRDSMetrics(ctx, client, region, level); err == nil {
-			rdsMetrics = mergeRDSMetrics(rdsMetrics, *rds)
+	for i, region := range regions {
+		s := scans[i]
+		c.warnings = append(c.warnings, s.warnings...)
+
+		if s.rdsErr == nil {
+			rdsMetrics = mergeRDSMetrics(rdsMetrics, *s.rds)
 			rdsMetrics.RegionsEvaluatedCount++
 		} else {
 			rdsRegionsFailed = append(rdsRegionsFailed, region)
-			c.warn("account %s region %s: failed to collect RDS metrics: %v", accountID, region, err)
 		}
 
-		if network, err := c.collectNetworkMetrics(ctx, client, region, accountID, level); err == nil {
-			networkMetrics = mergeNetworkMetrics(networkMetrics, *network)
+		if s.networkErr == nil {
+			networkMetrics = mergeNetworkMetrics(networkMetrics, *s.network)
 			networkMetrics.RegionsEvaluatedCount++
 		} else {
 			networkRegionsFailed = append(networkRegionsFailed, region)
-			c.warn("account %s region %s: failed to collect network metrics: %v", accountID, region, err)
 		}
 
-		if lambda, err := c.collectLambdaMetrics(ctx, client, region, accountID, level); err == nil {
-			lambdaMetrics = mergeLambdaMetrics(lambdaMetrics, *lambda)
-		} else {
-			c.warn("account %s region %s: failed to collect Lambda metrics: %v", accountID, region, err)
+		if s.lambdaErr == nil {
+			lambdaMetrics = mergeLambdaMetrics(lambdaMetrics, *s.lambda)
 		}
-
-		if ec2, err := c.collectEC2Metrics(ctx, client, region, accountID, level); err == nil {
-			ec2Metrics = mergeEC2Metrics(ec2Metrics, *ec2)
-		} else {
-			c.warn("account %s region %s: failed to collect EC2 metrics: %v", accountID, region, err)
+		if s.ec2Err == nil {
+			ec2Metrics = mergeEC2Metrics(ec2Metrics, *s.ec2)
 		}
-
-		if cw, err := c.collectCloudWatchLogsMetrics(ctx, client, region, accountID, level); err == nil {
-			cwLogsMetrics = mergeCloudWatchLogsMetrics(cwLogsMetrics, *cw)
-		} else {
-			c.warn("account %s region %s: failed to collect CloudWatch Logs metrics: %v", accountID, region, err)
+		if s.cwLogsErr == nil {
+			cwLogsMetrics = mergeCloudWatchLogsMetrics(cwLogsMetrics, *s.cwLogs)
 		}
-
-		if k, err := c.collectKMSMetrics(ctx, client, region, accountID, level); err == nil {
-			kmsMetrics = mergeKMSMetrics(kmsMetrics, *k)
-		} else {
-			c.warn("account %s region %s: failed to collect KMS metrics: %v", accountID, region, err)
+		if s.monitoringErr == nil {
+			monitoringMetrics = mergeMonitoringMetrics(monitoringMetrics, *s.monitoring)
 		}
-
-		if s, err := c.collectSecretsManagerMetrics(ctx, client, region, accountID, level); err == nil {
-			secretsMetrics = mergeSecretsManagerMetrics(secretsMetrics, *s)
-		} else {
-			c.warn("account %s region %s: failed to collect Secrets Manager metrics: %v", accountID, region, err)
+		if s.storedImagesErr == nil {
+			storedImageMetrics = mergeStoredImageMetrics(storedImageMetrics, *s.storedImages)
 		}
-
-		if p, err := c.collectSSMParameters(ctx, client, region, accountID, level); err == nil {
-			ssmMetrics = mergeSSMParametersMetrics(ssmMetrics, *p)
-		} else {
-			c.warn("account %s region %s: failed to collect SSM parameters: %v", accountID, region, err)
+		if s.loadBalancersErr == nil {
+			loadBalancerMetrics = mergeLoadBalancerMetrics(loadBalancerMetrics, *s.loadBalancers)
+		}
+		if s.sesErr == nil {
+			sesMetrics = mergeSESMetrics(sesMetrics, *s.ses)
+		}
+		if s.ecsErr == nil {
+			ecsMetrics = mergeECSMetrics(ecsMetrics, *s.ecs)
+		}
+		if s.autoScalingErr == nil {
+			autoScalingMetrics = mergeAutoScalingMetrics(autoScalingMetrics, *s.autoScaling)
+		}
+		if s.kmsErr == nil {
+			kmsMetrics = mergeKMSMetrics(kmsMetrics, *s.kms)
+		}
+		if s.secretsErr == nil {
+			secretsMetrics = mergeSecretsManagerMetrics(secretsMetrics, *s.secrets)
+		}
+		if s.ssmErr == nil {
+			ssmMetrics = mergeSSMParametersMetrics(ssmMetrics, *s.ssm)
 		}
 	}
 
@@ -389,7 +503,7 @@ func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSC
 		}
 	}
 
-	return rdsMetrics, networkMetrics, lambdaMetrics, ec2Metrics, cwLogsMetrics, kmsMetrics, secretsMetrics, ssmMetrics
+	return rdsMetrics, networkMetrics, lambdaMetrics, ec2Metrics, cwLogsMetrics, kmsMetrics, secretsMetrics, ssmMetrics, monitoringMetrics, storedImageMetrics, loadBalancerMetrics, sesMetrics, ecsMetrics, autoScalingMetrics
 }
 
 // collectSecurityServices collects account-level security service status.

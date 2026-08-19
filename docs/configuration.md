@@ -115,115 +115,160 @@ collectors:
 
 ## Required IAM Permissions
 
-Create a managed policy with these read-only permissions:
+The collector needs read-only AWS permissions in each target account. The minimum set depends on the `level` config (see [levels.md](levels.md)). Levels are cumulative: audit needs the trust set plus more; internal needs the audit set plus more.
 
-`iam:ListOrganizationsFeatures` only evaluates centralized root access when
-the collector role runs in the AWS Organizations management account or an IAM
-delegated administrator account. Member-account roles record the AWS error code
-as evidence instead of inferring the organization-level state.
+All actions are List, Describe, or Get. Value-reading APIs (`secretsmanager:GetSecretValue`, `ssm:GetParameter`, etc.) are intentionally absent and are forbidden in collector source by a build-time lint.
 
-For internal-level collection, also grant `ec2:DescribeFlowLogs` so VPC rows can
-include per-VPC flow log status. Trust and audit collection do not call that API.
+If a surface is missing its required permissions, the collector emits a per-surface AccessDenied diagnostic warning and continues; it does not fail the whole run.
+
+`iam:ListOrganizationsFeatures` only evaluates centralized root access from the AWS Organizations management account or an IAM delegated administrator account. Member-account roles record the AWS error code in the evidence pack instead of inferring the organization-level state.
+
+### Trust level (default)
+
+The minimum policy. Required for every collection level.
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "IAMReadAccess",
       "Effect": "Allow",
       "Action": [
+        "sts:GetCallerIdentity",
+
+        "iam:GenerateCredentialReport",
+        "iam:GetAccountPasswordPolicy",
         "iam:GetAccountSummary",
         "iam:GetCredentialReport",
-        "iam:GenerateCredentialReport",
+        "iam:ListAccountAliases",
         "iam:ListOrganizationsFeatures",
-        "iam:ListAccountAliases"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "S3ReadAccess",
-      "Effect": "Allow",
-      "Action": [
-        "s3:ListAllMyBuckets",
-        "s3:GetBucketPublicAccessBlock",
-        "s3:GetEncryptionConfiguration",
-        "s3:GetBucketVersioning",
+        "iam:ListMFADevices",
+        "iam:ListRoles",
+
+        "s3:GetAccountPublicAccessBlock",
+        "s3:GetBucketLocation",
         "s3:GetBucketLogging",
         "s3:GetBucketPolicy",
-        "s3:GetBucketLocation",
-        "s3:GetAccountPublicAccessBlock"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "RDSReadAccess",
-      "Effect": "Allow",
-      "Action": [
-        "rds:DescribeDBInstances",
-        "rds:DescribeDBClusters"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "EC2ReadAccess",
-      "Effect": "Allow",
-      "Action": [
-        "ec2:DescribeVpcs",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetBucketVersioning",
+        "s3:GetEncryptionConfiguration",
+        "s3:ListAllMyBuckets",
+
+        "ec2:DescribeImages",
+        "ec2:DescribeInstances",
+        "ec2:DescribeRegions",
         "ec2:DescribeSecurityGroups",
-        "ec2:DescribeRegions"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "CloudTrailReadAccess",
-      "Effect": "Allow",
-      "Action": [
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeVpcs",
+
+        "cloudfront:ListDistributions",
+        "cloudwatch:DescribeAlarms",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "sns:ListSubscriptionsByTopic",
+
+        "autoscaling:DescribeAutoScalingGroups",
+        "autoscaling:DescribePolicies",
+        "application-autoscaling:DescribeScalableTargets",
+        "application-autoscaling:DescribeScalingPolicies",
+        "ecs:DescribeServices",
+        "ecs:ListClusters",
+        "ecs:ListServices",
+        "elasticloadbalancing:DescribeTargetGroups",
+
+        "ses:GetConfigurationSet",
+        "ses:GetEmailIdentity",
+        "ses:ListConfigurationSets",
+        "ses:ListEmailIdentities",
+
+        "rds:DescribeDBClusters",
+        "rds:DescribeDBParameters",
+        "rds:DescribeEventSubscriptions",
+        "rds:DescribeDBInstances",
+
         "cloudtrail:DescribeTrails",
-        "cloudtrail:GetTrailStatus"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "ConfigReadAccess",
-      "Effect": "Allow",
-      "Action": [
+        "cloudtrail:GetTrailStatus",
+
         "config:DescribeConfigurationRecorders",
-        "config:DescribeConfigurationRecorderStatus"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "GuardDutyReadAccess",
-      "Effect": "Allow",
-      "Action": [
-        "guardduty:ListDetectors",
+        "config:DescribeConfigurationRecorderStatus",
+
         "guardduty:GetDetector",
-        "guardduty:ListFindings"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "SecurityHubReadAccess",
-      "Effect": "Allow",
-      "Action": [
+        "guardduty:ListDetectors",
+        "guardduty:ListFindings",
+
         "securityhub:DescribeHub",
         "securityhub:GetEnabledStandards",
+        "securityhub:GetFindings",
         "securityhub:ListEnabledProductsForImport",
-        "securityhub:GetFindings"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "STSReadAccess",
-      "Effect": "Allow",
-      "Action": [
-        "sts:GetCallerIdentity"
+
+        "access-analyzer:ListAnalyzers",
+        "access-analyzer:ListFindings",
+
+        "sso:ListInstances",
+        "sso:ListPermissionSets",
+        "identitystore:ListGroups",
+        "identitystore:ListUsers",
+
+        "lambda:ListFunctions",
+        "logs:DescribeLogGroups",
+
+        "kms:DescribeKey",
+        "kms:GetKeyRotationStatus",
+        "kms:ListKeys",
+
+        "secretsmanager:ListSecrets",
+        "ssm:DescribeParameters"
       ],
       "Resource": "*"
     }
   ]
 }
+```
+
+### Audit level
+
+Add these actions to the trust-level policy above. They surface the Identity Center access model (permission sets, the user and group roster, membership and account-assignment edges), per-function Lambda configuration, KMS alias enrichment, and the organization-membership classification of cross-account role trust.
+
+```json
+[
+  "sso:DescribePermissionSet",
+  "sso:ListAccountsForProvisionedPermissionSet",
+  "sso:ListManagedPoliciesInPermissionSet",
+  "sso:GetInlinePolicyForPermissionSet",
+  "sso:ListAccountAssignments",
+
+  "identitystore:ListGroupMemberships",
+
+  "organizations:ListAccounts",
+
+  "lambda:GetPolicy",
+  "lambda:ListFunctionUrlConfigs",
+
+  "kms:ListAliases"
+]
+```
+
+`organizations:ListAccounts` is optional and best effort: it succeeds only from the Organizations management account or a delegated administrator. Without it, per-role `external_trust_in_org` determinations are absent rather than guessed, and the run continues.
+
+### Internal level
+
+Add these actions on top of the audit-level set. They surface per-rule Config compliance, GuardDuty finding payloads, per-bucket S3 ACL and lifecycle configuration, and per-VPC flow log status.
+
+```json
+[
+  "config:DescribeConfigRules",
+  "config:DescribeComplianceByConfigRule",
+  "config:DescribeConfigRuleEvaluationStatus",
+
+  "guardduty:GetFindings",
+
+  "ec2:DescribeFlowLogs",
+
+  "s3:GetBucketAcl",
+  "s3:GetLifecycleConfiguration"
+]
 ```
 
 ## Multi-Account Setup
@@ -280,7 +325,7 @@ collectors:
 
 ## Region Configuration
 
-By default, the collector discovers all enabled regions in the account. To limit to specific regions:
+By default, the collector discovers all enabled regions in the account and scans up to five of them concurrently. AWS rate limits are per region, so concurrent regions do not compete for API quotas. To limit to specific regions:
 
 ```yaml
 collectors:

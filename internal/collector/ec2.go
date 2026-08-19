@@ -19,10 +19,10 @@ func (c *Collector) collectEC2Metrics(ctx context.Context, client *aws.AWSClient
 		return nil, err
 	}
 
-	volumeEncrypted, err := client.ListEC2Volumes(ctx, region)
+	volumes, err := client.ListEC2Volumes(ctx, region)
 	if err != nil {
 		c.warn("account %s region %s: failed to list EC2 volumes: %v", accountID, region, err)
-		volumeEncrypted = map[string]bool{}
+		volumes = map[string]aws.EBSVolumeState{}
 	}
 
 	defaultVPCByID, err := defaultVPCLookup(ctx, client, region)
@@ -32,6 +32,7 @@ func (c *Collector) collectEC2Metrics(ctx context.Context, client *aws.AWSClient
 	}
 
 	out := &EC2Metrics{}
+	out.UnattachedVolumeCount, out.UnattachedUnencryptedVolumeCount = countUnattachedVolumes(volumes)
 	for _, inst := range instances {
 		if inst.State != "running" {
 			continue
@@ -46,7 +47,7 @@ func (c *Collector) collectEC2Metrics(ctx context.Context, client *aws.AWSClient
 		if defaultVPCByID[inst.VPCID] {
 			out.DefaultVPCCount++
 		}
-		if instanceHasUnencryptedVolume(inst, volumeEncrypted) {
+		if instanceHasUnencryptedVolume(inst, volumes) {
 			out.InstancesWithUnencryptedVolumeCount++
 		}
 	}
@@ -56,7 +57,7 @@ func (c *Collector) collectEC2Metrics(ctx context.Context, client *aws.AWSClient
 	}
 
 	for _, inst := range instances {
-		out.Instances = append(out.Instances, ec2InstanceToRow(inst, region, defaultVPCByID[inst.VPCID], volumeEncrypted[inst.RootVolumeID], level))
+		out.Instances = append(out.Instances, ec2InstanceToRow(inst, region, defaultVPCByID[inst.VPCID], volumes[inst.RootVolumeID].Encrypted, level))
 	}
 	return out, nil
 }
@@ -75,13 +76,29 @@ func defaultVPCLookup(ctx context.Context, client *aws.AWSClient, region string)
 	return out, nil
 }
 
-func instanceHasUnencryptedVolume(inst aws.EC2Instance, encrypted map[string]bool) bool {
+func instanceHasUnencryptedVolume(inst aws.EC2Instance, volumes map[string]aws.EBSVolumeState) bool {
 	for _, volID := range inst.AttachedVolumeIDs {
-		if enc, known := encrypted[volID]; known && !enc {
+		if state, known := volumes[volID]; known && !state.Encrypted {
 			return true
 		}
 	}
 	return false
+}
+
+// countUnattachedVolumes reports volumes attached to nothing, and how many of
+// those are unencrypted. Detached volumes keep their data and are invisible to
+// the instance join, so they are where forgotten unencrypted data accumulates.
+func countUnattachedVolumes(volumes map[string]aws.EBSVolumeState) (total, unencrypted int) {
+	for _, state := range volumes {
+		if state.Attached {
+			continue
+		}
+		total++
+		if !state.Encrypted {
+			unencrypted++
+		}
+	}
+	return total, unencrypted
 }
 
 // ec2InstanceToRow projects an aws.EC2Instance onto its audit-level row.

@@ -26,6 +26,7 @@ type roleLister interface {
 type iamClient interface {
 	GetCredentialReport(ctx context.Context) (*aws.CredentialReport, error)
 	GetAccountSummary(ctx context.Context) (*aws.AccountSummary, error)
+	GetPasswordPolicy(ctx context.Context) (*aws.PasswordPolicy, error)
 	ListOrganizationsFeatures(ctx context.Context) (*aws.OrganizationFeatures, error)
 	ListOrganizationAccountIDs(ctx context.Context) ([]string, error)
 	mfaDeviceLister
@@ -60,6 +61,17 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, acc
 	} else {
 		processRootAccountSummary(summary, metrics)
 	}
+	policy, policyErr := client.GetPasswordPolicy(ctx)
+	if policyErr != nil {
+		metrics.PasswordPolicyErrorCode = apiErrorCode(policyErr)
+		c.warn("account %s: failed to collect IAM account password policy: %v", accountID, policyErr)
+	} else {
+		// A nil policy with no error is AWS reporting that none is configured,
+		// which is an answer rather than a gap.
+		metrics.PasswordPolicyEvaluated = true
+		metrics.PasswordPolicy = passwordPolicyToMetrics(policy)
+	}
+
 	features, err := client.ListOrganizationsFeatures(ctx)
 	if err != nil {
 		processRootOrganizationsFeatures(nil, err, metrics)
@@ -410,6 +422,28 @@ func (c *Collector) processIAMUser(user aws.CredentialReportUser, keyRotationThr
 		if hasRotatedKeys(user, keyRotationThreshold) {
 			stats.keysRotated++
 		}
+	}
+}
+
+// passwordPolicyToMetrics projects the account password policy onto the
+// artifact shape. Returns nil when no policy is configured, which the caller
+// distinguishes from a failed lookup via PasswordPolicyEvaluated.
+func passwordPolicyToMetrics(policy *aws.PasswordPolicy) *IAMPasswordPolicy {
+	if policy == nil {
+		return nil
+	}
+
+	return &IAMPasswordPolicy{
+		MinimumLength:              policy.MinimumPasswordLength,
+		RequireSymbols:             policy.RequireSymbols,
+		RequireNumbers:             policy.RequireNumbers,
+		RequireUppercase:           policy.RequireUppercase,
+		RequireLowercase:           policy.RequireLowercase,
+		AllowUsersToChangePassword: policy.AllowUsersToChangePassword,
+		ExpirePasswords:            policy.ExpirePasswords,
+		HardExpiry:                 policy.HardExpiry,
+		MaxPasswordAgeDays:         policy.MaxPasswordAge,
+		PasswordReusePrevention:    policy.PasswordReusePrevention,
 	}
 }
 

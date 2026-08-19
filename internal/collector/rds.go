@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"strings"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 	"github.com/locktivity/epack/componentsdk"
@@ -39,9 +40,49 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 	result.instanceCount = len(instances)
 	result.clusterCount = len(clusters)
 
+	c.collectRDSEventAlerting(ctx, client, region, &result.RDSMetrics)
+
+	// One parameter read per distinct in-use group, not per instance.
+	paramsByGroup := map[string]map[string]string{}
+	paramErrByGroup := map[string]error{}
+	dmlByInstance := map[string]string{}
+	for _, inst := range instances {
+		if !strings.HasPrefix(inst.Engine, "postgres") || inst.ParameterGroupName == "" {
+			dmlByInstance[inst.DBInstanceIdentifier] = classifyDMLLogging(inst, nil, nil)
+			continue
+		}
+		if _, seen := paramsByGroup[inst.ParameterGroupName]; !seen {
+			params, err := client.GetDBParameters(ctx, region, inst.ParameterGroupName)
+			paramsByGroup[inst.ParameterGroupName] = params
+			paramErrByGroup[inst.ParameterGroupName] = err
+			if err != nil {
+				c.warn("region %s: failed to read parameter group %s; data-change logging is unknown, not absent: %v", region, inst.ParameterGroupName, err)
+			}
+		}
+		dmlByInstance[inst.DBInstanceIdentifier] = classifyDMLLogging(inst, paramsByGroup[inst.ParameterGroupName], paramErrByGroup[inst.ParameterGroupName])
+	}
+	for _, verdict := range dmlByInstance {
+		switch verdict {
+		case dmlLoggingConfigured:
+			result.DMLLoggingConfiguredCount++
+		case dmlLoggingNotExported:
+			result.DMLLoggingNotExportedCount++
+		case dmlLoggingPending:
+			result.DMLLoggingPendingCount++
+		case dmlLoggingNotConfigured:
+			result.DMLLoggingNotConfiguredCount++
+		case dmlLoggingUnknown:
+			result.DMLLoggingUnknownCount++
+		case dmlLoggingNotClassified:
+			result.DMLLoggingNotClassifiedCount++
+		}
+	}
+
 	if level.AtLeast(componentsdk.LevelAudit) {
 		for _, inst := range instances {
-			result.Instances = append(result.Instances, dbInstanceToRow(inst, region, level))
+			row := dbInstanceToRow(inst, region, level)
+			row.DMLLogging = dmlByInstance[inst.DBInstanceIdentifier]
+			result.Instances = append(result.Instances, row)
 		}
 		for _, cl := range clusters {
 			result.Clusters = append(result.Clusters, dbClusterToRow(cl, region, level))
@@ -123,6 +164,7 @@ func dbInstanceToRow(inst aws.DBInstance, region string, level componentsdk.Leve
 		PubliclyAccessible:    inst.PubliclyAccessible,
 		DeletionProtection:    inst.DeletionProtection,
 		BackupRetentionPeriod: inst.BackupRetentionPeriod,
+		PreferredBackupWindow: inst.PreferredBackupWindow,
 		MultiAZ:               inst.MultiAZ,
 	}
 	if level.AtLeast(componentsdk.LevelInternal) {
@@ -158,6 +200,19 @@ func mergeRDSMetrics(a, b rdsMetricsWithCounts) rdsMetricsWithCounts {
 	result := a
 	result.instanceCount += b.instanceCount
 	result.clusterCount += b.clusterCount
+
+	// New-count fields sum across regions.
+	result.EventSubscriptionCount += b.EventSubscriptionCount
+	result.BackupFailureAlertingSubscriptionCount += b.BackupFailureAlertingSubscriptionCount
+	result.BackupFailureAlertingReachingSubscriberCount += b.BackupFailureAlertingReachingSubscriberCount
+	result.BackupAlertingTopicsUnresolvedCount += b.BackupAlertingTopicsUnresolvedCount
+	result.EventSubscriptionsUnresolvedRegionCount += b.EventSubscriptionsUnresolvedRegionCount
+	result.DMLLoggingConfiguredCount += b.DMLLoggingConfiguredCount
+	result.DMLLoggingNotExportedCount += b.DMLLoggingNotExportedCount
+	result.DMLLoggingPendingCount += b.DMLLoggingPendingCount
+	result.DMLLoggingNotConfiguredCount += b.DMLLoggingNotConfiguredCount
+	result.DMLLoggingUnknownCount += b.DMLLoggingUnknownCount
+	result.DMLLoggingNotClassifiedCount += b.DMLLoggingNotClassifiedCount
 
 	// Audit-level slices: concatenate across regions.
 	if len(b.Instances) > 0 {
