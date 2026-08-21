@@ -39,6 +39,7 @@ func (c *Collector) collectECSMetrics(ctx context.Context, client *aws.AWSClient
 				AssignsPublicIP:               s.AssignsPublicIP,
 				SubnetCount:                   s.SubnetCount,
 				LoadBalanced:                  s.LoadBalanced,
+				ExecuteCommandEnabled:         s.EnableExecuteCommand,
 				HealthCheckGracePeriodSeconds: s.HealthCheckGracePeriodSeconds,
 				ScalingUnresolved:             scalingErr != nil,
 			}
@@ -85,6 +86,9 @@ func aggregateECS(services []aws.ECSService, scaling []aws.ECSServiceScaling, sc
 		if s.LoadBalanced {
 			out.LoadBalancedServiceCount++
 		}
+		if s.EnableExecuteCommand {
+			out.ExecEnabledServiceCount++
+		}
 
 		if !scalingResolved {
 			out.ScalingUnresolvedServiceCount++
@@ -125,6 +129,7 @@ func mergeECSMetrics(a, b ECSMetrics) ECSMetrics {
 		ServicesWithCircuitBreakerCount: a.ServicesWithCircuitBreakerCount + b.ServicesWithCircuitBreakerCount,
 		ServicesWithPublicIPCount:       a.ServicesWithPublicIPCount + b.ServicesWithPublicIPCount,
 		LoadBalancedServiceCount:        a.LoadBalancedServiceCount + b.LoadBalancedServiceCount,
+		ExecEnabledServiceCount:         a.ExecEnabledServiceCount + b.ExecEnabledServiceCount,
 		ScalingUnresolvedServiceCount:   a.ScalingUnresolvedServiceCount + b.ScalingUnresolvedServiceCount,
 		Services:                        append(append([]ECSServiceRow(nil), a.Services...), b.Services...),
 	}

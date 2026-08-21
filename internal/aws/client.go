@@ -22,6 +22,7 @@ import (
 	configservice "github.com/aws/aws-sdk-go-v2/service/configservice"
 	configtypes "github.com/aws/aws-sdk-go-v2/service/configservice/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/guardduty"
 	guarddutytypes "github.com/aws/aws-sdk-go-v2/service/guardduty/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -70,6 +71,7 @@ type Client interface {
 	// Network (regional)
 	ListVPCs(ctx context.Context, region string, includeFlowLogs bool) ([]VPC, error)
 	ListSecurityGroups(ctx context.Context, region string) ([]SecurityGroup, error)
+	ListSecurityGroupsByID(ctx context.Context, region string, groupIDs []string) ([]SecurityGroup, error)
 
 	// Account Security (regional for some)
 	DescribeTrails(ctx context.Context) ([]Trail, error)
@@ -1067,6 +1069,14 @@ func (c *AWSClient) ListDBInstances(ctx context.Context, region string) ([]DBIns
 				instance.ParameterGroupName = aws.ToString(db.DBParameterGroups[0].DBParameterGroupName)
 				instance.ParameterApplyStatus = aws.ToString(db.DBParameterGroups[0].ParameterApplyStatus)
 			}
+			if endpoint := db.Endpoint; endpoint != nil { // LINT-ALLOW: the RDS listener port feeds ingress evaluation; the endpoint address is never read.
+				instance.EndpointPort = int(aws.ToInt32(endpoint.Port))
+			}
+			for _, sg := range db.VpcSecurityGroups {
+				if id := aws.ToString(sg.VpcSecurityGroupId); id != "" {
+					instance.VpcSecurityGroupIDs = append(instance.VpcSecurityGroupIDs, id)
+				}
+			}
 			instances = append(instances, instance)
 		}
 	}
@@ -1189,38 +1199,71 @@ func (c *AWSClient) ListSecurityGroups(ctx context.Context, region string) ([]Se
 		}
 
 		for _, sg := range output.SecurityGroups {
-			group := SecurityGroup{
-				GroupID:   aws.ToString(sg.GroupId),
-				GroupName: aws.ToString(sg.GroupName),
-				VPCID:     aws.ToString(sg.VpcId),
-				IsDefault: aws.ToString(sg.GroupName) == "default",
-			}
-
-			for _, perm := range sg.IpPermissions {
-				rule := SecurityGroupRule{
-					Protocol: aws.ToString(perm.IpProtocol),
-					FromPort: int(aws.ToInt32(perm.FromPort)),
-					ToPort:   int(aws.ToInt32(perm.ToPort)),
-				}
-				for _, ip := range perm.IpRanges {
-					rule.CIDRBlocks = append(rule.CIDRBlocks, aws.ToString(ip.CidrIp))
-				}
-				for _, ip := range perm.Ipv6Ranges {
-					rule.CIDRBlocks = append(rule.CIDRBlocks, aws.ToString(ip.CidrIpv6))
-				}
-				for _, src := range perm.UserIdGroupPairs {
-					if src.GroupId != nil {
-						rule.SourceSGIDs = append(rule.SourceSGIDs, aws.ToString(src.GroupId))
-					}
-				}
-				group.IngressRules = append(group.IngressRules, rule)
-			}
-
-			securityGroups = append(securityGroups, group)
+			securityGroups = append(securityGroups, securityGroupFromSDK(sg))
 		}
 	}
 
 	return securityGroups, nil
+}
+
+// ListSecurityGroupsByID describes only the named groups. Surfaces that join
+// a resource's attached groups (RDS database-port ingress) use this instead
+// of pulling the region's full inventory a second time.
+func (c *AWSClient) ListSecurityGroupsByID(ctx context.Context, region string, groupIDs []string) ([]SecurityGroup, error) {
+	if len(groupIDs) == 0 {
+		return nil, nil
+	}
+
+	cfg := c.cfg.Copy()
+	cfg.Region = region
+	ec2Client := ec2.NewFromConfig(cfg)
+
+	var securityGroups []SecurityGroup
+	paginator := ec2.NewDescribeSecurityGroupsPaginator(ec2Client, &ec2.DescribeSecurityGroupsInput{GroupIds: groupIDs})
+
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("describing security groups by id: %w", err)
+		}
+
+		for _, sg := range output.SecurityGroups {
+			securityGroups = append(securityGroups, securityGroupFromSDK(sg))
+		}
+	}
+
+	return securityGroups, nil
+}
+
+func securityGroupFromSDK(sg ec2types.SecurityGroup) SecurityGroup {
+	group := SecurityGroup{
+		GroupID:   aws.ToString(sg.GroupId),
+		GroupName: aws.ToString(sg.GroupName),
+		VPCID:     aws.ToString(sg.VpcId),
+		IsDefault: aws.ToString(sg.GroupName) == "default",
+	}
+
+	for _, perm := range sg.IpPermissions {
+		rule := SecurityGroupRule{
+			Protocol: aws.ToString(perm.IpProtocol),
+			FromPort: int(aws.ToInt32(perm.FromPort)),
+			ToPort:   int(aws.ToInt32(perm.ToPort)),
+		}
+		for _, ip := range perm.IpRanges {
+			rule.CIDRBlocks = append(rule.CIDRBlocks, aws.ToString(ip.CidrIp))
+		}
+		for _, ip := range perm.Ipv6Ranges {
+			rule.CIDRBlocks = append(rule.CIDRBlocks, aws.ToString(ip.CidrIpv6))
+		}
+		for _, src := range perm.UserIdGroupPairs {
+			if src.GroupId != nil {
+				rule.SourceSGIDs = append(rule.SourceSGIDs, aws.ToString(src.GroupId))
+			}
+		}
+		group.IngressRules = append(group.IngressRules, rule)
+	}
+
+	return group
 }
 
 // DescribeTrails returns CloudTrail trails.

@@ -28,6 +28,10 @@ type ECSService struct {
 	SubnetCount            int
 	LoadBalanced           bool
 
+	// EnableExecuteCommand is whether tasks this service launches accept ECS
+	// Exec, which opens an interactive shell in a running container.
+	EnableExecuteCommand bool
+
 	HealthCheckGracePeriodSeconds int32
 }
 
@@ -85,12 +89,13 @@ func (c *AWSClient) ListECSServices(ctx context.Context, region string) ([]ECSSe
 			}
 			for _, s := range out.Services {
 				service := ECSService{
-					Cluster:      clusterName,
-					Name:         aws.ToString(s.ServiceName),
-					LaunchType:   string(s.LaunchType),
-					DesiredCount: s.DesiredCount,
-					RunningCount: s.RunningCount,
-					LoadBalanced: len(s.LoadBalancers) > 0,
+					Cluster:              clusterName,
+					Name:                 aws.ToString(s.ServiceName),
+					LaunchType:           string(s.LaunchType),
+					DesiredCount:         s.DesiredCount,
+					RunningCount:         s.RunningCount,
+					LoadBalanced:         len(s.LoadBalancers) > 0,
+					EnableExecuteCommand: s.EnableExecuteCommand,
 
 					HealthCheckGracePeriodSeconds: aws.ToInt32(s.HealthCheckGracePeriodSeconds),
 				}

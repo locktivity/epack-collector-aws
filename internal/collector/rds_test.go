@@ -140,3 +140,107 @@ func TestMergeRDSMetrics_EmptyAuditSlicesStayEmpty(t *testing.T) {
 		t.Errorf("trust-only merge should not populate audit slices, got %+v / %+v", got.Instances, got.Clusters)
 	}
 }
+
+func TestEvaluateDBPortIngress(t *testing.T) {
+	prod := aws.DBInstance{
+		DBInstanceIdentifier: "prod-db",
+		EndpointPort:         5432,
+		VpcSecurityGroupIDs:  []string{"sg-db"},
+	}
+
+	t.Run("a source-group rule on the endpoint port is the only allowed source", func(t *testing.T) {
+		sg := aws.SecurityGroup{GroupID: "sg-db", IngressRules: []aws.SecurityGroupRule{
+			{Protocol: "tcp", FromPort: 5432, ToPort: 5432, SourceSGIDs: []string{"sg-app"}},
+			{Protocol: "tcp", FromPort: 443, ToPort: 443, CIDRBlocks: []string{"0.0.0.0/0"}},
+		}}
+
+		got := evaluateDBPortIngress([]aws.DBInstance{prod}, []aws.SecurityGroup{sg})["prod-db"]
+
+		if !got.evaluated {
+			t.Fatal("verdict should be evaluated")
+		}
+		if got.openToInternet {
+			t.Error("a world-open rule on another port must not open the database port")
+		}
+		if len(got.sources) != 1 || got.sources[0] != "sg-app" {
+			t.Errorf("sources = %v, want [sg-app]", got.sources)
+		}
+	})
+
+	t.Run("an all-protocol rule from the internet opens the port", func(t *testing.T) {
+		sg := aws.SecurityGroup{GroupID: "sg-db", IngressRules: []aws.SecurityGroupRule{
+			{Protocol: "-1", CIDRBlocks: []string{"0.0.0.0/0"}},
+		}}
+
+		got := evaluateDBPortIngress([]aws.DBInstance{prod}, []aws.SecurityGroup{sg})["prod-db"]
+
+		if !got.openToInternet {
+			t.Error("an all-protocol world rule covers every port, including the database port")
+		}
+		if len(got.sources) != 1 || got.sources[0] != "0.0.0.0/0" {
+			t.Errorf("sources = %v, want [0.0.0.0/0]", got.sources)
+		}
+	})
+
+	t.Run("an attached group missing from the fetch leaves the instance unevaluated", func(t *testing.T) {
+		got := evaluateDBPortIngress([]aws.DBInstance{prod}, nil)["prod-db"]
+
+		if got.evaluated {
+			t.Error("reachability without the attached group is unproven, not closed")
+		}
+	})
+
+	t.Run("no endpoint port leaves the instance unevaluated", func(t *testing.T) {
+		pending := aws.DBInstance{DBInstanceIdentifier: "creating-db", VpcSecurityGroupIDs: []string{"sg-db"}}
+		sg := aws.SecurityGroup{GroupID: "sg-db"}
+
+		got := evaluateDBPortIngress([]aws.DBInstance{pending}, []aws.SecurityGroup{sg})["creating-db"]
+
+		if got.evaluated {
+			t.Error("no port means no reachability question to answer yet")
+		}
+	})
+
+	t.Run("sources dedupe and sort across attached groups", func(t *testing.T) {
+		inst := aws.DBInstance{DBInstanceIdentifier: "prod-db", EndpointPort: 5432, VpcSecurityGroupIDs: []string{"sg-a", "sg-b"}}
+		sgA := aws.SecurityGroup{GroupID: "sg-a", IngressRules: []aws.SecurityGroupRule{
+			{Protocol: "tcp", FromPort: 5432, ToPort: 5432, SourceSGIDs: []string{"sg-app"}},
+		}}
+		sgB := aws.SecurityGroup{GroupID: "sg-b", IngressRules: []aws.SecurityGroupRule{
+			{Protocol: "tcp", FromPort: 0, ToPort: 65535, CIDRBlocks: []string{"10.0.0.0/16"}, SourceSGIDs: []string{"sg-app"}},
+		}}
+
+		got := evaluateDBPortIngress([]aws.DBInstance{inst}, []aws.SecurityGroup{sgA, sgB})["prod-db"]
+
+		want := []string{"10.0.0.0/16", "sg-app"}
+		if len(got.sources) != 2 || got.sources[0] != want[0] || got.sources[1] != want[1] {
+			t.Errorf("sources = %v, want %v", got.sources, want)
+		}
+	})
+
+	t.Run("an evaluated instance with nothing allowed keeps an empty source list", func(t *testing.T) {
+		sg := aws.SecurityGroup{GroupID: "sg-db", IngressRules: []aws.SecurityGroupRule{
+			{Protocol: "tcp", FromPort: 443, ToPort: 443, CIDRBlocks: []string{"10.0.0.0/16"}},
+		}}
+
+		got := evaluateDBPortIngress([]aws.DBInstance{prod}, []aws.SecurityGroup{sg})["prod-db"]
+
+		if !got.evaluated || got.sources == nil || len(got.sources) != 0 {
+			t.Errorf("verdict = %+v, want evaluated with an empty, non-nil source list", got)
+		}
+	})
+}
+
+func TestMergeRDSMetrics_SumsDBPortIngressCounts(t *testing.T) {
+	a := rdsMetricsWithCounts{RDSMetrics: RDSMetrics{DBPortOpenToInternetCount: 1, DBPortIngressUnevaluatedCount: 2}}
+	b := rdsMetricsWithCounts{RDSMetrics: RDSMetrics{DBPortIngressUnevaluatedCount: 1}}
+
+	got := mergeRDSMetrics(a, b)
+
+	if got.DBPortOpenToInternetCount != 1 {
+		t.Errorf("DBPortOpenToInternetCount = %d, want 1", got.DBPortOpenToInternetCount)
+	}
+	if got.DBPortIngressUnevaluatedCount != 3 {
+		t.Errorf("DBPortIngressUnevaluatedCount = %d, want 3", got.DBPortIngressUnevaluatedCount)
+	}
+}

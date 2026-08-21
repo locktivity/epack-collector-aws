@@ -372,6 +372,13 @@ type RDSMetrics struct {
 	BackupRetentionMin      int `json:"backup_retention_min"`      // Minimum retention days across all instances
 	MultiAZEnabled          int `json:"multi_az_enabled"`
 
+	// Database-port ingress across instances: whether any security group
+	// allows ingress from the internet on the database's listening port.
+	// Unevaluated instances are excluded from the open count; reachability
+	// there is unproven, not open.
+	DBPortOpenToInternetCount     int `json:"db_port_open_to_internet_count"`
+	DBPortIngressUnevaluatedCount int `json:"db_port_ingress_unevaluated_count,omitempty"`
+
 	// Audit: present (possibly []) when collected at audit+; null when not collected.
 	Instances []RDSInstance `json:"instances"`
 	Clusters  []RDSCluster  `json:"clusters"`
@@ -392,6 +399,14 @@ type RDSInstance struct {
 	PreferredBackupWindow string `json:"preferred_backup_window,omitempty"`
 	MultiAZ               bool   `json:"multi_az"`
 	DMLLogging            string `json:"dml_logging,omitempty"`
+
+	// Database-port ingress: the sources allowed to reach the listening
+	// port. Sources is null when unevaluated, [] when nothing is allowed,
+	// and otherwise lists CIDR blocks and source security group ids.
+	// Unevaluated means unproven, not closed.
+	DBPortIngressEvaluated *bool    `json:"db_port_ingress_evaluated,omitempty"`
+	DBPortOpenToInternet   *bool    `json:"db_port_open_to_internet,omitempty"`
+	DBPortIngressSources   []string `json:"db_port_ingress_sources"`
 
 	// Internal:
 	LatestRestorableTime string `json:"latest_restorable_time,omitempty"`
@@ -820,6 +835,10 @@ type ECSMetrics struct {
 	ServicesWithPublicIPCount       int `json:"services_with_public_ip_count"`
 	LoadBalancedServiceCount        int `json:"load_balanced_service_count"`
 
+	// Services with ECS Exec enabled, which allows an interactive shell into
+	// running containers.
+	ExecEnabledServiceCount int `json:"exec_enabled_service_count"`
+
 	// Services whose scaling state could not be read. They are excluded from
 	// the autoscaling and single-task findings rather than counted unscaled.
 	ScalingUnresolvedServiceCount int `json:"scaling_unresolved_service_count,omitempty"`
@@ -847,6 +866,7 @@ type ECSServiceRow struct {
 	AssignsPublicIP               bool     `json:"assigns_public_ip"`
 	SubnetCount                   int      `json:"subnet_count,omitempty"`
 	LoadBalanced                  bool     `json:"load_balanced"`
+	ExecuteCommandEnabled         bool     `json:"execute_command_enabled"`
 	HealthCheckGracePeriodSeconds int32    `json:"health_check_grace_period_seconds,omitempty"`
 	ScalingUnresolved             bool     `json:"scaling_unresolved,omitempty"`
 }

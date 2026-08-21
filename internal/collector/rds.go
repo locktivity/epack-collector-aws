@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
@@ -78,10 +79,27 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 		}
 	}
 
+	ingressByInstance := c.collectDBPortIngress(ctx, client, region, instances)
+	for _, verdict := range ingressByInstance {
+		if !verdict.evaluated {
+			result.DBPortIngressUnevaluatedCount++
+			continue
+		}
+		if verdict.openToInternet {
+			result.DBPortOpenToInternetCount++
+		}
+	}
+
 	if level.AtLeast(componentsdk.LevelAudit) {
 		for _, inst := range instances {
 			row := dbInstanceToRow(inst, region, level)
 			row.DMLLogging = dmlByInstance[inst.DBInstanceIdentifier]
+			verdict := ingressByInstance[inst.DBInstanceIdentifier]
+			row.DBPortIngressEvaluated = boolPtr(verdict.evaluated)
+			if verdict.evaluated {
+				row.DBPortOpenToInternet = boolPtr(verdict.openToInternet)
+				row.DBPortIngressSources = verdict.sources
+			}
 			result.Instances = append(result.Instances, row)
 		}
 		for _, cl := range clusters {
@@ -152,6 +170,108 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 	return result, nil
 }
 
+// dbPortIngress is one instance's database-port reachability verdict.
+type dbPortIngress struct {
+	evaluated      bool
+	openToInternet bool
+	sources        []string
+}
+
+// collectDBPortIngress fetches the security groups attached to the region's
+// instances and evaluates database-port reachability. On a fetch failure every
+// instance stays unevaluated: reachability is unproven, not closed.
+func (c *Collector) collectDBPortIngress(ctx context.Context, client *aws.AWSClient, region string, instances []aws.DBInstance) map[string]dbPortIngress {
+	if len(instances) == 0 {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	var groupIDs []string
+	for _, inst := range instances {
+		for _, id := range inst.VpcSecurityGroupIDs {
+			if !seen[id] {
+				seen[id] = true
+				groupIDs = append(groupIDs, id)
+			}
+		}
+	}
+
+	var sgs []aws.SecurityGroup
+	if len(groupIDs) > 0 {
+		var err error
+		sgs, err = client.ListSecurityGroupsByID(ctx, region, groupIDs)
+		if err != nil {
+			c.warn("region %s: failed to read security groups for database-port ingress; reachability is unproven, not closed: %v", region, err)
+			sgs = nil
+		}
+	}
+
+	return evaluateDBPortIngress(instances, sgs)
+}
+
+// evaluateDBPortIngress resolves, per instance, which sources the security
+// groups allow on the instance's listening port. An instance with no endpoint
+// port or with an attached group missing from sgs stays unevaluated.
+func evaluateDBPortIngress(instances []aws.DBInstance, sgs []aws.SecurityGroup) map[string]dbPortIngress {
+	byID := make(map[string]aws.SecurityGroup, len(sgs))
+	for _, sg := range sgs {
+		byID[sg.GroupID] = sg
+	}
+
+	out := make(map[string]dbPortIngress, len(instances))
+	for _, inst := range instances {
+		out[inst.DBInstanceIdentifier] = instanceDBPortIngress(inst, byID)
+	}
+	return out
+}
+
+func instanceDBPortIngress(inst aws.DBInstance, byID map[string]aws.SecurityGroup) dbPortIngress {
+	if inst.EndpointPort == 0 || len(inst.VpcSecurityGroupIDs) == 0 {
+		return dbPortIngress{}
+	}
+
+	verdict := dbPortIngress{evaluated: true, sources: []string{}}
+	seen := map[string]bool{}
+	for _, id := range inst.VpcSecurityGroupIDs {
+		sg, ok := byID[id]
+		if !ok {
+			return dbPortIngress{}
+		}
+		for _, rule := range sg.IngressRules {
+			if !ruleCoversPort(rule, inst.EndpointPort) {
+				continue
+			}
+			if rule.IsOpenToWorld() {
+				verdict.openToInternet = true
+			}
+			for _, source := range rule.CIDRBlocks {
+				if !seen[source] {
+					seen[source] = true
+					verdict.sources = append(verdict.sources, source)
+				}
+			}
+			for _, source := range rule.SourceSGIDs {
+				if !seen[source] {
+					seen[source] = true
+					verdict.sources = append(verdict.sources, source)
+				}
+			}
+		}
+	}
+	sort.Strings(verdict.sources)
+	return verdict
+}
+
+func ruleCoversPort(rule aws.SecurityGroupRule, port int) bool {
+	if rule.Protocol == "-1" {
+		return true
+	}
+	if rule.Protocol != "tcp" {
+		return false
+	}
+	return rule.FromPort <= port && port <= rule.ToPort
+}
+
 // dbInstanceToRow projects a single DBInstance onto the audit-level row, with
 // the internal-only LatestRestorableTime populated when level >= internal.
 func dbInstanceToRow(inst aws.DBInstance, region string, level componentsdk.Level) RDSInstance {
@@ -213,6 +333,8 @@ func mergeRDSMetrics(a, b rdsMetricsWithCounts) rdsMetricsWithCounts {
 	result.DMLLoggingNotConfiguredCount += b.DMLLoggingNotConfiguredCount
 	result.DMLLoggingUnknownCount += b.DMLLoggingUnknownCount
 	result.DMLLoggingNotClassifiedCount += b.DMLLoggingNotClassifiedCount
+	result.DBPortOpenToInternetCount += b.DBPortOpenToInternetCount
+	result.DBPortIngressUnevaluatedCount += b.DBPortIngressUnevaluatedCount
 
 	// Audit-level slices: concatenate across regions.
 	if len(b.Instances) > 0 {

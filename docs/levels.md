@@ -73,8 +73,15 @@ The active level appears in the output artifact as the top-level
 ### RDS (`rds`)
 
 - **trust**: aggregate percentages for encryption, public accessibility,
-  deletion protection, backup retention adequacy, Multi-AZ.
-- **audit**: `instances[]` and `clusters[]` per-resource rows.
+  deletion protection, backup retention adequacy, Multi-AZ, plus
+  database-port ingress counts: instances whose security groups allow
+  ingress from the internet on the listening port, and instances left
+  unevaluated (reachability there is unproven, not open).
+- **audit**: `instances[]` and `clusters[]` per-resource rows. Instance rows
+  carry the database-port ingress verdict: `db_port_ingress_evaluated`,
+  `db_port_open_to_internet`, and `db_port_ingress_sources`, the CIDR blocks
+  and source security groups allowed to reach the listening port (null when
+  unevaluated, `[]` when nothing is allowed).
 - **internal**: rows gain `latest_restorable_time` (point-in-time recovery
   target).
 
@@ -140,6 +147,15 @@ per-rule / per-finding detail at internal.
   security groups, root volume encrypted).
 - **internal**: rows gain `iam_instance_profile_arn`, `key_name`, `tags`
   (capped at 50 per instance), `attached_volume_ids[]`.
+
+### ECS (`ecs`)
+
+- **trust**: cluster and service counts with capacity posture (autoscaling,
+  circuit breakers, public IPs, load balancing), plus
+  `exec_enabled_service_count`: services with ECS Exec enabled, which
+  allows an interactive shell into running containers.
+- **audit**: `services[]` per-service rows, including
+  `execute_command_enabled` per service.
 
 ### CloudWatch Logs (`cloudwatch_logs`)
 

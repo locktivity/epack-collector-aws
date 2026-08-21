@@ -207,7 +207,9 @@
         "backup_retention_adequate": { "type": "integer", "minimum": 0, "maximum": 100 },
         "backup_retention_min": { "type": "integer", "minimum": 0 },
         "multi_az_enabled": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "instances": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-instance rows; internal adds latest_restorable_time." },
+        "db_port_open_to_internet_count": { "type": "integer", "minimum": 0, "description": "Instances whose security groups allow ingress from the internet on the database's listening port. Unevaluated instances are excluded; reachability there is unproven, not open." },
+        "db_port_ingress_unevaluated_count": { "type": "integer", "minimum": 0, "description": "Instances whose database-port ingress could not be evaluated: no endpoint port yet, or the security groups could not be read." },
+        "instances": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-instance rows; internal adds latest_restorable_time. Rows carry db_port_ingress_evaluated, db_port_open_to_internet, and db_port_ingress_sources: the CIDR blocks and source security groups allowed to reach the listening port (null when unevaluated, [] when nothing is allowed)." },
         "clusters": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-cluster rows; internal adds latest_restorable_time." }
       }
     },
@@ -444,6 +446,7 @@
         "services_with_circuit_breaker_count": { "type": "integer", "minimum": 0, "description": "Services whose deployments stop automatically when new tasks fail to become healthy." },
         "services_with_public_ip_count": { "type": "integer", "minimum": 0, "description": "Services whose tasks receive public IP addresses. Zero corroborates a private-subnet architecture." },
         "load_balanced_service_count": { "type": "integer", "minimum": 0 },
+        "exec_enabled_service_count": { "type": "integer", "minimum": 0, "description": "Services with ECS Exec enabled, which allows an interactive shell into running containers." },
         "scaling_unresolved_service_count": { "type": "integer", "minimum": 0, "description": "Services whose scaling state could not be read. Excluded from the capacity findings rather than counted as unscaled." },
         "services": { "type": "array", "items": { "$ref": "#/definitions/ECSServiceRow" } }
       }
@@ -470,6 +473,7 @@
         "assigns_public_ip": { "type": "boolean" },
         "subnet_count": { "type": "integer", "minimum": 0 },
         "load_balanced": { "type": "boolean" },
+        "execute_command_enabled": { "type": "boolean" },
         "health_check_grace_period_seconds": { "type": "integer", "minimum": 0, "description": "How long new tasks are exempt from load balancer health replacement while they start." },
         "scaling_unresolved": { "type": "boolean" }
       }

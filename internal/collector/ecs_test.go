@@ -94,3 +94,22 @@ func TestMergeECSMetricsSumsAcrossRegions(t *testing.T) {
 		t.Errorf("len(Services) = %d, want 2", len(got.Services))
 	}
 }
+
+func TestAggregateECS_CountsExecEnabledServices(t *testing.T) {
+	shell := aws.ECSService{Cluster: "prod", Name: "debug", EnableExecuteCommand: true}
+	quiet := aws.ECSService{Cluster: "prod", Name: "api"}
+
+	got := aggregateECS([]aws.ECSService{shell, quiet}, nil, true)
+
+	if got.ExecEnabledServiceCount != 1 {
+		t.Errorf("ExecEnabledServiceCount = %d, want 1", got.ExecEnabledServiceCount)
+	}
+}
+
+func TestMergeECSMetrics_SumsExecEnabledCount(t *testing.T) {
+	got := mergeECSMetrics(ECSMetrics{ExecEnabledServiceCount: 1}, ECSMetrics{ExecEnabledServiceCount: 2})
+
+	if got.ExecEnabledServiceCount != 3 {
+		t.Errorf("ExecEnabledServiceCount = %d, want 3", got.ExecEnabledServiceCount)
+	}
+}

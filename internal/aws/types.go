@@ -164,6 +164,12 @@ type DBInstance struct {
 	AutoMinorVersionUpgrade bool
 	PreferredBackupWindow   string
 
+	// EndpointPort and VpcSecurityGroupIDs feed the database-port ingress
+	// evaluation: which sources the security groups allow on the database's
+	// listening port.
+	EndpointPort        int
+	VpcSecurityGroupIDs []string
+
 	// ParameterApplyStatus matters for any claim built on parameter values:
 	// pending-reboot means the group's desired values are not in force.
 	ParameterGroupName   string
