@@ -183,6 +183,22 @@ collector source by build-time lint.
   tier, last-modified date + user, has-customer-KMS).
 - **internal**: rows gain `description` and `kms_key_arn`.
 
+### WAF (`waf`)
+
+- **trust**: web ACL count, coverage of internet-facing entry points
+  (`internet_facing_alb_coverage_pct` over internet-facing application load
+  balancers, `distribution_coverage_pct` over enabled CloudFront
+  distributions), and `rate_limiting_enforced`: whether any web ACL with an
+  attached resource has an active blocking rate-based rule.
+  `regions_evaluated_count` and `cloudfront_scope_evaluated` record which
+  scopes were actually read.
+- **audit**: `web_acls[]` per-ACL rows: name, scope, region, default action,
+  attached resource count, logging state, and per-rule detail (action, rate
+  limit and aggregate key for rate-based rules, managed rule group names).
+- **internal**: rows gain `arn`, `associated_resource_arns[]`, and
+  `logging_destination_arn`, identifying the exact resources each web ACL is
+  attached to.
+
 ## Artifact contract: null vs `[]` vs `[...]`
 
 Level-gated array fields in the artifact follow a strict contract that lets

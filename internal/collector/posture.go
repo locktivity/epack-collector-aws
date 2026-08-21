@@ -92,6 +92,7 @@ type AccountPosture struct {
 	SES             SESMetrics            `json:"ses"`
 	ECS             ECSMetrics            `json:"ecs"`
 	AutoScaling     AutoScalingMetrics    `json:"auto_scaling"`
+	WAF             WAFMetrics            `json:"waf"`
 	KMS             KMSMetrics            `json:"kms"`
 	SecretsManager  SecretsManagerMetrics `json:"secrets_manager"`
 	SSMParameters   SSMParametersMetrics  `json:"ssm_parameters"`
@@ -889,6 +890,64 @@ type SESIdentityRow struct {
 	DefaultConfigurationSet string `json:"default_configuration_set,omitempty"`
 	DefaultRequiresTLS      bool   `json:"default_requires_tls"`
 	Unresolved              bool   `json:"unresolved,omitempty"`
+}
+
+// WAFMetrics covers WAFv2 coverage of the account's internet-facing entry
+// points: which application load balancers and CloudFront distributions have
+// a web ACL attached, and whether an attached web ACL enforces request-rate
+// limiting.
+type WAFMetrics struct {
+	WebACLCount int `json:"web_acl_count"`
+
+	// RegionsEvaluatedCount is how many regions answered the REGIONAL-scope
+	// scan; CloudFrontScopeEvaluated is the same signal for the global scope.
+	// The coverage readings only cover the scopes that answered.
+	RegionsEvaluatedCount    int  `json:"regions_evaluated_count"`
+	CloudFrontScopeEvaluated bool `json:"cloudfront_scope_evaluated"`
+
+	// Coverage pairs: the denominator plus the share, so an empty fleet's 0%
+	// is legible. Exact protected counts live on the audit rows.
+	InternetFacingALBCount       int `json:"internet_facing_alb_count"`
+	InternetFacingALBCoveragePct int `json:"internet_facing_alb_coverage_pct"`
+
+	EnabledDistributionCount int `json:"enabled_distribution_count"`
+	DistributionCoveragePct  int `json:"distribution_coverage_pct"`
+
+	// RateLimitingEnforced is true when at least one web ACL with an attached
+	// resource carries an active rate-based rule whose action is block.
+	RateLimitingEnforced bool `json:"rate_limiting_enforced"`
+
+	WebACLs             []WebACLRow `json:"web_acls,omitempty"`
+	WebACLsTruncated    bool        `json:"web_acls_truncated"`
+	WebACLsDroppedCount int         `json:"web_acls_dropped_count"`
+}
+
+// WebACLRow is an audit-level web ACL inventory row. Arn, associated resource
+// ARNs, and the logging destination appear at internal level only.
+type WebACLRow struct {
+	Name                    string       `json:"name"`
+	Scope                   string       `json:"scope"`
+	Region                  string       `json:"region,omitempty"`
+	DefaultAction           string       `json:"default_action"`
+	AssociatedResourceCount int          `json:"associated_resource_count"`
+	LoggingEvaluated        bool         `json:"logging_evaluated"`
+	LoggingEnabled          bool         `json:"logging_enabled"`
+	Rules                   []WAFRuleRow `json:"rules"`
+
+	Arn                    string   `json:"arn,omitempty"`
+	AssociatedResourceArns []string `json:"associated_resource_arns,omitempty"`
+	LoggingDestinationArn  string   `json:"logging_destination_arn,omitempty"`
+}
+
+// WAFRuleRow is one rule's enforcement posture within a web ACL.
+type WAFRuleRow struct {
+	Name                 string `json:"name"`
+	Priority             int32  `json:"priority"`
+	Action               string `json:"action"`
+	RateBased            bool   `json:"rate_based,omitempty"`
+	RateLimit            int64  `json:"rate_limit,omitempty"`
+	AggregateKeyType     string `json:"aggregate_key_type,omitempty"`
+	ManagedRuleGroupName string `json:"managed_rule_group_name,omitempty"`
 }
 
 // CloudFrontMetrics covers distribution transport enforcement on both hops:

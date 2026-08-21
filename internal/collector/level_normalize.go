@@ -30,6 +30,9 @@ func normalizeForLevel(p *AccountPosture, level componentsdk.Level) {
 	if p.S3.Buckets == nil {
 		p.S3.Buckets = []S3Bucket{}
 	}
+	if p.WAF.WebACLs == nil {
+		p.WAF.WebACLs = []WebACLRow{}
+	}
 	if p.RDS.Instances == nil {
 		p.RDS.Instances = []RDSInstance{}
 	}

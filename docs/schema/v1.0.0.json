@@ -79,6 +79,7 @@
         "ses": { "$ref": "#/definitions/SESMetrics" },
         "ecs": { "$ref": "#/definitions/ECSMetrics" },
         "auto_scaling": { "$ref": "#/definitions/AutoScalingMetrics" },
+        "waf": { "$ref": "#/definitions/WAFMetrics" },
         "kms": { "$ref": "#/definitions/KMSMetrics" },
         "secrets_manager": { "$ref": "#/definitions/SecretsManagerMetrics" },
         "ssm_parameters": { "$ref": "#/definitions/SSMParametersMetrics" }
@@ -737,6 +738,29 @@
         "parameters": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-parameter rows; internal adds description and kms_key_arn." },
         "parameters_truncated": { "type": "boolean" },
         "parameters_dropped_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "WAFMetrics": {
+      "type": "object",
+      "description": "WAFv2 web ACL coverage of the account's internet-facing entry points. regions_evaluated_count and cloudfront_scope_evaluated record which scopes answered, so an unread scope is not mistaken for an unprotected one.",
+      "required": [
+        "web_acl_count", "regions_evaluated_count", "cloudfront_scope_evaluated",
+        "internet_facing_alb_count", "internet_facing_alb_coverage_pct",
+        "enabled_distribution_count", "distribution_coverage_pct",
+        "rate_limiting_enforced", "web_acls_truncated", "web_acls_dropped_count"
+      ],
+      "properties": {
+        "web_acl_count": { "type": "integer", "minimum": 0 },
+        "regions_evaluated_count": { "type": "integer", "minimum": 0 },
+        "cloudfront_scope_evaluated": { "type": "boolean" },
+        "internet_facing_alb_count": { "type": "integer", "minimum": 0 },
+        "internet_facing_alb_coverage_pct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Share of internet-facing application load balancers associated with a web ACL. Denominator: internet_facing_alb_count." },
+        "enabled_distribution_count": { "type": "integer", "minimum": 0 },
+        "distribution_coverage_pct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Share of enabled CloudFront distributions with a web ACL attached. Denominator: enabled_distribution_count." },
+        "rate_limiting_enforced": { "type": "boolean", "description": "True when at least one web ACL protecting a resource carries an active rate-based rule whose action is block." },
+        "web_acls": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-ACL rows with scope, default action, associated resource count, logging state, and per-rule enforcement (action, rate limit, aggregate key, managed group name); internal adds arn, associated_resource_arns, and logging_destination_arn." },
+        "web_acls_truncated": { "type": "boolean" },
+        "web_acls_dropped_count": { "type": "integer", "minimum": 0 }
       }
     }
   }

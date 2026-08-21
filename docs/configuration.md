@@ -153,6 +153,7 @@ The minimum policy. Required for every collection level.
         "s3:GetBucketPublicAccessBlock",
         "s3:GetBucketVersioning",
         "s3:GetEncryptionConfiguration",
+        "s3:GetLifecycleConfiguration",
         "s3:ListAllMyBuckets",
 
         "ec2:DescribeImages",
@@ -168,6 +169,10 @@ The minimum policy. Required for every collection level.
         "elasticloadbalancing:DescribeListeners",
         "elasticloadbalancing:DescribeLoadBalancers",
         "sns:ListSubscriptionsByTopic",
+
+        "wafv2:ListWebACLs",
+        "wafv2:GetWebACL",
+        "wafv2:ListResourcesForWebACL",
 
         "autoscaling:DescribeAutoScalingGroups",
         "autoscaling:DescribePolicies",
@@ -229,7 +234,7 @@ The minimum policy. Required for every collection level.
 
 ### Audit level
 
-Add these actions to the trust-level policy above. They surface the Identity Center access model (permission sets, the user and group roster, membership and account-assignment edges), per-function Lambda configuration, KMS alias enrichment, and the organization-membership classification of cross-account role trust.
+Add these actions to the trust-level policy above. They surface the Identity Center access model (permission sets, the user and group roster, membership and account-assignment edges), per-function Lambda configuration, KMS alias enrichment, web ACL logging state, and the organization-membership classification of cross-account role trust.
 
 ```json
 [
@@ -246,15 +251,19 @@ Add these actions to the trust-level policy above. They surface the Identity Cen
   "lambda:GetPolicy",
   "lambda:ListFunctionUrlConfigs",
 
-  "kms:ListAliases"
+  "kms:ListAliases",
+
+  "wafv2:GetLoggingConfiguration"
 ]
 ```
+
+`wafv2:GetLoggingConfiguration` is best effort: without it, per-ACL rows report `logging_evaluated: false` rather than failing the region.
 
 `organizations:ListAccounts` is optional and best effort: it succeeds only from the Organizations management account or a delegated administrator. Without it, per-role `external_trust_in_org` determinations are absent rather than guessed, and the run continues.
 
 ### Internal level
 
-Add these actions on top of the audit-level set. They surface per-rule Config compliance, GuardDuty finding payloads, per-bucket S3 ACL and lifecycle configuration, and per-VPC flow log status.
+Add these actions on top of the audit-level set. They surface per-rule Config compliance, GuardDuty finding payloads, per-bucket S3 ACL configuration, and per-VPC flow log status.
 
 ```json
 [
@@ -266,8 +275,7 @@ Add these actions on top of the audit-level set. They surface per-rule Config co
 
   "ec2:DescribeFlowLogs",
 
-  "s3:GetBucketAcl",
-  "s3:GetLifecycleConfiguration"
+  "s3:GetBucketAcl"
 ]
 ```
 

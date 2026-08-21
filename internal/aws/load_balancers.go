@@ -37,6 +37,39 @@ type LoadBalancerListener struct {
 	RedirectsToHTTPS bool
 }
 
+// LoadBalancerHead is a load balancer's identity without its listeners: enough
+// to join against WAF associations without the per-balancer listener fan-out.
+type LoadBalancerHead struct {
+	Arn    string
+	Type   string // application, network, gateway
+	Scheme string // internet-facing, internal
+}
+
+// ListLoadBalancerHeads returns the region's load balancers as identity rows
+// only. One paginated listing, no per-balancer calls.
+func (c *AWSClient) ListLoadBalancerHeads(ctx context.Context, region string) ([]LoadBalancerHead, error) {
+	cfg := c.cfg.Copy()
+	cfg.Region = region
+	client := elbv2.NewFromConfig(cfg)
+
+	var heads []LoadBalancerHead
+	paginator := elbv2.NewDescribeLoadBalancersPaginator(client, &elbv2.DescribeLoadBalancersInput{})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("describing load balancers in %s: %w", region, err)
+		}
+		for _, lb := range page.LoadBalancers {
+			heads = append(heads, LoadBalancerHead{
+				Arn:    aws.ToString(lb.LoadBalancerArn),
+				Type:   string(lb.Type),
+				Scheme: string(lb.Scheme),
+			})
+		}
+	}
+	return heads, nil
+}
+
 // ListLoadBalancers returns the region's load balancers with their listeners.
 // One DescribeListeners call per load balancer; the fan-out is bounded by fleet
 // size, which is dozens at most rather than the thousands a snapshot listing

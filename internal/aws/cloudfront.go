@@ -16,6 +16,11 @@ type CloudFrontDistribution struct {
 	Aliases []string
 	Enabled bool
 
+	// WebACLArn is the WAFv2 web ACL protecting this distribution, empty when
+	// none is attached. (The listing's WebACLId field carries the full ARN for
+	// WAFv2 web ACLs.)
+	WebACLArn string
+
 	// ViewerProtocolPolicies holds the policy of the default cache behavior and
 	// every additional behavior. The whole list matters: a distribution whose
 	// default redirects to HTTPS can still allow plaintext on a path behavior,
@@ -50,9 +55,10 @@ func (c *AWSClient) ListCloudFrontDistributions(ctx context.Context) ([]CloudFro
 		}
 		for _, d := range page.DistributionList.Items {
 			dist := CloudFrontDistribution{
-				ID:      aws.ToString(d.Id),
-				Domain:  aws.ToString(d.DomainName),
-				Enabled: aws.ToBool(d.Enabled),
+				ID:        aws.ToString(d.Id),
+				Domain:    aws.ToString(d.DomainName),
+				Enabled:   aws.ToBool(d.Enabled),
+				WebACLArn: aws.ToString(d.WebACLId),
 			}
 			if d.Aliases != nil {
 				dist.Aliases = d.Aliases.Items

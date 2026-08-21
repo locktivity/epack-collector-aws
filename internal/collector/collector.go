@@ -161,22 +161,8 @@ func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig
 	// Collect global metrics (IAM, S3)
 	c.collectGlobalMetrics(ctx, client, accountID, posture, level)
 
-	// Collect regional metrics (RDS, Network, Lambda, EC2, CloudWatch Logs, KMS, Secrets Manager, SSM)
-	rdsMetrics, networkMetrics, lambdaMetrics, ec2Metrics, cwLogsMetrics, kmsMetrics, secretsMetrics, ssmMetrics, monitoringMetrics, storedImageMetrics, loadBalancerMetrics, sesMetrics, ecsMetrics, autoScalingMetrics := c.collectRegionalMetrics(ctx, client, regions, accountID, level)
-	posture.RDS = rdsMetrics.RDSMetrics
-	posture.Network = networkMetrics.NetworkMetrics
-	posture.Lambda = lambdaMetrics
-	posture.EC2 = ec2Metrics
-	posture.CloudWatchLogs = cwLogsMetrics
-	posture.Monitoring = monitoringMetrics
-	posture.StoredImages = storedImageMetrics
-	posture.LoadBalancers = loadBalancerMetrics
-	posture.SES = sesMetrics
-	posture.ECS = ecsMetrics
-	posture.AutoScaling = autoScalingMetrics
-	posture.KMS = kmsMetrics
-	posture.SecretsManager = secretsMetrics
-	posture.SSMParameters = ssmMetrics
+	// Collect regional metrics (RDS, Network, Lambda, EC2, CloudWatch Logs, KMS, Secrets Manager, SSM, WAF)
+	c.collectRegionalMetrics(ctx, client, regions, accountID, posture, level)
 
 	// Collect account security services
 	c.collectSecurityServices(ctx, client, regions, posture, level)
@@ -281,6 +267,8 @@ type regionScan struct {
 	secretsErr       error
 	ssm              *SSMParametersMetrics
 	ssmErr           error
+	waf              *wafRegionScan
+	wafErr           error
 	warnings         []string
 }
 
@@ -333,30 +321,22 @@ func (c *Collector) scanRegion(ctx context.Context, client *aws.AWSClient, regio
 	if s.ssm, s.ssmErr = rc.collectSSMParameters(ctx, client, region, accountID, level); s.ssmErr != nil {
 		rc.warn("account %s region %s: failed to collect SSM parameters: %v", accountID, region, s.ssmErr)
 	}
+	if s.waf, s.wafErr = rc.collectWAFRegion(ctx, client, region); s.wafErr != nil {
+		rc.warn("account %s region %s: failed to collect WAF metrics: %v", accountID, region, s.wafErr)
+	}
 
 	s.warnings = rc.warnings
 	return s
 }
 
-// collectRegionalMetrics collects RDS, network, Lambda, EC2, CloudWatch Logs,
-// KMS, Secrets Manager, and SSM Parameter Store metrics across all regions.
-// level is passed through to per-surface collectors that gate audit / internal
-// fields.
-func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSClient, regions []string, accountID string, level componentsdk.Level) (rdsMetricsWithCounts, networkMetricsWithCounts, LambdaMetrics, EC2Metrics, CloudWatchLogsMetrics, KMSMetrics, SecretsManagerMetrics, SSMParametersMetrics, MonitoringMetrics, StoredImageMetrics, LoadBalancerMetrics, SESMetrics, ECSMetrics, AutoScalingMetrics) {
+// collectRegionalMetrics scans every region concurrently and populates the
+// posture's regional surfaces, including the WAF posture, which joins the
+// regional scans with the global CLOUDFRONT scope. level is passed through
+// to per-surface collectors that gate audit / internal fields.
+func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSClient, regions []string, accountID string, posture *AccountPosture, level componentsdk.Level) {
 	var rdsMetrics rdsMetricsWithCounts
 	var networkMetrics networkMetricsWithCounts
-	var lambdaMetrics LambdaMetrics
-	var ec2Metrics EC2Metrics
-	var cwLogsMetrics CloudWatchLogsMetrics
-	var monitoringMetrics MonitoringMetrics
-	var storedImageMetrics StoredImageMetrics
-	var loadBalancerMetrics LoadBalancerMetrics
-	var sesMetrics SESMetrics
-	var ecsMetrics ECSMetrics
-	var autoScalingMetrics AutoScalingMetrics
-	var kmsMetrics KMSMetrics
-	var secretsMetrics SecretsManagerMetrics
-	var ssmMetrics SSMParametersMetrics
+	var wafScan wafScanWithCounts
 
 	var rdsRegionsFailed, networkRegionsFailed []string
 
@@ -390,120 +370,126 @@ func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSC
 		}
 
 		if s.lambdaErr == nil {
-			lambdaMetrics = mergeLambdaMetrics(lambdaMetrics, *s.lambda)
+			posture.Lambda = mergeLambdaMetrics(posture.Lambda, *s.lambda)
 		}
 		if s.ec2Err == nil {
-			ec2Metrics = mergeEC2Metrics(ec2Metrics, *s.ec2)
+			posture.EC2 = mergeEC2Metrics(posture.EC2, *s.ec2)
 		}
 		if s.cwLogsErr == nil {
-			cwLogsMetrics = mergeCloudWatchLogsMetrics(cwLogsMetrics, *s.cwLogs)
+			posture.CloudWatchLogs = mergeCloudWatchLogsMetrics(posture.CloudWatchLogs, *s.cwLogs)
 		}
 		if s.monitoringErr == nil {
-			monitoringMetrics = mergeMonitoringMetrics(monitoringMetrics, *s.monitoring)
+			posture.Monitoring = mergeMonitoringMetrics(posture.Monitoring, *s.monitoring)
 		}
 		if s.storedImagesErr == nil {
-			storedImageMetrics = mergeStoredImageMetrics(storedImageMetrics, *s.storedImages)
+			posture.StoredImages = mergeStoredImageMetrics(posture.StoredImages, *s.storedImages)
 		}
 		if s.loadBalancersErr == nil {
-			loadBalancerMetrics = mergeLoadBalancerMetrics(loadBalancerMetrics, *s.loadBalancers)
+			posture.LoadBalancers = mergeLoadBalancerMetrics(posture.LoadBalancers, *s.loadBalancers)
 		}
 		if s.sesErr == nil {
-			sesMetrics = mergeSESMetrics(sesMetrics, *s.ses)
+			posture.SES = mergeSESMetrics(posture.SES, *s.ses)
 		}
 		if s.ecsErr == nil {
-			ecsMetrics = mergeECSMetrics(ecsMetrics, *s.ecs)
+			posture.ECS = mergeECSMetrics(posture.ECS, *s.ecs)
 		}
 		if s.autoScalingErr == nil {
-			autoScalingMetrics = mergeAutoScalingMetrics(autoScalingMetrics, *s.autoScaling)
+			posture.AutoScaling = mergeAutoScalingMetrics(posture.AutoScaling, *s.autoScaling)
 		}
 		if s.kmsErr == nil {
-			kmsMetrics = mergeKMSMetrics(kmsMetrics, *s.kms)
+			posture.KMS = mergeKMSMetrics(posture.KMS, *s.kms)
 		}
 		if s.secretsErr == nil {
-			secretsMetrics = mergeSecretsManagerMetrics(secretsMetrics, *s.secrets)
+			posture.SecretsManager = mergeSecretsManagerMetrics(posture.SecretsManager, *s.secrets)
 		}
 		if s.ssmErr == nil {
-			ssmMetrics = mergeSSMParametersMetrics(ssmMetrics, *s.ssm)
+			posture.SSMParameters = mergeSSMParametersMetrics(posture.SSMParameters, *s.ssm)
+		}
+		if s.wafErr == nil {
+			wafScan.wafRegionScan = mergeWAFScans(wafScan.wafRegionScan, *s.waf)
+			wafScan.RegionsEvaluatedCount++
 		}
 	}
 
 	rdsMetrics.RegionsFailed = rdsRegionsFailed
 	rdsMetrics.DatabaseCount = rdsMetrics.instanceCount + rdsMetrics.clusterCount
 	networkMetrics.RegionsFailed = networkRegionsFailed
+	posture.RDS = rdsMetrics.RDSMetrics
+	posture.Network = networkMetrics.NetworkMetrics
 
-	if len(lambdaMetrics.Functions) > 0 {
-		kept, dropped, truncated := Truncate(lambdaMetrics.Functions, LambdaFunctionsCap, func(a, b LambdaFunctionRow) bool {
+	if len(posture.Lambda.Functions) > 0 {
+		kept, dropped, truncated := Truncate(posture.Lambda.Functions, LambdaFunctionsCap, func(a, b LambdaFunctionRow) bool {
 			return a.LastModified > b.LastModified
 		})
-		lambdaMetrics.Functions = kept
-		lambdaMetrics.FunctionsTruncated = truncated
-		lambdaMetrics.FunctionsDroppedCount = dropped
+		posture.Lambda.Functions = kept
+		posture.Lambda.FunctionsTruncated = truncated
+		posture.Lambda.FunctionsDroppedCount = dropped
 		if truncated {
 			c.warn("account %s: Lambda function inventory truncated to %d (dropped %d)", accountID, LambdaFunctionsCap, dropped)
 		}
 	}
 
-	if len(ec2Metrics.Instances) > 0 {
-		kept, dropped, truncated := Truncate(ec2Metrics.Instances, EC2InstancesCap, func(a, b EC2InstanceRow) bool {
+	if len(posture.EC2.Instances) > 0 {
+		kept, dropped, truncated := Truncate(posture.EC2.Instances, EC2InstancesCap, func(a, b EC2InstanceRow) bool {
 			return a.LaunchTime > b.LaunchTime
 		})
-		ec2Metrics.Instances = kept
-		ec2Metrics.InstancesTruncated = truncated
-		ec2Metrics.InstancesDroppedCount = dropped
+		posture.EC2.Instances = kept
+		posture.EC2.InstancesTruncated = truncated
+		posture.EC2.InstancesDroppedCount = dropped
 		if truncated {
 			c.warn("account %s: EC2 instance inventory truncated to %d (dropped %d)", accountID, EC2InstancesCap, dropped)
 		}
 	}
 
-	if len(cwLogsMetrics.LogGroups) > 0 {
-		kept, dropped, truncated := Truncate(cwLogsMetrics.LogGroups, CloudWatchLogGroupsCap, func(a, b CloudWatchLogGroupRow) bool {
+	if len(posture.CloudWatchLogs.LogGroups) > 0 {
+		kept, dropped, truncated := Truncate(posture.CloudWatchLogs.LogGroups, CloudWatchLogGroupsCap, func(a, b CloudWatchLogGroupRow) bool {
 			return a.StoredBytes > b.StoredBytes
 		})
-		cwLogsMetrics.LogGroups = kept
-		cwLogsMetrics.LogGroupsTruncated = truncated
-		cwLogsMetrics.LogGroupsDroppedCount = dropped
+		posture.CloudWatchLogs.LogGroups = kept
+		posture.CloudWatchLogs.LogGroupsTruncated = truncated
+		posture.CloudWatchLogs.LogGroupsDroppedCount = dropped
 		if truncated {
 			c.warn("account %s: CloudWatch log groups inventory truncated to %d (dropped %d)", accountID, CloudWatchLogGroupsCap, dropped)
 		}
 	}
 
-	if len(kmsMetrics.Keys) > 0 {
-		kept, dropped, truncated := Truncate(kmsMetrics.Keys, KMSKeysCap, func(a, b KMSKeyRow) bool {
+	if len(posture.KMS.Keys) > 0 {
+		kept, dropped, truncated := Truncate(posture.KMS.Keys, KMSKeysCap, func(a, b KMSKeyRow) bool {
 			return a.CreationDate > b.CreationDate
 		})
-		kmsMetrics.Keys = kept
-		kmsMetrics.KeysTruncated = truncated
-		kmsMetrics.KeysDroppedCount = dropped
+		posture.KMS.Keys = kept
+		posture.KMS.KeysTruncated = truncated
+		posture.KMS.KeysDroppedCount = dropped
 		if truncated {
 			c.warn("account %s: KMS key inventory truncated to %d (dropped %d)", accountID, KMSKeysCap, dropped)
 		}
 	}
 
-	if len(secretsMetrics.Secrets) > 0 {
-		kept, dropped, truncated := Truncate(secretsMetrics.Secrets, SecretsManagerSecretsCap, func(a, b SecretsManagerSecretRow) bool {
+	if len(posture.SecretsManager.Secrets) > 0 {
+		kept, dropped, truncated := Truncate(posture.SecretsManager.Secrets, SecretsManagerSecretsCap, func(a, b SecretsManagerSecretRow) bool {
 			return a.LastChangedDate > b.LastChangedDate
 		})
-		secretsMetrics.Secrets = kept
-		secretsMetrics.SecretsTruncated = truncated
-		secretsMetrics.SecretsDroppedCount = dropped
+		posture.SecretsManager.Secrets = kept
+		posture.SecretsManager.SecretsTruncated = truncated
+		posture.SecretsManager.SecretsDroppedCount = dropped
 		if truncated {
 			c.warn("account %s: Secrets Manager inventory truncated to %d (dropped %d)", accountID, SecretsManagerSecretsCap, dropped)
 		}
 	}
 
-	if len(ssmMetrics.Parameters) > 0 {
-		kept, dropped, truncated := Truncate(ssmMetrics.Parameters, SSMParametersCap, func(a, b SSMParameterRow) bool {
+	if len(posture.SSMParameters.Parameters) > 0 {
+		kept, dropped, truncated := Truncate(posture.SSMParameters.Parameters, SSMParametersCap, func(a, b SSMParameterRow) bool {
 			return a.LastModifiedDate > b.LastModifiedDate
 		})
-		ssmMetrics.Parameters = kept
-		ssmMetrics.ParametersTruncated = truncated
-		ssmMetrics.ParametersDroppedCount = dropped
+		posture.SSMParameters.Parameters = kept
+		posture.SSMParameters.ParametersTruncated = truncated
+		posture.SSMParameters.ParametersDroppedCount = dropped
 		if truncated {
 			c.warn("account %s: SSM parameter inventory truncated to %d (dropped %d)", accountID, SSMParametersCap, dropped)
 		}
 	}
 
-	return rdsMetrics, networkMetrics, lambdaMetrics, ec2Metrics, cwLogsMetrics, kmsMetrics, secretsMetrics, ssmMetrics, monitoringMetrics, storedImageMetrics, loadBalancerMetrics, sesMetrics, ecsMetrics, autoScalingMetrics
+	posture.WAF = *c.collectWAFMetrics(ctx, client, accountID, wafScan, level)
 }
 
 // collectSecurityServices collects account-level security service status.

@@ -10,6 +10,7 @@ Collects AWS account security posture metrics for the epack ecosystem.
 - **S3**: encryption, public-access blocks, versioning, logging; per-bucket policy / ACL / lifecycle at higher levels.
 - **RDS**: encryption, public accessibility, deletion protection, backups, Multi-AZ; per-instance / per-cluster rows.
 - **Network**: security-group analysis; per-VPC inventory with internal-level flow log status and per-SG-rule inventory.
+- **WAF**: web ACL coverage of internet-facing entry points (application load balancers, CloudFront distributions) and rate-limiting enforcement; per-ACL rule inventory at higher levels.
 - **Account security services**: CloudTrail, AWS Config (with per-rule compliance), GuardDuty (with per-finding triage), Security Hub, Inspector.
 - **Identity Center (IAM Identity Center / AWS SSO)**: instance + user / group / permission-set inventory.
 - **Lambda**: deprecated runtime detection, public Function URL detection, per-function metadata (env var KEYS only — values never collected).
