@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -318,9 +319,61 @@ func fetchGitHubOIDCToken() (string, error) {
 	return result.Value, nil
 }
 
+// WebIdentityTokenFileEnv names the file a CI job or a workload identity
+// writes the run's identity token to. It is the variable the SDK's own
+// default chain reads for the same purpose.
+const WebIdentityTokenFileEnv = "AWS_WEB_IDENTITY_TOKEN_FILE"
+
+// WebIdentityTokenFile returns the configured token file path, or "" when
+// the environment names none.
+func WebIdentityTokenFile() string {
+	return os.Getenv(WebIdentityTokenFileEnv)
+}
+
+// FileTokenSource reads an identity token from a file on every call, so a
+// job that refreshes the file during a long run is picked up.
+// It implements stscreds.IdentityTokenRetriever.
+type FileTokenSource struct {
+	path string
+}
+
+// NewFileTokenSource creates a token source that reads the given file.
+func NewFileTokenSource(path string) *FileTokenSource {
+	return &FileTokenSource{path: path}
+}
+
+// GetIdentityToken reads the token, trimmed of surrounding whitespace.
+func (f *FileTokenSource) GetIdentityToken() ([]byte, error) {
+	if f.path == "" {
+		return nil, fmt.Errorf("web identity token file not set: %s is empty", WebIdentityTokenFileEnv)
+	}
+	token, err := os.ReadFile(f.path)
+	if err != nil {
+		return nil, fmt.Errorf("reading web identity token file %s (%s): %w", f.path, WebIdentityTokenFileEnv, err)
+	}
+	token = bytes.TrimSpace(token)
+	if len(token) == 0 {
+		return nil, fmt.Errorf("web identity token file %s (%s) is empty", f.path, WebIdentityTokenFileEnv)
+	}
+	return token, nil
+}
+
 // IsGitHubActionsOIDCAvailable returns true if running in GitHub Actions with OIDC enabled.
 func IsGitHubActionsOIDCAvailable() bool {
 	return os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "" && os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN") != ""
+}
+
+// OIDCTokenSource returns the identity token source for OIDC mode: GitHub
+// Actions' token endpoint when the workflow exposes one, otherwise the file
+// AWS_WEB_IDENTITY_TOKEN_FILE names. Nil when neither is available.
+func OIDCTokenSource() stscreds.IdentityTokenRetriever {
+	if IsGitHubActionsOIDCAvailable() {
+		return NewGitHubOIDCTokenSource()
+	}
+	if path := WebIdentityTokenFile(); path != "" {
+		return NewFileTokenSource(path)
+	}
+	return nil
 }
 
 // GetCallerIdentity returns the account ID of the current credentials.
@@ -1587,6 +1640,28 @@ func (c *AWSClient) ListGuardDutyDetectors(ctx context.Context, region string) (
 	}
 
 	return detectors, nil
+}
+
+// GetGuardDutyAdministratorAccount returns the account ID administering this
+// detector, or "" when the account is standalone. Membership is the
+// interpretive key for finding-notification routing: member accounts commonly
+// route findings centrally in the administrator account, so an absence of
+// local rules is not an absence of coverage.
+func (c *AWSClient) GetGuardDutyAdministratorAccount(ctx context.Context, region, detectorID string) (string, error) {
+	cfg := c.cfg.Copy()
+	cfg.Region = region
+	gdClient := guardduty.NewFromConfig(cfg)
+
+	output, err := gdClient.GetAdministratorAccount(ctx, &guardduty.GetAdministratorAccountInput{
+		DetectorId: aws.String(detectorID),
+	})
+	if err != nil {
+		return "", fmt.Errorf("getting GuardDuty administrator account in %s: %w", region, err)
+	}
+	if output.Administrator == nil || !strings.EqualFold(aws.ToString(output.Administrator.RelationshipStatus), "enabled") {
+		return "", nil
+	}
+	return aws.ToString(output.Administrator.AccountId), nil
 }
 
 // countGuardDutyFindings counts findings matching the provided criteria.

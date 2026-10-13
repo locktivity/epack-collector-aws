@@ -269,10 +269,28 @@
         },
         "guardduty": {
           "type": "object",
-          "required": ["enabled", "unremediated_findings_over_48h", "detectors", "findings", "findings_truncated", "findings_dropped_count"],
+          "required": ["enabled", "unremediated_findings_over_48h", "finding_notification", "detectors", "findings", "findings_truncated", "findings_dropped_count"],
           "properties": {
             "enabled": { "type": "boolean" },
             "unremediated_findings_over_48h": { "type": "integer", "minimum": 0 },
+            "finding_notification": {
+              "type": "object",
+              "description": "Whether findings are routed anywhere a person would see them. GuardDuty publishes findings to the regional default EventBridge bus; these fields summarise the rules pointed at it, region by region. Routed means an enabled matching rule with at least one target; reaching a subscriber additionally requires an SNS target with a confirmed subscription. Rules notifying through Lambda or an API destination count as routed but never as reaching, since delivery beyond the invocation is not observable from configuration. In organizations, member accounts commonly route findings centrally: administrator_account_id present explains detector regions with no local rules.",
+              "required": ["rule_count", "detector_regions_count", "detector_regions_evaluated_count", "detector_regions_routed_count", "detector_regions_reaching_subscriber_count", "subscriptions_pending_confirmation_count", "rules"],
+              "properties": {
+                "rule_count": { "type": "integer", "minimum": 0, "description": "Enabled or disabled rules matching GuardDuty findings, across evaluated detector regions." },
+                "detector_regions_count": { "type": "integer", "minimum": 0 },
+                "detector_regions_evaluated_count": { "type": "integer", "minimum": 0, "description": "Detector regions where the rule listing succeeded. evaluated + unresolved = detector_regions_count." },
+                "detector_regions_unresolved_count": { "type": "integer", "minimum": 0, "description": "Detector regions where the rule listing failed. Excluded from routed/reaching rather than counted as unrouted." },
+                "detector_regions_routed_count": { "type": "integer", "minimum": 0 },
+                "detector_regions_reaching_subscriber_count": { "type": "integer", "minimum": 0 },
+                "subscriptions_by_protocol": { "type": "object", "additionalProperties": { "type": "integer" }, "description": "Counts only. Subscription endpoints are never collected: they are email addresses, phone numbers, and webhook URLs." },
+                "subscriptions_pending_confirmation_count": { "type": "integer", "minimum": 0 },
+                "topics_unresolved_count": { "type": "integer", "minimum": 0 },
+                "administrator_account_id": { "type": "string", "description": "The GuardDuty administrator account when this account is an organization member." },
+                "rules": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-rule rows with target kinds and per-topic subscriber counts." }
+              }
+            },
             "detectors": { "$ref": "#/definitions/LevelGatedArray", "description": "Audit: per-region detector rows." },
             "findings": { "$ref": "#/definitions/LevelGatedArray", "description": "Internal: unarchived high-or-critical finding rows. Capped at 5000 per detector." },
             "findings_truncated": { "type": "boolean" },

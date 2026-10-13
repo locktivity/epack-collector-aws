@@ -3,6 +3,8 @@ package collector
 import (
 	"strings"
 	"testing"
+
+	"github.com/locktivity/epack-collector-aws/internal/aws"
 )
 
 func TestResolveAuthMode(t *testing.T) {
@@ -35,6 +37,7 @@ func TestResolveAuthMode(t *testing.T) {
 	t.Run("errors when explicit OIDC requested but unavailable", func(t *testing.T) {
 		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
 		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+		t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "")
 
 		c := &Collector{config: Config{AuthMode: AuthModeOIDC}}
 		accounts := []AccountConfig{{RoleARN: "arn:aws:iam::123456789012:role/test"}}
@@ -194,4 +197,41 @@ type testError struct {
 
 func (e *testError) Error() string {
 	return e.msg
+}
+
+func TestResolveAuthMode_OIDCTokenFile(t *testing.T) {
+	t.Run("errors when oidc has neither GitHub's token endpoint nor a token file", func(t *testing.T) {
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+		t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "")
+		c := &Collector{config: Config{AuthMode: AuthModeOIDC}}
+		accounts := []AccountConfig{{RoleARN: "arn:aws:iam::123456789012:role/test"}}
+
+		_, err := c.resolveAuthMode(accounts)
+		if err == nil || !strings.Contains(err.Error(), "ACTIONS_ID_TOKEN_REQUEST_URL") || !strings.Contains(err.Error(), "AWS_WEB_IDENTITY_TOKEN_FILE") {
+			t.Fatalf("expected an error naming both token sources, got: %v", err)
+		}
+	})
+
+	t.Run("reads the token file outside GitHub Actions and warns about external_id", func(t *testing.T) {
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+		t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "/var/run/token")
+		c := &Collector{config: Config{AuthMode: AuthModeOIDC}}
+		accounts := []AccountConfig{{RoleARN: "arn:aws:iam::123456789012:role/test", ExternalID: "ext"}}
+
+		mode, warnings, err := c.initializeAuth(accounts)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mode != AuthModeOIDC {
+			t.Fatalf("expected oidc, got %q", mode)
+		}
+		if _, ok := c.tokenSource.(*aws.FileTokenSource); !ok {
+			t.Fatalf("expected a file token source, got %T", c.tokenSource)
+		}
+		if len(warnings) != 1 || !strings.Contains(warnings[0], "ignored in OIDC mode") {
+			t.Fatalf("expected one external_id warning, got %v", warnings)
+		}
+	})
 }

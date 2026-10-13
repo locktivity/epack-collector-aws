@@ -5,8 +5,10 @@ import "time"
 
 // Auth mode constants for AWS authentication strategy.
 const (
-	// AuthModeOIDC uses GitHub Actions OIDC to assume roles via AssumeRoleWithWebIdentity.
-	// Each target role must trust the GitHub OIDC provider directly.
+	// AuthModeOIDC assumes roles via AssumeRoleWithWebIdentity with an OIDC
+	// token: GitHub Actions' own in a workflow, otherwise the one in the file
+	// AWS_WEB_IDENTITY_TOKEN_FILE names, as a GitLab job or a workload
+	// identity provides. Each target role must trust the token's issuer directly.
 	AuthModeOIDC = "oidc"
 
 	// AuthModeAssumeRole uses standard AssumeRole with optional external_id.
@@ -669,6 +671,9 @@ type GuardDutyStatus struct {
 	Enabled                         bool `json:"enabled"`
 	UnremediatedFindingsOver48Hours int  `json:"unremediated_findings_over_48h"`
 
+	// Trust summary plus audit-level rows; see the type's own doc.
+	FindingNotification GuardDutyFindingNotification `json:"finding_notification"`
+
 	// Audit: present (possibly []) when collected at audit+ and GuardDuty is
 	// enabled in at least one region; null when not collected.
 	Detectors []GuardDutyDetectorRow `json:"detectors"`
@@ -710,6 +715,66 @@ type GuardDutyFindingRow struct {
 	ResourceID   string  `json:"resource_id,omitempty"`
 	CreatedAt    string  `json:"created_at,omitempty"`
 	UpdatedAt    string  `json:"updated_at,omitempty"`
+}
+
+// GuardDutyFindingNotification summarises whether GuardDuty findings are
+// routed anywhere a person would see them. GuardDuty publishes findings to
+// the default EventBridge bus in each detector's region; delivery to people
+// is whatever rules the account has pointed at that bus. Both halves are
+// regional, so coverage is counted region by region: a rule in us-east-1
+// routes nothing for findings raised in eu-west-1.
+//
+// Routed means an enabled matching rule with at least one target. Reaching a
+// subscriber additionally requires an SNS target holding a confirmed
+// subscription, the same end-to-end bar the monitoring surface applies to
+// alarms. A rule notifying through Lambda or an API destination counts as
+// routed but never as reaching, because delivery beyond the invocation is
+// not observable from AWS configuration.
+//
+// Counts are meaningful only relative to each other: evaluated + unresolved
+// = detector regions, and routed/reaching are within evaluated. Zero
+// detector regions means GuardDuty is off, not that routing is complete.
+// In organizations, member accounts commonly route findings centrally:
+// administrator_account_id being present explains detector regions with no
+// local rules.
+type GuardDutyFindingNotification struct {
+	// Trust:
+	RuleCount                              int            `json:"rule_count"`
+	DetectorRegionsCount                   int            `json:"detector_regions_count"`
+	DetectorRegionsEvaluatedCount          int            `json:"detector_regions_evaluated_count"`
+	DetectorRegionsUnresolvedCount         int            `json:"detector_regions_unresolved_count,omitempty"`
+	DetectorRegionsRoutedCount             int            `json:"detector_regions_routed_count"`
+	DetectorRegionsReachingSubscriberCount int            `json:"detector_regions_reaching_subscriber_count"`
+	SubscriptionsByProtocol                map[string]int `json:"subscriptions_by_protocol,omitempty"`
+	SubscriptionsPendingConfirmationCount  int            `json:"subscriptions_pending_confirmation_count"`
+	TopicsUnresolvedCount                  int            `json:"topics_unresolved_count,omitempty"`
+	AdministratorAccountID                 string         `json:"administrator_account_id,omitempty"`
+
+	// Audit: per-rule rows. Present (possibly []) when collected at audit+;
+	// null when not collected.
+	Rules []GuardDutyNotificationRuleRow `json:"rules"`
+}
+
+// GuardDutyNotificationRuleRow is a per-rule audit-level row. Topic rows name
+// the SNS topics the rule targets; subscription endpoints are never collected
+// (see SNSTopicSubscribers).
+type GuardDutyNotificationRuleRow struct {
+	Name              string                          `json:"name"`
+	Region            string                          `json:"region"`
+	Enabled           bool                            `json:"enabled"`
+	FiltersSeverity   bool                            `json:"filters_severity,omitempty"`
+	TargetsByKind     map[string]int                  `json:"targets_by_kind,omitempty"`
+	ReachesSubscriber bool                            `json:"reaches_subscriber"`
+	Topics            []GuardDutyNotificationTopicRow `json:"topics,omitempty"`
+}
+
+// GuardDutyNotificationTopicRow summarises one SNS target's reach as counts.
+type GuardDutyNotificationTopicRow struct {
+	TopicARN                              string         `json:"topic_arn"`
+	SubscriptionsByProtocol               map[string]int `json:"subscriptions_by_protocol,omitempty"`
+	ConfirmedSubscriptionCount            int            `json:"confirmed_subscription_count"`
+	SubscriptionsPendingConfirmationCount int            `json:"subscriptions_pending_confirmation_count"`
+	Unresolved                            bool           `json:"unresolved,omitempty"`
 }
 
 // SecurityHubStatus contains Security Hub status and compliance metrics.

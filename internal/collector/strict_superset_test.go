@@ -27,6 +27,7 @@ var auditGatedJSONPaths = []string{
 	"account_security.cloudtrail.trails",
 	"account_security.config.recorders",
 	"account_security.guardduty.detectors",
+	"account_security.guardduty.finding_notification.rules",
 	"account_security.security_hub.standards_arns",
 	"account_security.security_hub.product_subscriptions",
 	"identity_center.permission_sets",

@@ -175,7 +175,12 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
         },
         "guardduty": {
           "enabled": true,
-          "unremediated_findings_over_48h": 1
+          "unremediated_findings_over_48h": 1,
+          "finding_notification": {
+            "detector_regions_count": 2,
+            "detector_regions_routed_count": 2,
+            "detector_regions_reaching_subscriber_count": 2
+          }
         },
         "security_hub": {
           "enabled": true,

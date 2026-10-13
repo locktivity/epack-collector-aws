@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 	"github.com/locktivity/epack/componentsdk"
 )
@@ -15,8 +16,8 @@ import (
 // Collector collects AWS account security posture.
 type Collector struct {
 	config      Config
-	tokenSource *aws.GitHubOIDCTokenSource // Cached token source for OIDC mode
-	warnings    []string                   // Service-level warnings accumulated during collection
+	tokenSource stscreds.IdentityTokenRetriever // Token source for OIDC mode
+	warnings    []string                        // Service-level warnings accumulated during collection
 }
 
 // ErrNoUsableAccounts means no accounts were configured and the implicit
@@ -534,8 +535,8 @@ func (c *Collector) resolveAuthMode(accounts []AccountConfig) (string, error) {
 	// Validate auth mode
 	switch authMode {
 	case AuthModeOIDC:
-		if !aws.IsGitHubActionsOIDCAvailable() {
-			return "", fmt.Errorf("auth_mode is 'oidc' but GitHub Actions OIDC is not available (missing ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN)")
+		if aws.OIDCTokenSource() == nil {
+			return "", fmt.Errorf("auth_mode is 'oidc' but no identity token is available: GitHub Actions did not set ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN, and %s does not name a token file", aws.WebIdentityTokenFileEnv)
 		}
 	case AuthModeAssumeRole:
 		// Valid, no additional checks needed
@@ -558,8 +559,7 @@ func (c *Collector) initializeAuth(accounts []AccountConfig) (authMode string, w
 		return authMode, nil, nil
 	}
 
-	// Initialize OIDC token source
-	c.tokenSource = aws.NewGitHubOIDCTokenSource()
+	c.tokenSource = aws.OIDCTokenSource()
 
 	// Check for incompatible settings
 	for _, acct := range accounts {

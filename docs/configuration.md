@@ -4,12 +4,12 @@
 
 The AWS collector supports multiple authentication methods. The `auth_mode` option controls how the collector assumes IAM roles:
 
-- `oidc` - Uses GitHub Actions OIDC to assume roles via `AssumeRoleWithWebIdentity` (recommended for GitHub Actions)
+- `oidc` - Uses an OIDC token to assume roles via `AssumeRoleWithWebIdentity`: GitHub Actions' own in a workflow, or a token file named by `AWS_WEB_IDENTITY_TOKEN_FILE` elsewhere (recommended)
 - `assume_role` - Uses standard `AssumeRole` with optional `external_id` (default for backward compatibility)
 
-### 1. GitHub Actions OIDC (Recommended)
+### 1. OIDC (Recommended)
 
-When running in GitHub Actions, OIDC provides secure, credential-free authentication. The collector obtains a JWT token from GitHub and exchanges it for temporary AWS credentials.
+OIDC provides credential-free authentication. In GitHub Actions, the collector obtains a JWT token from GitHub and exchanges it for temporary AWS credentials. Elsewhere, it reads the token from a file, as described below.
 
 **Trust Policy (OIDC):**
 
@@ -56,6 +56,58 @@ collectors:
 permissions:
   id-token: write  # Required for OIDC
   contents: read
+```
+
+#### Token from a file
+
+Outside GitHub Actions, OIDC mode reads the token from the file `AWS_WEB_IDENTITY_TOKEN_FILE` names. Use this for an issuer AWS trusts other than GitHub, such as a GitLab job's ID token. Each account's role trusts the issuer directly, so several accounts need no intermediate role.
+
+**Trust Policy (GitLab job):**
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::123456789012:oidc-provider/gitlab.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "gitlab.com:aud": "https://gitlab.com",
+          "gitlab.com:sub": "project_path:your-group/your-project:ref_type:branch:ref:main"
+        }
+      }
+    }
+  ]
+}
+```
+
+**Configuration:**
+
+```yaml
+collectors:
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
+    config:
+      auth_mode: "oidc"
+      role_arn: "arn:aws:iam::123456789012:role/EpackCollectorRole"
+    secrets:
+      - AWS_WEB_IDENTITY_TOKEN_FILE
+```
+
+**GitLab job:**
+
+```yaml
+  id_tokens:
+    AWS_ID_TOKEN:
+      aud: https://gitlab.com
+  script:
+    - umask 077
+    - printf '%s' "$AWS_ID_TOKEN" > "$CI_PROJECT_DIR/.aws-web-identity-token"
+    - export AWS_WEB_IDENTITY_TOKEN_FILE="$CI_PROJECT_DIR/.aws-web-identity-token"
 ```
 
 ### 2. IAM Role with AssumeRole
@@ -168,6 +220,8 @@ The minimum policy. Required for every collection level.
         "cloudwatch:DescribeAlarms",
         "elasticloadbalancing:DescribeListeners",
         "elasticloadbalancing:DescribeLoadBalancers",
+        "events:ListRules",
+        "events:ListTargetsByRule",
         "sns:ListSubscriptionsByTopic",
 
         "wafv2:ListWebACLs",
@@ -199,6 +253,7 @@ The minimum policy. Required for every collection level.
         "config:DescribeConfigurationRecorders",
         "config:DescribeConfigurationRecorderStatus",
 
+        "guardduty:GetAdministratorAccount",
         "guardduty:GetDetector",
         "guardduty:ListDetectors",
         "guardduty:ListFindings",

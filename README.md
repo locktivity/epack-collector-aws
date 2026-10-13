@@ -11,7 +11,7 @@ Collects AWS account security posture metrics for the epack ecosystem.
 - **RDS**: encryption, public accessibility, deletion protection, backups, Multi-AZ; per-instance / per-cluster rows.
 - **Network**: security-group analysis; per-VPC inventory with internal-level flow log status and per-SG-rule inventory.
 - **WAF**: web ACL coverage of internet-facing entry points (application load balancers, CloudFront distributions) and rate-limiting enforcement; per-ACL rule inventory at higher levels.
-- **Account security services**: CloudTrail, AWS Config (with per-rule compliance), GuardDuty (with per-finding triage), Security Hub, Inspector.
+- **Account security services**: CloudTrail, AWS Config (with per-rule compliance), GuardDuty (with finding notification and per-finding triage), Security Hub, Inspector.
 - **Identity Center (IAM Identity Center / AWS SSO)**: instance + user / group / permission-set inventory.
 - **Lambda**: deprecated runtime detection, public Function URL detection, per-function metadata (env var KEYS only — values never collected).
 - **EC2**: IMDSv2 enforcement, public-IP exposure, default-VPC residency, unencrypted-volume detection.
@@ -59,7 +59,7 @@ level appears in the output as the top-level `collected_at_level` field. See
 
 The collector supports two authentication modes via the `auth_mode` option:
 
-- **`oidc`** - Uses GitHub Actions OIDC for credential-free authentication (recommended for GitHub Actions)
+- **`oidc`** - Uses an OIDC token for credential-free authentication: GitHub Actions' own in a workflow, or a token file named by `AWS_WEB_IDENTITY_TOKEN_FILE` elsewhere, such as GitLab CI (recommended)
 - **`assume_role`** - Uses standard AssumeRole with optional external_id (default for backward compatibility)
 
 ### Single Account with OIDC (Recommended)
@@ -196,7 +196,12 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
         },
         "guardduty": {
           "enabled": true,
-          "unremediated_findings_over_48h": 1
+          "unremediated_findings_over_48h": 1,
+          "finding_notification": {
+            "detector_regions_count": 2,
+            "detector_regions_routed_count": 2,
+            "detector_regions_reaching_subscriber_count": 2
+          }
         },
         "security_hub": {
           "enabled": true,

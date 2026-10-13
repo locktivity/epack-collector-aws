@@ -120,7 +120,10 @@ func normalizedIAM(iam IAMMetrics) CloudPostureIAM {
 		out.AccessKeyRotationCompliantPct = float64Ptr(float64(iam.AccessKeysRotated))
 	}
 	if iam.RootCredentialStateEvaluated {
-		out.RootMFAEnabled = boolPtr(iam.RootMFAEnabled)
+		// An account whose root credentials were removed through centralized
+		// root access has no root login to protect, so the normalized MFA
+		// answer is yes. The raw aws.json field stays literal.
+		out.RootMFAEnabled = boolPtr(iam.RootMFAEnabled || !iam.RootCredentialsPresent)
 		out.RootAccessProtected = boolPtr(iam.RootAccessProtected)
 	}
 	return out

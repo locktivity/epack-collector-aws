@@ -18,6 +18,8 @@ import (
 	s3controltypes "github.com/aws/aws-sdk-go-v2/service/s3control/types"
 	securityhubtypes "github.com/aws/aws-sdk-go-v2/service/securityhub/types"
 	"github.com/aws/smithy-go"
+	"os"
+	"path/filepath"
 )
 
 func TestRegionForRoleARN(t *testing.T) {
@@ -874,4 +876,72 @@ func TestCredentialReportPending_StringFallback(t *testing.T) {
 	if credentialReportPending(errors.New("Throttling: rate exceeded")) {
 		t.Error("throttling error should not read as pending")
 	}
+}
+
+func TestFileTokenSource(t *testing.T) {
+	t.Run("reads and trims the token", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "token")
+		if err := os.WriteFile(path, []byte("  eyJ.token.here\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		token, err := NewFileTokenSource(path).GetIdentityToken()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if string(token) != "eyJ.token.here" {
+			t.Fatalf("expected the trimmed token, got %q", token)
+		}
+	})
+
+	t.Run("errors naming the variable when the path is empty, missing, or the file is empty", func(t *testing.T) {
+		empty := filepath.Join(t.TempDir(), "empty")
+		if err := os.WriteFile(empty, []byte("\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, path := range []string{"", filepath.Join(t.TempDir(), "missing"), empty} {
+			_, err := NewFileTokenSource(path).GetIdentityToken()
+			if err == nil || !strings.Contains(err.Error(), WebIdentityTokenFileEnv) {
+				t.Fatalf("path %q: expected an error naming %s, got: %v", path, WebIdentityTokenFileEnv, err)
+			}
+		}
+	})
+
+	t.Run("reads the path from the environment", func(t *testing.T) {
+		t.Setenv(WebIdentityTokenFileEnv, "/var/run/token")
+		if WebIdentityTokenFile() != "/var/run/token" {
+			t.Fatalf("expected the environment's path, got %q", WebIdentityTokenFile())
+		}
+	})
+}
+
+func TestOIDCTokenSource(t *testing.T) {
+	t.Run("uses GitHub's token endpoint when the workflow exposes one, even with a token file named", func(t *testing.T) {
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://example.com/token")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "gha_token")
+		t.Setenv(WebIdentityTokenFileEnv, "/var/run/token")
+		if _, ok := OIDCTokenSource().(*GitHubOIDCTokenSource); !ok {
+			t.Fatalf("expected the GitHub token source, got %T", OIDCTokenSource())
+		}
+	})
+
+	t.Run("reads the token file otherwise", func(t *testing.T) {
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+		t.Setenv(WebIdentityTokenFileEnv, "/var/run/token")
+		source, ok := OIDCTokenSource().(*FileTokenSource)
+		if !ok || source.path != "/var/run/token" {
+			t.Fatalf("expected a file token source for the environment's path, got %T", OIDCTokenSource())
+		}
+	})
+
+	t.Run("is nil when neither is available", func(t *testing.T) {
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+		t.Setenv(WebIdentityTokenFileEnv, "")
+		if OIDCTokenSource() != nil {
+			t.Fatalf("expected nil, got %T", OIDCTokenSource())
+		}
+	})
 }

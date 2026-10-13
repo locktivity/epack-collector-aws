@@ -54,6 +54,9 @@ func normalizeForLevel(p *AccountPosture, level componentsdk.Level) {
 	if p.AccountSecurity.GuardDuty.Detectors == nil {
 		p.AccountSecurity.GuardDuty.Detectors = []GuardDutyDetectorRow{}
 	}
+	if p.AccountSecurity.GuardDuty.FindingNotification.Rules == nil {
+		p.AccountSecurity.GuardDuty.FindingNotification.Rules = []GuardDutyNotificationRuleRow{}
+	}
 	if p.AccountSecurity.SecurityHub.StandardsARNs == nil {
 		p.AccountSecurity.SecurityHub.StandardsARNs = []string{}
 	}

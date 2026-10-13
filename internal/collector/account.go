@@ -246,12 +246,13 @@ func configRecordersToInventory(recorders []aws.ConfigRecorder, region string) [
 // emitted while collecting them, so regions can be scanned concurrently and
 // assembled in region order.
 type guardDutyRegionScan struct {
-	detectors []aws.GuardDutyDetector
-	listErr   error
-	findings  []GuardDutyFindingRow
-	truncated bool
-	dropped   int
-	warnings  []string
+	detectors    []aws.GuardDutyDetector
+	listErr      error
+	notification guardDutyNotificationScan
+	findings     []GuardDutyFindingRow
+	truncated    bool
+	dropped      int
+	warnings     []string
 }
 
 // scanGuardDutyRegion collects one region's detectors and, at internal level,
@@ -266,6 +267,11 @@ func (c *Collector) scanGuardDutyRegion(ctx context.Context, client *aws.AWSClie
 		rc.warn("account %s region %s: failed to collect GuardDuty status: %v", accountID, region, s.listErr)
 		s.warnings = rc.warnings
 		return s
+	}
+
+	// GuardDuty allows one detector per region, so [0] is the detector.
+	if len(s.detectors) > 0 {
+		s.notification = rc.scanGuardDutyNotificationRegion(ctx, client, region, accountID, s.detectors[0].DetectorID)
 	}
 
 	if level.AtLeast(componentsdk.LevelInternal) {
@@ -308,6 +314,7 @@ func (c *Collector) collectGuardDutyStatus(ctx context.Context, client *aws.AWSC
 		for _, d := range s.detectors {
 			status.UnremediatedFindingsOver48Hours += d.HighOrCriticalFindingsOlderThan48Hours
 		}
+		applyGuardDutyNotificationScan(&status.FindingNotification, s.notification, region, level.AtLeast(componentsdk.LevelAudit))
 
 		if level.AtLeast(componentsdk.LevelAudit) {
 			for _, d := range s.detectors {

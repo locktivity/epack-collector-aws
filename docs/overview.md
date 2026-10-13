@@ -23,7 +23,7 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 | `hardware_mfa_enabled` | Percentage of IAM users with hardware MFA (physical OTP devices or FIDO/U2F security keys) |
 | `access_keys_rotated` | Percentage of access keys rotated within 90 days |
 | `root_credential_state_evaluated` | Whether root credential state was read from the credential report or the account summary. The root credential flags below are meaningful only when true |
-| `root_mfa_enabled` | Whether root MFA is active |
+| `root_mfa_enabled` | Whether root MFA is active (false when root has no credentials) |
 | `root_credentials_present` | Whether root has any password, access key, or signing certificate present |
 | `root_password_present` | Whether root has a password present |
 | `root_access_keys_exist` | Whether root has access keys (should be false) |
@@ -84,7 +84,7 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 |---------|---------|
 | **CloudTrail** | Trail-listing evaluated marker and error code, enabled, multi-region, organization trail coverage, trail-status evaluated / inferred / unknown counts |
 | **AWS Config** | Enabled, recorder running |
-| **GuardDuty** | Enabled, unremediated high/critical findings >48h |
+| **GuardDuty** | Enabled, unremediated high/critical findings >48h, finding notification routing |
 | **Security Hub** | Enabled, CIS AWS Foundations Benchmark level 1/2/unknown-level compliance |
 | **Inspector** | Status evaluated marker and error code, enabled, unpatched server % |
 

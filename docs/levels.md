@@ -108,8 +108,9 @@ per-rule / per-finding detail at internal.
   trail land at internal.
 - **Config**: `recorders[]` at audit; `rules[]` per-rule compliance state at
   internal.
-- **GuardDuty**: `detectors[]` per-region at audit; `findings[]` per
-  unarchived high-or-critical finding at internal.
+- **GuardDuty**: trust includes the `finding_notification` routing summary.
+  `detectors[]` per-region and `finding_notification.rules[]` per-rule at
+  audit; `findings[]` per unarchived high-or-critical finding at internal.
 - **Security Hub**: enabled-standards inventory + integration count at audit.
 - **Inspector**: raw finding + resource counts at audit.
 

@@ -699,3 +699,15 @@ func TestToCloudPosture_NoLabelOmitted(t *testing.T) {
 		t.Error("account_label serialized without a configured label; want omitted")
 	}
 }
+
+func TestNormalizedIAM_RootWithoutCredentialsCountsAsMFAProtected(t *testing.T) {
+	removed := normalizedIAM(IAMMetrics{RootCredentialStateEvaluated: true, RootMFAEnabled: false, RootCredentialsPresent: false, RootAccessProtected: true})
+	if removed.RootMFAEnabled == nil || !*removed.RootMFAEnabled {
+		t.Errorf("root without credentials: root_mfa_enabled = %v, want true", removed.RootMFAEnabled)
+	}
+
+	unprotected := normalizedIAM(IAMMetrics{RootCredentialStateEvaluated: true, RootMFAEnabled: false, RootCredentialsPresent: true, RootAccessProtected: false})
+	if unprotected.RootMFAEnabled == nil || *unprotected.RootMFAEnabled {
+		t.Errorf("root password without MFA: root_mfa_enabled = %v, want false", unprotected.RootMFAEnabled)
+	}
+}
