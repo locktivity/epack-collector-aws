@@ -60,9 +60,24 @@ permissions:
 
 #### Token from a file
 
-Outside GitHub Actions, OIDC mode reads the token from the file `AWS_WEB_IDENTITY_TOKEN_FILE` names. Use this for an issuer AWS trusts other than GitHub, such as a GitLab job's ID token. Each account's role trusts the issuer directly, so several accounts need no intermediate role.
+Outside GitHub Actions, OIDC mode reads the token from the file `AWS_WEB_IDENTITY_TOKEN_FILE` names. Use this for any issuer AWS can trust, such as a GitLab job's ID token. Each account's role trusts the issuer through an IAM identity provider, so several accounts need no intermediate role.
 
-**Trust Policy (GitLab job):**
+**Configuration:**
+
+```yaml
+collectors:
+  aws:
+    source: "locktivity/epack-collector-aws@^0.1.0"
+    config:
+      auth_mode: "oidc"
+      role_arn: "arn:aws:iam::123456789012:role/EpackCollectorRole"
+    secrets:
+      - AWS_WEB_IDENTITY_TOKEN_FILE
+```
+
+**Example (GitLab CI):**
+
+The role trusts the `gitlab.com` identity provider with the job's audience and subject:
 
 ```json
 {
@@ -85,20 +100,7 @@ Outside GitHub Actions, OIDC mode reads the token from the file `AWS_WEB_IDENTIT
 }
 ```
 
-**Configuration:**
-
-```yaml
-collectors:
-  aws:
-    source: "locktivity/epack-collector-aws@^0.1.0"
-    config:
-      auth_mode: "oidc"
-      role_arn: "arn:aws:iam::123456789012:role/EpackCollectorRole"
-    secrets:
-      - AWS_WEB_IDENTITY_TOKEN_FILE
-```
-
-**GitLab job:**
+The job requests an ID token with that audience and writes it to the file:
 
 ```yaml
   id_tokens:
@@ -154,7 +156,8 @@ If no `role_arn` is specified, the collector uses the AWS SDK's default credenti
 
 1. Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
 2. Shared credentials file (`~/.aws/credentials`)
-3. EC2 instance profile / ECS task role
+3. `aws login` sessions (profiles with `login_session` in `~/.aws/config`)
+4. EC2 instance profile / ECS task role
 
 ```yaml
 collectors:
