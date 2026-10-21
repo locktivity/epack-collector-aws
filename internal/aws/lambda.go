@@ -106,13 +106,16 @@ func (c *AWSClient) LambdaFunctionHasResourcePolicy(ctx context.Context, region,
 	cfg.Region = region
 	client := lambda.NewFromConfig(cfg)
 
-	_, err := client.GetPolicy(ctx, &lambda.GetPolicyInput{FunctionName: aws.String(functionName)})
+	out, err := client.GetPolicy(ctx, &lambda.GetPolicyInput{FunctionName: aws.String(functionName)})
 	if err != nil {
 		var apiErr smithy.APIError
 		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "ResourceNotFoundException" {
 			return false, nil
 		}
 		return false, fmt.Errorf("getting policy for lambda %s: %w", functionName, err)
+	}
+	if out.Policy == nil {
+		return false, errMissing(out.ResultMetadata, "getting policy for lambda "+functionName, "Policy")
 	}
 	return true, nil
 }

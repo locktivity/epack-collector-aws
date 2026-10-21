@@ -40,31 +40,42 @@ type iamClient interface {
 // credential report (no extra API calls for users) plus ListRoles for the role
 // inventory.
 //
-// Failures never abort the surface: each source degrades independently, with
-// the evaluated flags on IAMMetrics recording which sources succeeded so a
+// Failures never abort the surface: each source degrades independently, and
+// every value a failed read leaves unknown is left out with a gap, so a
 // consumer never mistakes an uncollected aggregate for a genuine zero.
-func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, accountID string, level componentsdk.Level) *IAMMetrics {
+func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, accountID string, at at, level componentsdk.Level) *IAMMetrics {
+	iamAt := at.sub("iam")
 	metrics := &IAMMetrics{}
 
 	report, reportErr := client.GetCredentialReport(ctx)
 	if reportErr != nil {
 		metrics.CredentialReportErrorCode = credentialReportErrorCode(reportErr)
 		c.warn("account %s: failed to collect IAM credential report: %v", accountID, reportErr)
+		c.gaps.leaveOut(reportErr, iamAt.p("iam_users_present"), iamAt.p("iam_user_count"), iamAt.p("access_key_user_count"),
+			iamAt.p("mfa_enabled"), iamAt.p("mfa_enabled_user_count"), iamAt.p("hardware_mfa_enabled"), iamAt.p("hardware_mfa_enabled_user_count"),
+			iamAt.p("access_keys_rotated"), iamAt.p("access_keys_rotated_user_count"))
+		if level.AtLeast(componentsdk.LevelAudit) {
+			c.gaps.leaveOut(reportErr, iamAt.p("users"))
+		}
+		if level.AtLeast(componentsdk.LevelInternal) {
+			c.gaps.leaveOut(reportErr, iamAt.p("credential_report"))
+		}
 	} else {
 		c.processCredentialReport(report, metrics)
 		metrics.CredentialReportEvaluated = true
 	}
 
-	summary, err := client.GetAccountSummary(ctx)
-	if err != nil {
-		c.warn("account %s: failed to collect IAM account summary: %v", accountID, err)
-	} else {
-		processRootAccountSummary(summary, metrics)
+	summary, summaryErr := client.GetAccountSummary(ctx)
+	if summaryErr != nil {
+		c.warn("account %s: failed to collect IAM account summary: %v", accountID, summaryErr)
 	}
+	c.resolveRootState(metrics, report, summary, summaryErr, reportErr, iamAt)
+
 	policy, policyErr := client.GetPasswordPolicy(ctx)
 	if policyErr != nil {
 		metrics.PasswordPolicyErrorCode = apiErrorCode(policyErr)
 		c.warn("account %s: failed to collect IAM account password policy: %v", accountID, policyErr)
+		c.gaps.leaveOut(policyErr, iamAt.p("password_policy"))
 	} else {
 		// A nil policy with no error is AWS reporting that none is configured,
 		// which is an answer rather than a gap.
@@ -78,19 +89,35 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, acc
 		if shouldWarnRootOrganizationsFeaturesError(metrics.RootOrganizationsFeaturesErrorCode) {
 			c.warn("account %s: failed to collect IAM organizations root features: %v", accountID, err)
 		}
+		c.gaps.leaveOut(rootOrganizationsFeaturesGap(err), iamAt.p("root_organization_id"),
+			iamAt.p("root_credentials_management_feature_enabled"), iamAt.p("root_sessions_feature_enabled"))
 	} else {
 		processRootOrganizationsFeatures(features, nil, metrics)
 	}
 	if report != nil {
-		metrics.HardwareMFAEnabled = c.collectHardwareMFAMetrics(ctx, client, report, accountID)
+		hardware, unmeasured, err := c.collectHardwareMFAMetrics(ctx, client, report, accountID)
+		if hardware != nil {
+			metrics.HardwareMFAEnabledUserCount = &hardware.users
+			metrics.HardwareMFAEnabled = hardwareMFAEnabledPercent(hardware.users, hardware.of)
+		}
+		c.gaps.partial(unmeasured, err, iamAt.p("hardware_mfa_enabled"), iamAt.p("hardware_mfa_enabled_user_count"))
 	}
 
 	if level.AtLeast(componentsdk.LevelAudit) {
 		if report != nil {
 			metrics.Users = c.iamUsersFromReport(report)
 		}
-		orgAccounts := c.collectOrganizationAccounts(ctx, client, accountID, metrics)
-		metrics.Roles = c.collectIAMRoles(ctx, client, accountID, level, orgAccounts)
+		orgAccounts, rosterErr := c.collectOrganizationAccounts(ctx, client, accountID, metrics)
+		roles, err := c.collectIAMRoles(ctx, client, accountID, level, orgAccounts)
+		if err != nil {
+			c.gaps.leaveOut(err, iamAt.p("roles"))
+		}
+		metrics.Roles = roles
+		for i, role := range roles {
+			if role.ExternalTrustInOrg == nil && len(role.ExternalTrustAccountIDs) > 0 {
+				c.gaps.leaveOut(rosterErr, iamAt.p("roles", i, "external_trust_in_org"))
+			}
+		}
 	}
 
 	if level.AtLeast(componentsdk.LevelInternal) && report != nil {
@@ -98,6 +125,74 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, acc
 	}
 
 	return metrics
+}
+
+// rootStateFlags are the root user's credential flags, by JSON name.
+var rootStateFlags = []string{
+	"root_mfa_enabled", "root_credentials_present", "root_password_present",
+	"root_access_keys_exist", "root_signing_certificates_present", "root_access_protected",
+}
+
+// resolveRootState sets the root user's credential state from the account
+// summary, or failing that from the credential report's root row. The report
+// cannot say whether the root password exists, so a flag that depends on it
+// is left out when only the report answered.
+func (c *Collector) resolveRootState(metrics *IAMMetrics, report *aws.CredentialReport, summary *aws.AccountSummary, summaryErr, reportErr error, iamAt at) {
+	if summary != nil {
+		processRootAccountSummary(summary, metrics)
+		return
+	}
+	root, ok := rootRow(report)
+	if !ok {
+		why := summaryErr
+		if why == nil {
+			why = reportErr
+		}
+		for _, flag := range rootStateFlags {
+			c.gaps.leaveOut(why, iamAt.p(flag))
+		}
+		return
+	}
+	metrics.RootCredentialStateEvaluated = true
+	metrics.RootMFAEnabled = root.MFAActive
+	metrics.RootAccessKeysExist = root.HasAccessKeys()
+	metrics.RootSigningCertificatesPresent = root.HasSigningCertificates()
+	c.gaps.leaveOut(summaryErr, iamAt.p("root_password_present"))
+	metrics.RootCredentialsPresent = metrics.RootAccessKeysExist || metrics.RootSigningCertificatesPresent
+	if !metrics.RootCredentialsPresent {
+		c.gaps.leaveOut(summaryErr, iamAt.p("root_credentials_present"))
+	}
+	metrics.RootAccessProtected = metrics.RootMFAEnabled
+	if !metrics.RootMFAEnabled && !metrics.RootCredentialsPresent {
+		c.gaps.leaveOut(summaryErr, iamAt.p("root_access_protected"))
+	}
+}
+
+func rootRow(report *aws.CredentialReport) (aws.CredentialReportUser, bool) {
+	if report == nil {
+		return aws.CredentialReportUser{}, false
+	}
+	for _, u := range report.Users {
+		if u.IsRootUser() {
+			return u, true
+		}
+	}
+	return aws.CredentialReportUser{}, false
+}
+
+// rootOrganizationsFeaturesGap gives a failed organizations-features read its
+// code: a member account cannot read them, and an account outside an
+// organization with all features and IAM trusted access has none to read.
+func rootOrganizationsFeaturesGap(err error) error {
+	switch apiErrorCode(err) {
+	case "AccountNotManagementOrDelegatedAdministrator", "AccountNotManagementOrDelegatedAdministratorException":
+		return componentsdk.CodeError(componentsdk.CodePermissionDenied, err)
+	case "OrganizationNotFound", "OrganizationNotFoundException",
+		"OrganizationNotInAllFeaturesMode", "OrganizationNotInAllFeaturesModeException",
+		"ServiceAccessNotEnabled", "ServiceAccessNotEnabledException":
+		return componentsdk.CodeError(componentsdk.CodeNotLicensed, err)
+	}
+	return err
 }
 
 // credentialReportErrorCode maps a credential report failure to a stable code
@@ -194,12 +289,11 @@ func (c *Collector) iamUsersFromReport(report *aws.CredentialReport) []IAMUser {
 
 // collectIAMRoles fetches the per-role audit-level inventory. HasExternalTrust
 // is derived from each role's trust policy document (cross-account principals
-// or wildcards). AccessDenied skips the role inventory and emits a diagnostic;
-// the trust-level aggregates are unaffected. Returns an empty (non-nil) slice
-// on success-with-no-roles so the audit artifact emits `[]` not `null`; returns
-// nil on collection failure so the artifact emits `null` (paired with a
-// diagnostic warning) — null and `[]` are intentionally distinguishable.
-func (c *Collector) collectIAMRoles(ctx context.Context, client roleLister, accountID string, level componentsdk.Level, orgAccounts *organizationAccounts) []IAMRole {
+// or wildcards). A failed listing returns nil and the error, which the caller
+// records as a gap; the trust-level aggregates are unaffected. Returns an
+// empty (non-nil) slice on success-with-no-roles so the audit artifact emits
+// `[]` not `null`.
+func (c *Collector) collectIAMRoles(ctx context.Context, client roleLister, accountID string, level componentsdk.Level, orgAccounts *organizationAccounts) ([]IAMRole, error) {
 	roles := []IAMRole{}
 	err := client.ListRoles(ctx, func(batch []aws.Role) error {
 		for _, r := range batch {
@@ -224,16 +318,18 @@ func (c *Collector) collectIAMRoles(ctx context.Context, client roleLister, acco
 	if err != nil {
 		if isAccessDeniedErr(err) {
 			c.warnAccessDenied(accountID, "iam_roles", "iam:ListRoles")
-			return nil
+		} else {
+			c.warn("account %s: failed to list IAM roles: %v", accountID, err)
 		}
-		c.warn("account %s: failed to list IAM roles: %v", accountID, err)
-		return nil
+		return nil, err
 	}
-	return roles
+	return roles, nil
 }
 
 // organizationAccounts is the in-org membership context for one account run.
 // A nil / unevaluated receiver yields absent determinations, never guesses.
+// An account outside any organization has no foreign account in its
+// organization.
 type organizationAccounts struct {
 	evaluated bool
 	ids       map[string]struct{}
@@ -257,22 +353,27 @@ func (o *organizationAccounts) membership(accountIDs []string) *bool {
 // collectOrganizationAccounts fetches the organization account roster used to
 // classify cross-account trust, recording the outcome on the sentinels.
 // Expected failures from accounts without Organizations visibility record the
-// code without a warning.
-func (c *Collector) collectOrganizationAccounts(ctx context.Context, client iamClient, accountID string, metrics *IAMMetrics) *organizationAccounts {
+// code without a warning. The error it returns is why membership could not be
+// determined.
+func (c *Collector) collectOrganizationAccounts(ctx context.Context, client iamClient, accountID string, metrics *IAMMetrics) (*organizationAccounts, error) {
 	accountIDs, err := client.ListOrganizationAccountIDs(ctx)
 	if err != nil {
 		metrics.OrganizationAccountsErrorCode = apiErrorCode(err)
+		if metrics.OrganizationAccountsErrorCode == "AWSOrganizationsNotInUseException" {
+			metrics.OrganizationAccountsEvaluated = true
+			return &organizationAccounts{evaluated: true, ids: map[string]struct{}{}}, nil
+		}
 		if !isAccessDeniedErr(err) && shouldWarnOrganizationAccountsError(metrics.OrganizationAccountsErrorCode) {
 			c.warn("account %s: failed to list organization accounts: %v", accountID, err)
 		}
-		return &organizationAccounts{}
+		return &organizationAccounts{}, err
 	}
 	metrics.OrganizationAccountsEvaluated = true
 	ids := make(map[string]struct{}, len(accountIDs))
 	for _, id := range accountIDs {
 		ids[id] = struct{}{}
 	}
-	return &organizationAccounts{evaluated: true, ids: ids}
+	return &organizationAccounts{evaluated: true, ids: ids}, nil
 }
 
 // shouldWarnOrganizationAccountsError suppresses warnings for error codes
@@ -284,16 +385,15 @@ func shouldWarnOrganizationAccountsError(code string) bool {
 	return code != "AWSOrganizationsNotInUseException"
 }
 
-// processCredentialReport analyzes the credential report and populates user metrics.
+// processCredentialReport analyzes the credential report and populates user
+// metrics. Key ages are measured against the run's clock.
 func (c *Collector) processCredentialReport(report *aws.CredentialReport, metrics *IAMMetrics) {
-	now := time.Now()
-	keyRotationThreshold := now.AddDate(0, 0, -AccessKeyAgeThreshold)
+	keyRotationThreshold := c.now().AddDate(0, 0, -AccessKeyAgeThreshold)
 
 	var stats userStats
 
 	for _, user := range report.Users {
 		if user.IsRootUser() {
-			c.processRootUser(user, metrics)
 			continue
 		}
 		c.processIAMUser(user, keyRotationThreshold, &stats)
@@ -301,15 +401,30 @@ func (c *Collector) processCredentialReport(report *aws.CredentialReport, metric
 
 	// Calculate percentages
 	metrics.IAMUsersPresent = stats.totalUsers > 0
+	metrics.IAMUserCount = stats.totalUsers
+	metrics.AccessKeyUserCount = stats.usersWithKeys
 	metrics.MFAEnabled = mfaEnabledPercent(stats.mfaEnabled, stats.totalUsers)
+	metrics.MFAEnabledUserCount = stats.mfaEnabled
 	metrics.AccessKeysRotated = accessKeyRotationPercent(stats.keysRotated, stats.usersWithKeys)
+	metrics.AccessKeysRotatedUserCount = stats.keysRotated
+}
+
+// hardwareMFA counts the IAM users with a hardware MFA device among all the
+// IAM users.
+type hardwareMFA struct {
+	users, of int
 }
 
 // collectHardwareMFAMetrics checks each IAM user's MFA device type.
-// Hardware MFA includes physical OTP devices and FIDO/U2F security keys.
-func (c *Collector) collectHardwareMFAMetrics(ctx context.Context, client mfaDeviceLister, report *aws.CredentialReport, accountID string) int {
+// Hardware MFA includes physical OTP devices and FIDO/U2F security keys. A
+// user whose devices could not be listed is unmeasured, never counted as
+// software MFA: with any unmeasured user the count is nil, and the count of
+// unmeasured users and the first failure are returned.
+func (c *Collector) collectHardwareMFAMetrics(ctx context.Context, client mfaDeviceLister, report *aws.CredentialReport, accountID string) (*hardwareMFA, int, error) {
 	totalUsers := 0
 	hardwareMFAUsers := 0
+	unmeasured := 0
+	var firstErr error
 
 	for _, user := range report.Users {
 		if user.IsRootUser() {
@@ -324,6 +439,10 @@ func (c *Collector) collectHardwareMFAMetrics(ctx context.Context, client mfaDev
 		devices, err := client.ListMFADevices(ctx, user.User)
 		if err != nil {
 			c.warn("account %s: failed to list MFA devices for IAM user %s: %v", accountID, user.User, err)
+			unmeasured++
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
 
@@ -332,7 +451,10 @@ func (c *Collector) collectHardwareMFAMetrics(ctx context.Context, client mfaDev
 		}
 	}
 
-	return hardwareMFAEnabledPercent(hardwareMFAUsers, totalUsers)
+	if unmeasured > 0 {
+		return nil, unmeasured, firstErr
+	}
+	return &hardwareMFA{users: hardwareMFAUsers, of: totalUsers}, 0, nil
 }
 
 // userStats tracks counts during credential report processing.
@@ -341,17 +463,6 @@ type userStats struct {
 	mfaEnabled    int
 	keysRotated   int
 	usersWithKeys int
-}
-
-// processRootUser extracts root account metrics.
-func (c *Collector) processRootUser(user aws.CredentialReportUser, metrics *IAMMetrics) {
-	processRootCredentialState(
-		metrics,
-		user.MFAActive,
-		user.PasswordEnabled,
-		user.HasAccessKeys(),
-		user.HasSigningCertificates(),
-	)
 }
 
 func processRootAccountSummary(summary *aws.AccountSummary, metrics *IAMMetrics) {
@@ -462,30 +573,23 @@ func hasRotatedKeys(user aws.CredentialReportUser, threshold time.Time) bool {
 	return true
 }
 
-// mfaEnabledPercent treats accounts with no IAM users as fully compliant.
-// MFA requirements only apply when console users exist.
-func mfaEnabledPercent(mfaEnabled, totalUsers int) int {
-	if totalUsers == 0 {
-		return MaxPercentage
-	}
-	return percent(mfaEnabled, totalUsers)
+// mfaEnabledPercent is the share of IAM users with MFA, nil when there are
+// none: an account with no IAM users has no MFA coverage to report, and its
+// people may sign in through Identity Center, which this does not measure.
+func mfaEnabledPercent(mfaEnabled, totalUsers int) *int {
+	return pctOf(mfaEnabled, totalUsers)
 }
 
-// accessKeyRotationPercent treats accounts with no active access keys as fully compliant.
-// Rotation requirements only apply when keys exist.
-func accessKeyRotationPercent(keysRotated, usersWithKeys int) int {
-	if usersWithKeys == 0 {
-		return MaxPercentage
-	}
-	return percent(keysRotated, usersWithKeys)
+// accessKeyRotationPercent is the share of users with active keys whose keys
+// were all rotated within the threshold, nil when no user has an active key.
+func accessKeyRotationPercent(keysRotated, usersWithKeys int) *int {
+	return pctOf(keysRotated, usersWithKeys)
 }
 
-// hardwareMFAEnabledPercent treats accounts with no IAM users as fully compliant.
-func hardwareMFAEnabledPercent(hardwareMFAUsers, totalUsers int) int {
-	if totalUsers == 0 {
-		return MaxPercentage
-	}
-	return percent(hardwareMFAUsers, totalUsers)
+// hardwareMFAEnabledPercent is the share of IAM users with a hardware MFA
+// device, nil when there are none.
+func hardwareMFAEnabledPercent(hardwareMFAUsers, totalUsers int) *int {
+	return pctOf(hardwareMFAUsers, totalUsers)
 }
 
 // hasHardwareMFADevice returns true if any assigned device is a hardware MFA device.

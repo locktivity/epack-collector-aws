@@ -71,6 +71,6 @@ func mergeCloudWatchLogsMetrics(a, b CloudWatchLogsMetrics) CloudWatchLogsMetric
 		LogGroupCount:                    a.LogGroupCount + b.LogGroupCount,
 		LogGroupsWithoutRetentionCount:   a.LogGroupsWithoutRetentionCount + b.LogGroupsWithoutRetentionCount,
 		LogGroupsWithoutCustomerKMSCount: a.LogGroupsWithoutCustomerKMSCount + b.LogGroupsWithoutCustomerKMSCount,
-		LogGroups:                        append(append([]CloudWatchLogGroupRow(nil), a.LogGroups...), b.LogGroups...),
+		LogGroups:                        appendRows(a.LogGroups, b.LogGroups),
 	}
 }

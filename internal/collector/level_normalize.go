@@ -93,6 +93,39 @@ func normalizeForLevel(p *AccountPosture, level componentsdk.Level) {
 	if p.SSMParameters.Parameters == nil {
 		p.SSMParameters.Parameters = []SSMParameterRow{}
 	}
+	if p.Monitoring.Alarms == nil {
+		p.Monitoring.Alarms = []CloudWatchAlarmRow{}
+	}
+	if p.StoredImages.PublicSnapshots == nil {
+		p.StoredImages.PublicSnapshots = []PublicResourceRow{}
+	}
+	if p.StoredImages.PublicImages == nil {
+		p.StoredImages.PublicImages = []PublicResourceRow{}
+	}
+	if p.LoadBalancers.LoadBalancers == nil {
+		p.LoadBalancers.LoadBalancers = []LoadBalancerRow{}
+	}
+	if p.LoadBalancers.TargetGroups == nil {
+		p.LoadBalancers.TargetGroups = []TargetGroupRow{}
+	}
+	if p.SES.ConfigurationSets == nil {
+		p.SES.ConfigurationSets = []SESConfigurationSetRow{}
+	}
+	if p.SES.Identities == nil {
+		p.SES.Identities = []SESIdentityRow{}
+	}
+	if p.ECS.Services == nil {
+		p.ECS.Services = []ECSServiceRow{}
+	}
+	if p.AutoScaling.Groups == nil {
+		p.AutoScaling.Groups = []AutoScalingGroupRow{}
+	}
+	if p.CloudFront.Distributions == nil {
+		p.CloudFront.Distributions = []CloudFrontDistributionRow{}
+	}
+	if p.AccountSecurity.AccessAnalyzer.Analyzers == nil {
+		p.AccountSecurity.AccessAnalyzer.Analyzers = []AccessAnalyzerRow{}
+	}
 
 	if !level.AtLeast(componentsdk.LevelInternal) {
 		return

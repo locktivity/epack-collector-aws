@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +21,7 @@ import (
 	s3controltypes "github.com/aws/aws-sdk-go-v2/service/s3control/types"
 	securityhubtypes "github.com/aws/aws-sdk-go-v2/service/securityhub/types"
 	"github.com/aws/smithy-go"
+	"github.com/locktivity/epack/componentsdk"
 	"os"
 	"path/filepath"
 )
@@ -108,10 +112,17 @@ func TestTrailStatusIdentifierFallsBackToName(t *testing.T) {
 }
 
 func TestShouldInferOrganizationTrailLogging(t *testing.T) {
-	err := &smithy.GenericAPIError{Code: "AccessDeniedException"}
+	err := &apiError{code: componentsdk.CodePermissionDenied, vendor: "AccessDeniedException", err: &smithy.GenericAPIError{Code: "AccessDeniedException"}}
 
 	if !shouldInferOrganizationTrailLogging(cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(true)}, err) {
 		t.Fatalf("expected organization trail status failure to be inferable")
+	}
+	if !shouldInferOrganizationTrailLogging(cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(true)}, &smithy.GenericAPIError{Code: "TrailNotFoundException"}) {
+		t.Fatalf("expected a member account's missing shadow trail to be inferable")
+	}
+	throttled := &apiError{code: componentsdk.CodeRateLimited, vendor: "ThrottlingException", err: &smithy.GenericAPIError{Code: "ThrottlingException"}}
+	if shouldInferOrganizationTrailLogging(cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(true)}, throttled) {
+		t.Fatalf("did not expect a throttled status read to count as logging")
 	}
 	if shouldInferOrganizationTrailLogging(cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(false)}, err) {
 		t.Fatalf("did not expect local trail status failure to be inferable")
@@ -656,49 +667,46 @@ func TestParseCredentialReportErrorsAndEmpty(t *testing.T) {
 	}
 }
 
-func TestIsGitHubActionsOIDCAvailable(t *testing.T) {
-	t.Run("not available when env vars missing", func(t *testing.T) {
-		// Clear any existing values
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+func TestOIDCEnvGitHubAvailable(t *testing.T) {
+	cases := []struct {
+		name string
+		env  OIDCEnv
+		want bool
+	}{
+		{"not available when both are empty", OIDCEnv{}, false},
+		{"not available when only the URL is set", OIDCEnv{RequestURL: "https://example.com/token"}, false},
+		{"not available when only the token is set", OIDCEnv{RequestToken: "gha_token"}, false},
+		{"available when both are set", OIDCEnv{RequestURL: "https://example.com/token", RequestToken: "gha_token"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.env.GitHubAvailable(); got != tc.want {
+				t.Fatalf("GitHubAvailable() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
 
-		if IsGitHubActionsOIDCAvailable() {
-			t.Fatal("expected OIDC to be unavailable when env vars are empty")
-		}
-	})
-
-	t.Run("not available when only URL set", func(t *testing.T) {
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://example.com/token")
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
-
-		if IsGitHubActionsOIDCAvailable() {
-			t.Fatal("expected OIDC to be unavailable when only URL is set")
-		}
-	})
-
-	t.Run("not available when only token set", func(t *testing.T) {
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "gha_token")
-
-		if IsGitHubActionsOIDCAvailable() {
-			t.Fatal("expected OIDC to be unavailable when only token is set")
-		}
-	})
-
-	t.Run("available when both env vars set", func(t *testing.T) {
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://example.com/token")
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "gha_token")
-
-		if !IsGitHubActionsOIDCAvailable() {
-			t.Fatal("expected OIDC to be available when both env vars are set")
-		}
-	})
+func TestOIDCEnvTokenSource(t *testing.T) {
+	ctx := context.Background()
+	if _, ok := (OIDCEnv{RequestURL: "https://example.com/token", RequestToken: "t", TokenFile: "/tmp/token"}).TokenSource(ctx, nil).(*GitHubOIDCTokenSource); !ok {
+		t.Error("GitHub's endpoint should win over the token file")
+	}
+	if _, ok := (OIDCEnv{TokenFile: "/tmp/token"}).TokenSource(ctx, nil).(*FileTokenSource); !ok {
+		t.Error("the token file should be used outside GitHub Actions")
+	}
+	if src := (OIDCEnv{}).TokenSource(ctx, nil); src != nil {
+		t.Errorf("TokenSource() = %T, want nil with no variables set", src)
+	}
 }
 
 func TestNewGitHubOIDCTokenSource(t *testing.T) {
-	ts := NewGitHubOIDCTokenSource()
+	ts := NewGitHubOIDCTokenSource(context.Background(), nil, "https://example.com/token", "gha_token")
 	if ts == nil {
 		t.Fatal("expected non-nil token source")
+	}
+	if ts.client != http.DefaultClient {
+		t.Fatal("expected a nil client to default to http.DefaultClient")
 	}
 	if ts.cachedToken != "" {
 		t.Fatal("expected empty cached token on new source")
@@ -708,15 +716,74 @@ func TestNewGitHubOIDCTokenSource(t *testing.T) {
 	}
 }
 
+func TestGitHubOIDCTokenSource_Fetch(t *testing.T) {
+	var gotAuth, gotAudience string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotAudience = r.URL.Query().Get("audience")
+		_, _ = w.Write([]byte(`{"value":"jwt-from-github"}`))
+	}))
+	defer srv.Close()
+
+	ts := NewGitHubOIDCTokenSource(context.Background(), srv.Client(), srv.URL+"/token?api-version=2.0", "gha_token")
+	token, err := ts.GetIdentityToken()
+	if err != nil {
+		t.Fatalf("GetIdentityToken() error = %v", err)
+	}
+	if string(token) != "jwt-from-github" {
+		t.Errorf("token = %q, want jwt-from-github", token)
+	}
+	if gotAuth != "bearer gha_token" {
+		t.Errorf("Authorization = %q, want the request token as a bearer", gotAuth)
+	}
+	if gotAudience != "sts.amazonaws.com" {
+		t.Errorf("audience = %q, want sts.amazonaws.com", gotAudience)
+	}
+}
+
+func TestGitHubOIDCTokenSource_FetchErrors(t *testing.T) {
+	t.Run("a failed status is an error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		defer srv.Close()
+		_, err := NewGitHubOIDCTokenSource(context.Background(), srv.Client(), srv.URL, "gha_token").GetIdentityToken()
+		if err == nil || !strings.Contains(err.Error(), "status 403") {
+			t.Fatalf("error = %v, want the status", err)
+		}
+	})
+
+	t.Run("a response with no value is an error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{}`))
+		}))
+		defer srv.Close()
+		_, err := NewGitHubOIDCTokenSource(context.Background(), srv.Client(), srv.URL, "gha_token").GetIdentityToken()
+		if err == nil || !strings.Contains(err.Error(), "missing 'value'") {
+			t.Fatalf("error = %v, want a missing value error", err)
+		}
+	})
+
+	t.Run("a transport error leaves the request URL out", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		secretURL := srv.URL + "/token?secret=job-scoped"
+		srv.Close()
+		_, err := NewGitHubOIDCTokenSource(context.Background(), srv.Client(), secretURL, "gha_token").GetIdentityToken()
+		if err == nil {
+			t.Fatal("expected an error from a closed server")
+		}
+		if strings.Contains(err.Error(), "job-scoped") || strings.Contains(err.Error(), srv.URL) {
+			t.Fatalf("error %q carries the request URL", err)
+		}
+	})
+}
+
 func TestGitHubOIDCTokenSource_CachingBehavior(t *testing.T) {
 	t.Run("returns error when OIDC not available", func(t *testing.T) {
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
-
-		ts := NewGitHubOIDCTokenSource()
+		ts := NewGitHubOIDCTokenSource(context.Background(), nil, "", "")
 		_, err := ts.GetIdentityToken()
 		if err == nil {
-			t.Fatal("expected error when OIDC env vars not set")
+			t.Fatal("expected error when the request URL and token are empty")
 		}
 		if !strings.Contains(err.Error(), "OIDC not available") {
 			t.Fatalf("expected OIDC not available error, got: %v", err)
@@ -724,8 +791,7 @@ func TestGitHubOIDCTokenSource_CachingBehavior(t *testing.T) {
 	})
 
 	t.Run("uses cached token within TTL", func(t *testing.T) {
-		ts := NewGitHubOIDCTokenSource()
-		// Manually set a cached token
+		ts := NewGitHubOIDCTokenSource(context.Background(), nil, "", "")
 		ts.cachedToken = "cached_jwt_token"
 		ts.cachedAt = time.Now()
 
@@ -739,33 +805,28 @@ func TestGitHubOIDCTokenSource_CachingBehavior(t *testing.T) {
 	})
 
 	t.Run("refetches token after TTL expires", func(t *testing.T) {
-		// This test verifies the cache is bypassed after TTL
-		// We can't easily mock the HTTP call, but we can verify the logic
-		ts := NewGitHubOIDCTokenSource()
+		ts := NewGitHubOIDCTokenSource(context.Background(), nil, "", "")
 		ts.cachedToken = "old_token"
-		ts.cachedAt = time.Now().Add(-tokenCacheTTL - time.Minute) // Expired
+		ts.cachedAt = time.Now().Add(-tokenCacheTTL - time.Minute)
 
-		// Without valid env vars, this should attempt to fetch and fail
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
-
-		_, err := ts.GetIdentityToken()
-		if err == nil {
-			t.Fatal("expected error when cache expired and env vars not set")
+		// With no request URL, a refetch fails, which proves the cache was
+		// bypassed.
+		if _, err := ts.GetIdentityToken(); err == nil {
+			t.Fatal("expected error when cache expired and the request URL is empty")
 		}
-		// This proves the cache was bypassed
 	})
 }
 
 type fakeCredentialReportAPI struct {
 	generateErr error
+	state       iamtypes.ReportStateType
 	getErrs     []error
 	getCalls    int
 	reportCSV   []byte
 }
 
 func (f *fakeCredentialReportAPI) GenerateCredentialReport(_ context.Context, _ *iam.GenerateCredentialReportInput, _ ...func(*iam.Options)) (*iam.GenerateCredentialReportOutput, error) {
-	return &iam.GenerateCredentialReportOutput{}, f.generateErr
+	return &iam.GenerateCredentialReportOutput{State: f.state}, f.generateErr
 }
 
 func (f *fakeCredentialReportAPI) GetCredentialReport(_ context.Context, _ *iam.GetCredentialReportInput, _ ...func(*iam.Options)) (*iam.GetCredentialReportOutput, error) {
@@ -779,6 +840,24 @@ func (f *fakeCredentialReportAPI) GetCredentialReport(_ context.Context, _ *iam.
 
 const minimalCredentialReportCSV = "user,arn,user_creation_time,password_enabled,password_last_used,password_last_changed,password_next_rotation,mfa_active,access_key_1_active,access_key_1_last_rotated,access_key_1_last_used_date,access_key_1_last_used_region,access_key_1_last_used_service,access_key_2_active,access_key_2_last_rotated,access_key_2_last_used_date,access_key_2_last_used_region,access_key_2_last_used_service\n<root_account>,arn:aws:iam::123456789012:root,2020-01-01T00:00:00+00:00,not_supported,N/A,not_supported,not_supported,true,false,N/A,N/A,N/A,N/A,false,N/A,N/A,N/A,N/A\n"
 
+// recordedSleep returns a sleep that waits for nothing and the waits it was
+// asked for.
+func recordedSleep() (func(context.Context, time.Duration) error, *[]time.Duration) {
+	var waits []time.Duration
+	return func(ctx context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		return ctx.Err()
+	}, &waits
+}
+
+func TestCredentialReportWaits(t *testing.T) {
+	got := credentialReportWaits(2*time.Second, 45*time.Second)
+	want := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 10 * time.Second, 10 * time.Second, 10 * time.Second, time.Second}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("credentialReportWaits() = %v, want %v", got, want)
+	}
+}
+
 func TestGetCredentialReport_RetriesWhilePending(t *testing.T) {
 	api := &fakeCredentialReportAPI{
 		getErrs: []error{
@@ -787,16 +866,32 @@ func TestGetCredentialReport_RetriesWhilePending(t *testing.T) {
 		},
 		reportCSV: []byte(minimalCredentialReportCSV),
 	}
+	sleep, waits := recordedSleep()
 
-	report, err := getCredentialReport(context.Background(), api, time.Millisecond, time.Second)
+	report, err := getCredentialReport(context.Background(), api, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}, sleep)
 	if err != nil {
 		t.Fatalf("getCredentialReport() error = %v", err)
 	}
 	if api.getCalls != 3 {
 		t.Errorf("getCalls = %d, want 3 (two pending, one success)", api.getCalls)
 	}
+	if want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}; !reflect.DeepEqual(*waits, want) {
+		t.Errorf("waits = %v, want %v", *waits, want)
+	}
 	if len(report.Users) != 1 || report.Users[0].User != "<root_account>" {
 		t.Errorf("unexpected parsed report: %+v", report)
+	}
+}
+
+func TestGetCredentialReport_CompleteReportIsReadAtOnce(t *testing.T) {
+	api := &fakeCredentialReportAPI{state: iamtypes.ReportStateTypeComplete, reportCSV: []byte(minimalCredentialReportCSV)}
+	sleep, waits := recordedSleep()
+
+	if _, err := getCredentialReport(context.Background(), api, []time.Duration{time.Second}, sleep); err != nil {
+		t.Fatalf("getCredentialReport() error = %v", err)
+	}
+	if len(*waits) != 0 {
+		t.Errorf("waits = %v, want none for a report AWS says is complete", *waits)
 	}
 }
 
@@ -806,13 +901,18 @@ func TestGetCredentialReport_TimesOutWithSentinelError(t *testing.T) {
 		pending[i] = &iamtypes.CredentialReportNotReadyException{}
 	}
 	api := &fakeCredentialReportAPI{getErrs: pending}
+	sleep, _ := recordedSleep()
+	waits := []time.Duration{time.Second, time.Second, time.Second}
 
-	_, err := getCredentialReport(context.Background(), api, time.Millisecond, 20*time.Millisecond)
+	_, err := getCredentialReport(context.Background(), api, waits, sleep)
 	if !errors.Is(err, ErrCredentialReportTimeout) {
 		t.Fatalf("error = %v, want ErrCredentialReportTimeout", err)
 	}
-	if api.getCalls >= len(pending) {
-		t.Errorf("getCalls = %d, want polling bounded by the wall-clock budget", api.getCalls)
+	if code := componentsdk.Classify(err); code != componentsdk.CodeTimeout {
+		t.Errorf("code = %s, want %s", code, componentsdk.CodeTimeout)
+	}
+	if api.getCalls != len(waits) {
+		t.Errorf("getCalls = %d, want %d: one read after each wait", api.getCalls, len(waits))
 	}
 }
 
@@ -821,8 +921,9 @@ func TestGetCredentialReport_ExpiredReportIsRegenerated(t *testing.T) {
 		getErrs:   []error{&iamtypes.CredentialReportExpiredException{}},
 		reportCSV: []byte(minimalCredentialReportCSV),
 	}
+	sleep, _ := recordedSleep()
 
-	report, err := getCredentialReport(context.Background(), api, time.Millisecond, time.Second)
+	report, err := getCredentialReport(context.Background(), api, []time.Duration{time.Second, time.Second}, sleep)
 	if err != nil {
 		t.Fatalf("getCredentialReport() error = %v", err)
 	}
@@ -836,7 +937,7 @@ func TestGetCredentialReport_ContextCancelledDuringWait(t *testing.T) {
 	cancel()
 	api := &fakeCredentialReportAPI{reportCSV: []byte(minimalCredentialReportCSV)}
 
-	_, err := getCredentialReport(ctx, api, time.Minute, time.Hour)
+	_, err := getCredentialReport(ctx, api, []time.Duration{time.Minute}, sleepContext)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
@@ -847,8 +948,9 @@ func TestGetCredentialReport_ContextCancelledDuringWait(t *testing.T) {
 
 func TestGetCredentialReport_GenerateErrorFailsImmediately(t *testing.T) {
 	api := &fakeCredentialReportAPI{generateErr: errors.New("AccessDenied")}
+	sleep, _ := recordedSleep()
 
-	_, err := getCredentialReport(context.Background(), api, time.Millisecond, time.Second)
+	_, err := getCredentialReport(context.Background(), api, []time.Duration{time.Second}, sleep)
 	if err == nil || !strings.Contains(err.Error(), "generating credential report") {
 		t.Fatalf("error = %v, want generate failure", err)
 	}
@@ -856,8 +958,9 @@ func TestGetCredentialReport_GenerateErrorFailsImmediately(t *testing.T) {
 
 func TestGetCredentialReport_NonPendingGetErrorFailsImmediately(t *testing.T) {
 	api := &fakeCredentialReportAPI{getErrs: []error{errors.New("Throttling: rate exceeded")}}
+	sleep, _ := recordedSleep()
 
-	_, err := getCredentialReport(context.Background(), api, time.Millisecond, time.Second)
+	_, err := getCredentialReport(context.Background(), api, []time.Duration{time.Second, time.Second}, sleep)
 	if err == nil || !strings.Contains(err.Error(), "getting credential report") {
 		t.Fatalf("error = %v, want get failure", err)
 	}
@@ -905,43 +1008,6 @@ func TestFileTokenSource(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), WebIdentityTokenFileEnv) {
 				t.Fatalf("path %q: expected an error naming %s, got: %v", path, WebIdentityTokenFileEnv, err)
 			}
-		}
-	})
-
-	t.Run("reads the path from the environment", func(t *testing.T) {
-		t.Setenv(WebIdentityTokenFileEnv, "/var/run/token")
-		if WebIdentityTokenFile() != "/var/run/token" {
-			t.Fatalf("expected the environment's path, got %q", WebIdentityTokenFile())
-		}
-	})
-}
-
-func TestOIDCTokenSource(t *testing.T) {
-	t.Run("uses GitHub's token endpoint when the workflow exposes one, even with a token file named", func(t *testing.T) {
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://example.com/token")
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "gha_token")
-		t.Setenv(WebIdentityTokenFileEnv, "/var/run/token")
-		if _, ok := OIDCTokenSource().(*GitHubOIDCTokenSource); !ok {
-			t.Fatalf("expected the GitHub token source, got %T", OIDCTokenSource())
-		}
-	})
-
-	t.Run("reads the token file otherwise", func(t *testing.T) {
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
-		t.Setenv(WebIdentityTokenFileEnv, "/var/run/token")
-		source, ok := OIDCTokenSource().(*FileTokenSource)
-		if !ok || source.path != "/var/run/token" {
-			t.Fatalf("expected a file token source for the environment's path, got %T", OIDCTokenSource())
-		}
-	})
-
-	t.Run("is nil when neither is available", func(t *testing.T) {
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
-		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
-		t.Setenv(WebIdentityTokenFileEnv, "")
-		if OIDCTokenSource() != nil {
-			t.Fatalf("expected nil, got %T", OIDCTokenSource())
 		}
 	})
 }

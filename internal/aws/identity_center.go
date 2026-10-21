@@ -112,7 +112,7 @@ func describePermissionSetForAudit(ctx context.Context, client *ssoadmin.Client,
 	}
 	ps := resp.PermissionSet
 	if ps == nil {
-		return IdentityCenterPermissionSet{ARN: psARN}, nil
+		return IdentityCenterPermissionSet{}, errMissing(resp.ResultMetadata, "describing permission set "+psARN, "PermissionSet")
 	}
 	return IdentityCenterPermissionSet{
 		ARN:                    psARN,
@@ -249,10 +249,9 @@ func (c *AWSClient) ListIdentityStoreUsers(ctx context.Context, region, identity
 	}
 }
 
-// ListIdentityStoreGroups returns all groups in the identity store. When
-// withMembers is true, ListGroupMemberships is called per group to populate
-// MemberUserIDs and MemberCount; otherwise both stay zero.
-func (c *AWSClient) ListIdentityStoreGroups(ctx context.Context, region, identityStoreID string, withMembers bool) ([]IdentityStoreGroup, error) {
+// ListIdentityStoreGroups returns all groups in the identity store, with
+// MemberUserIDs and MemberCount left zero.
+func (c *AWSClient) ListIdentityStoreGroups(ctx context.Context, region, identityStoreID string) ([]IdentityStoreGroup, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	client := identitystore.NewFromConfig(cfg)
@@ -279,20 +278,27 @@ func (c *AWSClient) ListIdentityStoreGroups(ctx context.Context, region, identit
 		}
 		nextToken = resp.NextToken
 	}
+	return groups, nil
+}
 
-	if !withMembers {
-		return groups, nil
-	}
+// ListIdentityStoreGroupMembers returns groups with each group's direct user
+// members, read with ListGroupMemberships per group. It fails on the first
+// group whose members cannot be read.
+func (c *AWSClient) ListIdentityStoreGroupMembers(ctx context.Context, region, identityStoreID string, groups []IdentityStoreGroup) ([]IdentityStoreGroup, error) {
+	cfg := c.cfg.Copy()
+	cfg.Region = region
+	client := identitystore.NewFromConfig(cfg)
 
-	for i := range groups {
-		memberIDs, err := listGroupMembers(ctx, client, identityStoreID, groups[i].GroupID)
+	out := append([]IdentityStoreGroup(nil), groups...)
+	for i := range out {
+		memberIDs, err := listGroupMembers(ctx, client, identityStoreID, out[i].GroupID)
 		if err != nil {
 			return nil, err
 		}
-		groups[i].MemberUserIDs = memberIDs
-		groups[i].MemberCount = len(memberIDs)
+		out[i].MemberUserIDs = memberIDs
+		out[i].MemberCount = len(memberIDs)
 	}
-	return groups, nil
+	return out, nil
 }
 
 func listGroupMembers(ctx context.Context, client *identitystore.Client, identityStoreID, groupID string) ([]string, error) {

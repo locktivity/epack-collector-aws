@@ -14,25 +14,24 @@ type rdsMetricsWithCounts struct {
 	RDSMetrics
 	instanceCount int
 	clusterCount  int
+
+	// Raw counts the percentages come from once every region is merged.
+	encrypted          int
+	publicAccess       int
+	deletionProtection int
+	multiAZ            int
+	adequateBackup     int
+	minRetention       int // -1 until a database is seen
 }
 
-// collectRDSMetrics collects RDS security metrics for a single region.
-//
-// At trust, only the aggregate percentages are populated. At audit, per-instance
-// and per-cluster rows are surfaced from the same ListDBInstances /
-// ListDBClusters iteration (no extra API calls). Each row carries its region.
 func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient, region string, level componentsdk.Level) (*rdsMetricsWithCounts, error) {
-	result := &rdsMetricsWithCounts{}
+	result := &rdsMetricsWithCounts{minRetention: -1}
 
-	// Get instances
 	instances, err := client.ListDBInstances(ctx, region)
 	if err != nil {
 		return result, err
 	}
 
-	// Get clusters. A cluster-listing failure fails the region: aggregates
-	// computed over instances alone would silently overstate posture (for
-	// example a retention minimum that ignores the clusters).
 	clusters, err := client.ListDBClusters(ctx, region)
 	if err != nil {
 		return result, err
@@ -43,7 +42,8 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 
 	c.collectRDSEventAlerting(ctx, client, region, &result.RDSMetrics)
 
-	// One parameter read per distinct in-use group, not per instance.
+	// Data-change logging per postgres instance. Parameter groups are shared
+	// across instances, so each is read once.
 	paramsByGroup := map[string]map[string]string{}
 	paramErrByGroup := map[string]error{}
 	dmlByInstance := map[string]string{}
@@ -62,8 +62,8 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 		}
 		dmlByInstance[inst.DBInstanceIdentifier] = classifyDMLLogging(inst, paramsByGroup[inst.ParameterGroupName], paramErrByGroup[inst.ParameterGroupName])
 	}
-	for _, verdict := range dmlByInstance {
-		switch verdict {
+	for _, inst := range instances {
+		switch dmlByInstance[inst.DBInstanceIdentifier] {
 		case dmlLoggingConfigured:
 			result.DMLLoggingConfiguredCount++
 		case dmlLoggingNotExported:
@@ -74,12 +74,14 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 			result.DMLLoggingNotConfiguredCount++
 		case dmlLoggingUnknown:
 			result.DMLLoggingUnknownCount++
+			result.missing.addPartial(paramErrByGroup[inst.ParameterGroupName], 1, "dml_logging_configured_count", "dml_logging_not_exported_count",
+				"dml_logging_pending_count", "dml_logging_not_configured_count")
 		case dmlLoggingNotClassified:
 			result.DMLLoggingNotClassifiedCount++
 		}
 	}
 
-	ingressByInstance := c.collectDBPortIngress(ctx, client, region, instances)
+	ingressByInstance, ingressErr := c.collectDBPortIngress(ctx, client, region, instances)
 	for _, verdict := range ingressByInstance {
 		if !verdict.evaluated {
 			result.DBPortIngressUnevaluatedCount++
@@ -89,88 +91,98 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 			result.DBPortOpenToInternetCount++
 		}
 	}
+	if ingressErr != nil {
+		result.missing.addPartial(ingressErr, countWithSecurityGroups(instances), "db_port_open_to_internet_count")
+	}
 
 	if level.AtLeast(componentsdk.LevelAudit) {
+		result.Instances = make([]RDSInstance, 0, len(instances))
 		for _, inst := range instances {
 			row := dbInstanceToRow(inst, region, level)
 			row.DMLLogging = dmlByInstance[inst.DBInstanceIdentifier]
+			if row.DMLLogging == dmlLoggingUnknown {
+				row.missing.add(paramErrByGroup[inst.ParameterGroupName], "dml_logging")
+			}
 			verdict := ingressByInstance[inst.DBInstanceIdentifier]
 			row.DBPortIngressEvaluated = boolPtr(verdict.evaluated)
 			if verdict.evaluated {
 				row.DBPortOpenToInternet = boolPtr(verdict.openToInternet)
 				row.DBPortIngressSources = verdict.sources
+			} else if ingressErr != nil && inst.EndpointPort != 0 && len(inst.VpcSecurityGroupIDs) > 0 {
+				row.missing.add(ingressErr, "db_port_open_to_internet", "db_port_ingress_sources")
 			}
 			result.Instances = append(result.Instances, row)
 		}
+		result.Clusters = make([]RDSCluster, 0, len(clusters))
 		for _, cl := range clusters {
 			result.Clusters = append(result.Clusters, dbClusterToRow(cl, region, level))
 		}
 	}
 
-	// Calculate metrics for instances
-	var encrypted, publicAccess, deletionProtection, multiAZ, adequateBackup int
-	minRetention := -1 // -1 means no instances found yet
-
 	for _, inst := range instances {
-		if inst.StorageEncrypted {
-			encrypted++
-		}
+		result.countDatabase(inst.StorageEncrypted, inst.DeletionProtection, inst.MultiAZ, inst.BackupRetentionPeriod)
 		if inst.PubliclyAccessible {
-			publicAccess++
-		}
-		if inst.DeletionProtection {
-			deletionProtection++
-		}
-		if inst.MultiAZ {
-			multiAZ++
-		}
-		if inst.BackupRetentionPeriod >= MinBackupRetentionDays {
-			adequateBackup++
-		}
-		// Track minimum retention
-		if minRetention == -1 || inst.BackupRetentionPeriod < minRetention {
-			minRetention = inst.BackupRetentionPeriod
+			result.publicAccess++
 		}
 	}
-
-	// Also count clusters
 	for _, cluster := range clusters {
-		if cluster.StorageEncrypted {
-			encrypted++
-		}
-		if cluster.DeletionProtection {
-			deletionProtection++
-		}
-		if cluster.MultiAZ {
-			multiAZ++
-		}
-		if cluster.BackupRetentionPeriod >= MinBackupRetentionDays {
-			adequateBackup++
-		}
-		// Track minimum retention
-		if minRetention == -1 || cluster.BackupRetentionPeriod < minRetention {
-			minRetention = cluster.BackupRetentionPeriod
-		}
-	}
-
-	total := len(instances) + len(clusters)
-	result.EncryptedAtRest = percent(encrypted, total)
-	result.PubliclyAccessible = percent(publicAccess, len(instances)) // Only instances can be public
-	result.DeletionProtection = percent(deletionProtection, total)
-	result.BackupRetentionAdequate = percent(adequateBackup, total)
-	result.MultiAZEnabled = percent(multiAZ, total)
-
-	// Set minimum retention (0 if no instances found)
-	if minRetention == -1 {
-		result.BackupRetentionMin = 0
-	} else {
-		result.BackupRetentionMin = minRetention
+		result.countDatabase(cluster.StorageEncrypted, cluster.DeletionProtection, cluster.MultiAZ, cluster.BackupRetentionPeriod)
 	}
 
 	return result, nil
 }
 
-// dbPortIngress is one instance's database-port reachability verdict.
+func (m *rdsMetricsWithCounts) countDatabase(encrypted, deletionProtection, multiAZ bool, retention int) {
+	if encrypted {
+		m.encrypted++
+	}
+	if deletionProtection {
+		m.deletionProtection++
+	}
+	if multiAZ {
+		m.multiAZ++
+	}
+	if retention >= MinBackupRetentionDays {
+		m.adequateBackup++
+	}
+	if m.minRetention == -1 || retention < m.minRetention {
+		m.minRetention = retention
+	}
+}
+
+// finalize computes the percentages and the minimum retention from the
+// merged counts. Each is nil over an empty population.
+func (m *rdsMetricsWithCounts) finalize() {
+	total := m.instanceCount + m.clusterCount
+	m.DatabaseCount = total
+	m.InstanceCount = m.instanceCount
+	m.EncryptedAtRest = pctOf(m.encrypted, total)
+	m.EncryptedAtRestDatabaseCount = m.encrypted
+	m.PubliclyAccessible = pctOf(m.publicAccess, m.instanceCount)
+	m.PubliclyAccessibleInstanceCount = m.publicAccess
+	m.DeletionProtection = pctOf(m.deletionProtection, total)
+	m.DeletionProtectionDatabaseCount = m.deletionProtection
+	m.BackupRetentionAdequate = pctOf(m.adequateBackup, total)
+	m.BackupRetentionAdequateDatabaseCount = m.adequateBackup
+	m.MultiAZEnabled = pctOf(m.multiAZ, total)
+	m.MultiAZEnabledDatabaseCount = m.multiAZ
+	m.BackupRetentionMin = nil
+	if m.minRetention >= 0 {
+		v := m.minRetention
+		m.BackupRetentionMin = &v
+	}
+}
+
+func countWithSecurityGroups(instances []aws.DBInstance) int {
+	n := 0
+	for _, inst := range instances {
+		if inst.EndpointPort != 0 && len(inst.VpcSecurityGroupIDs) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
 type dbPortIngress struct {
 	evaluated      bool
 	openToInternet bool
@@ -180,9 +192,9 @@ type dbPortIngress struct {
 // collectDBPortIngress fetches the security groups attached to the region's
 // instances and evaluates database-port reachability. On a fetch failure every
 // instance stays unevaluated: reachability is unproven, not closed.
-func (c *Collector) collectDBPortIngress(ctx context.Context, client *aws.AWSClient, region string, instances []aws.DBInstance) map[string]dbPortIngress {
+func (c *Collector) collectDBPortIngress(ctx context.Context, client *aws.AWSClient, region string, instances []aws.DBInstance) (map[string]dbPortIngress, error) {
 	if len(instances) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	seen := map[string]bool{}
@@ -197,16 +209,16 @@ func (c *Collector) collectDBPortIngress(ctx context.Context, client *aws.AWSCli
 	}
 
 	var sgs []aws.SecurityGroup
+	var sgErr error
 	if len(groupIDs) > 0 {
-		var err error
-		sgs, err = client.ListSecurityGroupsByID(ctx, region, groupIDs)
-		if err != nil {
-			c.warn("region %s: failed to read security groups for database-port ingress; reachability is unproven, not closed: %v", region, err)
+		sgs, sgErr = client.ListSecurityGroupsByID(ctx, region, groupIDs)
+		if sgErr != nil {
+			c.warn("region %s: failed to read security groups for database-port ingress; reachability is unproven, not closed: %v", region, sgErr)
 			sgs = nil
 		}
 	}
 
-	return evaluateDBPortIngress(instances, sgs)
+	return evaluateDBPortIngress(instances, sgs), sgErr
 }
 
 // evaluateDBPortIngress resolves, per instance, which sources the security
@@ -238,7 +250,7 @@ func instanceDBPortIngress(inst aws.DBInstance, byID map[string]aws.SecurityGrou
 			return dbPortIngress{}
 		}
 		for _, rule := range sg.IngressRules {
-			if !ruleCoversPort(rule, inst.EndpointPort) {
+			if !rule.CoversTCPPort(inst.EndpointPort) {
 				continue
 			}
 			if rule.IsOpenToWorld() {
@@ -260,16 +272,6 @@ func instanceDBPortIngress(inst aws.DBInstance, byID map[string]aws.SecurityGrou
 	}
 	sort.Strings(verdict.sources)
 	return verdict
-}
-
-func ruleCoversPort(rule aws.SecurityGroupRule, port int) bool {
-	if rule.Protocol == "-1" {
-		return true
-	}
-	if rule.Protocol != "tcp" {
-		return false
-	}
-	return rule.FromPort <= port && port <= rule.ToPort
 }
 
 // dbInstanceToRow projects a single DBInstance onto the audit-level row, with
@@ -320,8 +322,15 @@ func mergeRDSMetrics(a, b rdsMetricsWithCounts) rdsMetricsWithCounts {
 	result := a
 	result.instanceCount += b.instanceCount
 	result.clusterCount += b.clusterCount
+	result.encrypted += b.encrypted
+	result.publicAccess += b.publicAccess
+	result.deletionProtection += b.deletionProtection
+	result.multiAZ += b.multiAZ
+	result.adequateBackup += b.adequateBackup
+	if b.minRetention >= 0 && (result.minRetention == -1 || b.minRetention < result.minRetention) {
+		result.minRetention = b.minRetention
+	}
 
-	// New-count fields sum across regions.
 	result.EventSubscriptionCount += b.EventSubscriptionCount
 	result.BackupFailureAlertingSubscriptionCount += b.BackupFailureAlertingSubscriptionCount
 	result.BackupFailureAlertingReachingSubscriberCount += b.BackupFailureAlertingReachingSubscriberCount
@@ -335,44 +344,9 @@ func mergeRDSMetrics(a, b rdsMetricsWithCounts) rdsMetricsWithCounts {
 	result.DMLLoggingNotClassifiedCount += b.DMLLoggingNotClassifiedCount
 	result.DBPortOpenToInternetCount += b.DBPortOpenToInternetCount
 	result.DBPortIngressUnevaluatedCount += b.DBPortIngressUnevaluatedCount
+	result.missing.merge(b.missing)
 
-	// Audit-level slices: concatenate across regions.
-	if len(b.Instances) > 0 {
-		result.Instances = append(result.Instances, b.Instances...)
-	}
-	if len(b.Clusters) > 0 {
-		result.Clusters = append(result.Clusters, b.Clusters...)
-	}
-
-	// Weighted averages for percentages
-	totalA := a.instanceCount + a.clusterCount
-	totalB := b.instanceCount + b.clusterCount
-	totalAll := totalA + totalB
-
-	if totalAll > 0 {
-		result.EncryptedAtRest = (a.EncryptedAtRest*totalA + b.EncryptedAtRest*totalB) / totalAll
-		result.DeletionProtection = (a.DeletionProtection*totalA + b.DeletionProtection*totalB) / totalAll
-		result.BackupRetentionAdequate = (a.BackupRetentionAdequate*totalA + b.BackupRetentionAdequate*totalB) / totalAll
-		result.MultiAZEnabled = (a.MultiAZEnabled*totalA + b.MultiAZEnabled*totalB) / totalAll
-	}
-
-	// Instance-specific metrics
-	instancesAll := a.instanceCount + b.instanceCount
-	if instancesAll > 0 {
-		result.PubliclyAccessible = (a.PubliclyAccessible*a.instanceCount + b.PubliclyAccessible*b.instanceCount) / instancesAll
-	}
-
-	// Minimum retention is the min across regions (only if both have instances)
-	if totalA > 0 && totalB > 0 {
-		if a.BackupRetentionMin < b.BackupRetentionMin {
-			result.BackupRetentionMin = a.BackupRetentionMin
-		} else {
-			result.BackupRetentionMin = b.BackupRetentionMin
-		}
-	} else if totalB > 0 {
-		result.BackupRetentionMin = b.BackupRetentionMin
-	}
-	// else keep a's value (already in result)
-
+	result.Instances = appendRows(result.Instances, b.Instances)
+	result.Clusters = appendRows(result.Clusters, b.Clusters)
 	return result
 }

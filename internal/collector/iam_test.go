@@ -81,27 +81,21 @@ func TestProcessCredentialReport(t *testing.T) {
 		},
 	}
 
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	metrics := &IAMMetrics{}
 	c.processCredentialReport(report, metrics)
 
 	if !metrics.IAMUsersPresent {
 		t.Fatalf("expected IAMUsersPresent=true")
 	}
-	if metrics.MFAEnabled != 50 {
-		t.Fatalf("expected MFAEnabled=50, got %d", metrics.MFAEnabled)
+	if metrics.IAMUserCount != 2 || metrics.AccessKeyUserCount != 2 {
+		t.Fatalf("expected 2 users, 2 with keys, got %d and %d", metrics.IAMUserCount, metrics.AccessKeyUserCount)
 	}
-	if metrics.AccessKeysRotated != 50 {
-		t.Fatalf("expected AccessKeysRotated=50, got %d", metrics.AccessKeysRotated)
+	if !pctIs(metrics.MFAEnabled, 50) {
+		t.Fatalf("expected MFAEnabled=50, got %s", showPct(metrics.MFAEnabled))
 	}
-	if !metrics.RootMFAEnabled {
-		t.Fatalf("expected RootMFAEnabled=true")
-	}
-	if !metrics.RootAccessProtected {
-		t.Fatalf("expected RootAccessProtected=true")
-	}
-	if metrics.RootAccessKeysExist {
-		t.Fatalf("expected RootAccessKeysExist=false")
+	if !pctIs(metrics.AccessKeysRotated, 50) {
+		t.Fatalf("expected AccessKeysRotated=50, got %s", showPct(metrics.AccessKeysRotated))
 	}
 }
 
@@ -126,12 +120,12 @@ func TestProcessCredentialReport_NoActiveAccessKeys(t *testing.T) {
 		},
 	}
 
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	metrics := &IAMMetrics{}
 	c.processCredentialReport(report, metrics)
 
-	if metrics.AccessKeysRotated != 100 {
-		t.Fatalf("expected AccessKeysRotated=100 when no active access keys exist, got %d", metrics.AccessKeysRotated)
+	if metrics.AccessKeysRotated != nil || metrics.AccessKeyUserCount != 0 {
+		t.Fatalf("expected AccessKeysRotated=null over no users with keys, got %s over %d", showPct(metrics.AccessKeysRotated), metrics.AccessKeyUserCount)
 	}
 }
 
@@ -298,42 +292,42 @@ func TestShouldWarnRootOrganizationsFeaturesError(t *testing.T) {
 }
 
 func TestMFAEnabledPercent(t *testing.T) {
-	// No users = 100% (vacuously compliant)
-	if got := mfaEnabledPercent(0, 0); got != 100 {
-		t.Fatalf("expected 100%% for no users, got %d", got)
+	// No users is no population, not 100%.
+	if got := mfaEnabledPercent(0, 0); got != nil {
+		t.Fatalf("expected null for no users, got %s", showPct(got))
 	}
 
 	// All users have MFA
-	if got := mfaEnabledPercent(5, 5); got != 100 {
-		t.Fatalf("expected 100%% when all users have MFA, got %d", got)
+	if got := mfaEnabledPercent(5, 5); !pctIs(got, 100) {
+		t.Fatalf("expected 100%% when all users have MFA, got %s", showPct(got))
 	}
 
 	// Half users have MFA
-	if got := mfaEnabledPercent(2, 4); got != 50 {
-		t.Fatalf("expected 50%% when half users have MFA, got %d", got)
+	if got := mfaEnabledPercent(2, 4); !pctIs(got, 50) {
+		t.Fatalf("expected 50%% when half users have MFA, got %s", showPct(got))
 	}
 
 	// No users have MFA
-	if got := mfaEnabledPercent(0, 5); got != 0 {
-		t.Fatalf("expected 0%% when no users have MFA, got %d", got)
+	if got := mfaEnabledPercent(0, 5); !pctIs(got, 0) {
+		t.Fatalf("expected 0%% when no users have MFA, got %s", showPct(got))
 	}
 }
 
 func TestHardwareMFAEnabledPercent(t *testing.T) {
-	if got := hardwareMFAEnabledPercent(0, 0); got != 100 {
-		t.Fatalf("expected 100%% for no users, got %d", got)
+	if got := hardwareMFAEnabledPercent(0, 0); got != nil {
+		t.Fatalf("expected null for no users, got %s", showPct(got))
 	}
 
-	if got := hardwareMFAEnabledPercent(4, 4); got != 100 {
-		t.Fatalf("expected 100%% when all users have hardware MFA, got %d", got)
+	if got := hardwareMFAEnabledPercent(4, 4); !pctIs(got, 100) {
+		t.Fatalf("expected 100%% when all users have hardware MFA, got %s", showPct(got))
 	}
 
-	if got := hardwareMFAEnabledPercent(1, 4); got != 25 {
-		t.Fatalf("expected 25%% when one of four users has hardware MFA, got %d", got)
+	if got := hardwareMFAEnabledPercent(1, 4); !pctIs(got, 25) {
+		t.Fatalf("expected 25%% when one of four users has hardware MFA, got %s", showPct(got))
 	}
 
-	if got := hardwareMFAEnabledPercent(0, 4); got != 0 {
-		t.Fatalf("expected 0%% when no users have hardware MFA, got %d", got)
+	if got := hardwareMFAEnabledPercent(0, 4); !pctIs(got, 0) {
+		t.Fatalf("expected 0%% when no users have hardware MFA, got %s", showPct(got))
 	}
 }
 
@@ -395,11 +389,11 @@ func TestCollectHardwareMFAMetrics(t *testing.T) {
 		},
 	}
 
-	c := &Collector{}
-	got := c.collectHardwareMFAMetrics(context.Background(), lister, report, "123456789012")
+	c := newTestCollector(Config{})
+	got, unmeasured, err := c.collectHardwareMFAMetrics(context.Background(), lister, report, "123456789012")
 
-	if got != 33 {
-		t.Fatalf("expected HardwareMFAEnabled=33, got %d", got)
+	if got == nil || *got != (hardwareMFA{users: 1, of: 3}) || unmeasured != 0 || err != nil {
+		t.Fatalf("expected 1 of 3 users with hardware MFA, every user measured; got %+v, %d unmeasured, %v", got, unmeasured, err)
 	}
 }
 
@@ -416,11 +410,13 @@ func TestCollectHardwareMFAMetricsWarnsOnDeviceLookupFailure(t *testing.T) {
 		},
 	}
 
-	c := &Collector{}
-	got := c.collectHardwareMFAMetrics(context.Background(), lister, report, "123456789012")
+	c := newTestCollector(Config{})
+	got, unmeasured, err := c.collectHardwareMFAMetrics(context.Background(), lister, report, "123456789012")
 
-	if got != 0 {
-		t.Fatalf("expected HardwareMFAEnabled=0 on lookup failure, got %d", got)
+	// A user whose devices could not be listed is unmeasured, never counted
+	// as software MFA.
+	if got != nil || unmeasured != 1 || err == nil {
+		t.Fatalf("expected no count with 1 unmeasured user and its error, got %+v, %d, %v", got, unmeasured, err)
 	}
 	if len(c.warnings) != 1 {
 		t.Fatalf("expected 1 warning, got %d", len(c.warnings))
@@ -440,18 +436,21 @@ func TestProcessCredentialReportNoUsers(t *testing.T) {
 		},
 	}
 
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	metrics := &IAMMetrics{}
 	c.processCredentialReport(report, metrics)
 
 	if metrics.IAMUsersPresent {
 		t.Fatalf("expected IAMUsersPresent=false for root-only account")
 	}
-	if metrics.MFAEnabled != 100 {
-		t.Fatalf("expected MFAEnabled=100 when no IAM users exist, got %d", metrics.MFAEnabled)
+	if metrics.IAMUserCount != 0 {
+		t.Fatalf("expected IAMUserCount=0, got %d", metrics.IAMUserCount)
 	}
-	if metrics.AccessKeysRotated != 100 {
-		t.Fatalf("expected AccessKeysRotated=100 when no IAM users with keys exist, got %d", metrics.AccessKeysRotated)
+	if metrics.MFAEnabled != nil {
+		t.Fatalf("expected MFAEnabled=null when no IAM users exist, got %s", showPct(metrics.MFAEnabled))
+	}
+	if metrics.AccessKeysRotated != nil {
+		t.Fatalf("expected AccessKeysRotated=null when no IAM users with keys exist, got %s", showPct(metrics.AccessKeysRotated))
 	}
 }
 
@@ -577,7 +576,7 @@ func TestIAMUsersFromReport_ExcludesRoot(t *testing.T) {
 		},
 	}
 
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	users := c.iamUsersFromReport(report)
 
 	if len(users) != 2 {
@@ -607,11 +606,11 @@ func TestCollectIAMRoles_PopulatesRolesWithTrustFlag(t *testing.T) {
 		{RoleName: "internal-role", ARN: "arn:aws:iam::111111111111:role/internal-role", AssumeRolePolicyDocument: url.QueryEscape(internalTrust)},
 	}}
 
-	c := &Collector{}
-	roles := c.collectIAMRoles(context.Background(), client, accountID, componentsdk.LevelAudit, nil)
+	c := newTestCollector(Config{})
+	roles, err := c.collectIAMRoles(context.Background(), client, accountID, componentsdk.LevelAudit, nil)
 
-	if len(roles) != 2 {
-		t.Fatalf("expected 2 roles, got %d", len(roles))
+	if err != nil || len(roles) != 2 {
+		t.Fatalf("expected 2 roles, got %d and %v", len(roles), err)
 	}
 	if !roles[0].HasExternalTrust {
 		t.Errorf("external-role: expected HasExternalTrust=true")
@@ -628,11 +627,11 @@ func TestCollectIAMRoles_AccessDeniedEmitsDiagnostic(t *testing.T) {
 	// fall back to a substring-match path covered by isAccessDeniedErr.
 	client := fakeRoleLister{err: errors.New("operation error IAM: ListRoles, https response error: AccessDenied: User is not authorized")}
 
-	c := &Collector{}
-	roles := c.collectIAMRoles(context.Background(), client, accountID, componentsdk.LevelAudit, nil)
+	c := newTestCollector(Config{})
+	roles, err := c.collectIAMRoles(context.Background(), client, accountID, componentsdk.LevelAudit, nil)
 
-	if roles != nil {
-		t.Errorf("expected nil roles on AccessDenied, got %v", roles)
+	if roles != nil || err == nil {
+		t.Errorf("expected nil roles and the error on AccessDenied, got %v and %v", roles, err)
 	}
 	if len(c.warnings) != 1 {
 		t.Fatalf("expected 1 warning, got %d (%v)", len(c.warnings), c.warnings)
@@ -646,11 +645,11 @@ func TestCollectIAMRoles_OtherErrorEmitsGenericWarning(t *testing.T) {
 	const accountID = "111111111111"
 	client := fakeRoleLister{err: errors.New("connection refused")}
 
-	c := &Collector{}
-	roles := c.collectIAMRoles(context.Background(), client, accountID, componentsdk.LevelAudit, nil)
+	c := newTestCollector(Config{})
+	roles, err := c.collectIAMRoles(context.Background(), client, accountID, componentsdk.LevelAudit, nil)
 
-	if roles != nil {
-		t.Errorf("expected nil roles on error, got %v", roles)
+	if roles != nil || err == nil {
+		t.Errorf("expected nil roles and the error, got %v and %v", roles, err)
 	}
 	if len(c.warnings) != 1 {
 		t.Fatalf("expected 1 warning, got %d (%v)", len(c.warnings), c.warnings)
@@ -788,7 +787,7 @@ func (f fakeIAMClient) ListRoles(_ context.Context, _ func([]aws.Role) error) er
 }
 
 func TestCollectIAMMetrics_CredentialReportTimeout(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	client := fakeIAMClient{
 		reportErr: fmt.Errorf("getting credential report: %w", aws.ErrCredentialReportTimeout),
 		summary: &aws.AccountSummary{
@@ -798,7 +797,7 @@ func TestCollectIAMMetrics_CredentialReportTimeout(t *testing.T) {
 		features: &aws.OrganizationFeatures{OrganizationID: "o-abcdefghij"},
 	}
 
-	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", componentsdk.LevelTrust)
+	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", accountAt(0), componentsdk.LevelTrust)
 
 	if metrics.CredentialReportEvaluated {
 		t.Error("CredentialReportEvaluated = true, want false")
@@ -806,10 +805,13 @@ func TestCollectIAMMetrics_CredentialReportTimeout(t *testing.T) {
 	if metrics.CredentialReportErrorCode != "CredentialReportTimeout" {
 		t.Errorf("CredentialReportErrorCode = %q, want CredentialReportTimeout", metrics.CredentialReportErrorCode)
 	}
-	if metrics.MFAEnabled != 0 || metrics.AccessKeysRotated != 0 || metrics.IAMUsersPresent {
-		t.Errorf("report-derived aggregates should stay zero-valued (labeled unevaluated), got MFAEnabled=%d AccessKeysRotated=%d IAMUsersPresent=%v",
-			metrics.MFAEnabled, metrics.AccessKeysRotated, metrics.IAMUsersPresent)
+	if metrics.MFAEnabled != nil || metrics.AccessKeysRotated != nil {
+		t.Errorf("report-derived percentages should be unset, got MFAEnabled=%s AccessKeysRotated=%s",
+			showPct(metrics.MFAEnabled), showPct(metrics.AccessKeysRotated))
 	}
+	// The collector's structs hold zeros; the gaps are what leave them out.
+	requireGap(t, c, "/accounts/0/iam/iam_users_present", "/accounts/0/iam/iam_user_count", "/accounts/0/iam/mfa_enabled",
+		"/accounts/0/iam/hardware_mfa_enabled", "/accounts/0/iam/access_keys_rotated")
 	if !metrics.RootCredentialStateEvaluated {
 		t.Error("RootCredentialStateEvaluated = false, want true (account summary succeeded)")
 	}
@@ -823,43 +825,44 @@ func TestCollectIAMMetrics_CredentialReportTimeout(t *testing.T) {
 }
 
 func TestCollectIAMMetrics_AllRootSourcesFail(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	client := fakeIAMClient{
 		reportErr:  aws.ErrCredentialReportTimeout,
 		summaryErr: errors.New("throttled"),
 		features:   &aws.OrganizationFeatures{},
 	}
 
-	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", componentsdk.LevelTrust)
+	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", accountAt(0), componentsdk.LevelTrust)
 
 	if metrics.RootCredentialStateEvaluated {
 		t.Error("RootCredentialStateEvaluated = true, want false (no source succeeded)")
 	}
-	if metrics.RootAccessProtected {
-		t.Error("RootAccessProtected = true, want false zero value")
+	for _, flag := range rootStateFlags {
+		requireGap(t, c, "/accounts/0/iam/"+flag)
 	}
 }
 
 func TestCollectIAMMetrics_ReportFailureAtAudit(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	client := fakeIAMClient{
 		reportErr: aws.ErrCredentialReportTimeout,
 		summary:   &aws.AccountSummary{AccountMFAEnabled: true},
 		features:  &aws.OrganizationFeatures{},
 	}
 
-	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", componentsdk.LevelAudit)
+	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", accountAt(0), componentsdk.LevelAudit)
 
 	if metrics.Users != nil {
 		t.Errorf("Users = %v, want nil when the credential report was not collected", metrics.Users)
 	}
+	requireGap(t, c, "/accounts/0/iam/users")
 	if metrics.Roles == nil {
 		t.Error("Roles = nil, want role inventory collected independently of the report")
 	}
 }
 
 func TestCollectIAMMetrics_Success(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	client := fakeIAMClient{
 		report: &aws.CredentialReport{
 			Users: []aws.CredentialReportUser{
@@ -870,7 +873,7 @@ func TestCollectIAMMetrics_Success(t *testing.T) {
 		features: &aws.OrganizationFeatures{},
 	}
 
-	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", componentsdk.LevelTrust)
+	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", accountAt(0), componentsdk.LevelTrust)
 
 	if !metrics.CredentialReportEvaluated {
 		t.Error("CredentialReportEvaluated = false, want true")
@@ -881,8 +884,8 @@ func TestCollectIAMMetrics_Success(t *testing.T) {
 	if !metrics.RootCredentialStateEvaluated {
 		t.Error("RootCredentialStateEvaluated = false, want true")
 	}
-	if metrics.MFAEnabled != 100 {
-		t.Errorf("MFAEnabled = %d, want 100", metrics.MFAEnabled)
+	if !pctIs(metrics.MFAEnabled, 100) {
+		t.Errorf("MFAEnabled = %s, want 100", showPct(metrics.MFAEnabled))
 	}
 }
 
@@ -899,11 +902,11 @@ func TestCollectIAMRoles_InOrgDetermination(t *testing.T) {
 		"203984714075": {}, "111111111111": {},
 	}}
 
-	c := &Collector{}
-	roles := c.collectIAMRoles(context.Background(), client, current, componentsdk.LevelAudit, orgAccounts)
+	c := newTestCollector(Config{})
+	roles, err := c.collectIAMRoles(context.Background(), client, current, componentsdk.LevelAudit, orgAccounts)
 
-	if len(roles) != 3 {
-		t.Fatalf("expected 3 roles, got %d", len(roles))
+	if err != nil || len(roles) != 3 {
+		t.Fatalf("expected 3 roles, got %d and %v", len(roles), err)
 	}
 	mixed := roles[0]
 	if mixed.ExternalTrustInOrg == nil || *mixed.ExternalTrustInOrg {
@@ -935,9 +938,12 @@ func TestCollectIAMRoles_UnknownWithoutOrgVisibility(t *testing.T) {
 		{RoleName: "xacct", ARN: "arn:aws:iam::203984714075:role/xacct", AssumeRolePolicyDocument: url.QueryEscape(external)},
 	}}
 
-	c := &Collector{}
-	roles := c.collectIAMRoles(context.Background(), client, current, componentsdk.LevelAudit, &organizationAccounts{})
+	c := newTestCollector(Config{})
+	roles, err := c.collectIAMRoles(context.Background(), client, current, componentsdk.LevelAudit, &organizationAccounts{})
 
+	if err != nil {
+		t.Fatal(err)
+	}
 	if roles[0].ExternalTrustInOrg != nil {
 		t.Errorf("expected absent in_org without org visibility, got %v", *roles[0].ExternalTrustInOrg)
 	}
@@ -953,20 +959,23 @@ func TestCollectIAMRoles_TrustPolicyAtInternal(t *testing.T) {
 		{RoleName: "xacct", ARN: "arn:aws:iam::203984714075:role/xacct", AssumeRolePolicyDocument: url.QueryEscape(policy)},
 	}}
 
-	c := &Collector{}
-	roles := c.collectIAMRoles(context.Background(), client, current, componentsdk.LevelInternal, nil)
+	c := newTestCollector(Config{})
+	roles, err := c.collectIAMRoles(context.Background(), client, current, componentsdk.LevelInternal, nil)
 
+	if err != nil {
+		t.Fatal(err)
+	}
 	if roles[0].TrustPolicyJSON != policy {
 		t.Errorf("internal level must carry the decoded trust policy, got %q", roles[0].TrustPolicyJSON)
 	}
 }
 
 func TestCollectOrganizationAccounts_MemberAccountDeniedIsQuiet(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	metrics := &IAMMetrics{}
 	client := fakeIAMClient{orgAccountsErr: errors.New("AccessDeniedException: not authorized")}
 
-	orgAccounts := c.collectOrganizationAccounts(context.Background(), client, "203984714075", metrics)
+	orgAccounts, _ := c.collectOrganizationAccounts(context.Background(), client, "203984714075", metrics)
 
 	if metrics.OrganizationAccountsEvaluated {
 		t.Error("expected OrganizationAccountsEvaluated false on denial")
@@ -983,11 +992,11 @@ func TestCollectOrganizationAccounts_MemberAccountDeniedIsQuiet(t *testing.T) {
 }
 
 func TestCollectOrganizationAccounts_UnexpectedErrorWarns(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	metrics := &IAMMetrics{}
 	client := fakeIAMClient{orgAccountsErr: errors.New("Throttling: rate exceeded")}
 
-	c.collectOrganizationAccounts(context.Background(), client, "203984714075", metrics)
+	_, _ = c.collectOrganizationAccounts(context.Background(), client, "203984714075", metrics)
 
 	if len(c.warnings) != 1 {
 		t.Errorf("expected 1 warning for unexpected error, got %v", c.warnings)
@@ -995,11 +1004,11 @@ func TestCollectOrganizationAccounts_UnexpectedErrorWarns(t *testing.T) {
 }
 
 func TestCollectOrganizationAccounts_Success(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	metrics := &IAMMetrics{}
 	client := fakeIAMClient{orgAccountIDs: []string{"203984714075", "111111111111"}}
 
-	orgAccounts := c.collectOrganizationAccounts(context.Background(), client, "203984714075", metrics)
+	orgAccounts, _ := c.collectOrganizationAccounts(context.Background(), client, "203984714075", metrics)
 
 	if !metrics.OrganizationAccountsEvaluated {
 		t.Error("expected OrganizationAccountsEvaluated true")
@@ -1017,7 +1026,7 @@ func TestCollectIAMMetricsPasswordPolicyStates(t *testing.T) {
 	reuse := 5
 
 	t.Run("configured policy is projected onto the artifact", func(t *testing.T) {
-		c := &Collector{}
+		c := newTestCollector(Config{})
 		metrics := c.collectIAMMetrics(context.Background(), fakeIAMClient{
 			report: &aws.CredentialReport{},
 			passwordPolicy: &aws.PasswordPolicy{
@@ -1030,7 +1039,7 @@ func TestCollectIAMMetricsPasswordPolicyStates(t *testing.T) {
 				MaxPasswordAge:          &maxAge,
 				PasswordReusePrevention: &reuse,
 			},
-		}, "123456789012", componentsdk.LevelTrust)
+		}, "123456789012", accountAt(0), componentsdk.LevelTrust)
 
 		if !metrics.PasswordPolicyEvaluated {
 			t.Fatal("PasswordPolicyEvaluated = false, want true")
@@ -1053,9 +1062,12 @@ func TestCollectIAMMetricsPasswordPolicyStates(t *testing.T) {
 	// not a gap: the account falls back to AWS's own default of eight
 	// characters with no complexity requirement.
 	t.Run("no policy configured is an answer, not a failure", func(t *testing.T) {
-		c := &Collector{}
-		metrics := c.collectIAMMetrics(context.Background(), fakeIAMClient{report: &aws.CredentialReport{}}, "123456789012", componentsdk.LevelTrust)
+		c := newTestCollector(Config{})
+		metrics := c.collectIAMMetrics(context.Background(), fakeIAMClient{report: &aws.CredentialReport{}}, "123456789012", accountAt(0), componentsdk.LevelTrust)
 
+		if c.gaps.covered("/accounts/0/iam/password_policy") {
+			t.Error("no policy configured left a gap; it is an answer")
+		}
 		if !metrics.PasswordPolicyEvaluated {
 			t.Fatal("PasswordPolicyEvaluated = false, want true when AWS reports no policy")
 		}
@@ -1068,11 +1080,11 @@ func TestCollectIAMMetricsPasswordPolicyStates(t *testing.T) {
 	})
 
 	t.Run("a failed lookup stays distinguishable from no policy", func(t *testing.T) {
-		c := &Collector{}
+		c := newTestCollector(Config{})
 		metrics := c.collectIAMMetrics(context.Background(), fakeIAMClient{
 			report:      &aws.CredentialReport{},
 			passwordErr: errors.New("AccessDenied: not authorized to perform iam:GetAccountPasswordPolicy"),
-		}, "123456789012", componentsdk.LevelTrust)
+		}, "123456789012", accountAt(0), componentsdk.LevelTrust)
 
 		if metrics.PasswordPolicyEvaluated {
 			t.Fatal("PasswordPolicyEvaluated = true, want false when the lookup failed")
@@ -1083,5 +1095,6 @@ func TestCollectIAMMetricsPasswordPolicyStates(t *testing.T) {
 		if metrics.PasswordPolicyErrorCode == "" {
 			t.Error("PasswordPolicyErrorCode is empty, want the cause recorded")
 		}
+		requireGap(t, c, "/accounts/0/iam/password_policy")
 	})
 }

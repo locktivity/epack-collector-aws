@@ -53,8 +53,8 @@ func TestFinalizeCISLevelCompliance(t *testing.T) {
 		if !level.Enabled {
 			t.Fatalf("expected enabled=true")
 		}
-		if level.CompliancePercent != 66 {
-			t.Fatalf("expected compliance_percent=66, got %d", level.CompliancePercent)
+		if !pctIs(level.CompliancePercent, 66) || level.ScoredControls != 3 {
+			t.Fatalf("expected compliance_percent=66 over 3 scored controls, got %s over %d", showPct(level.CompliancePercent), level.ScoredControls)
 		}
 		if level.ComplianceState != "FAILED" {
 			t.Fatalf("expected compliance_state=FAILED, got %s", level.ComplianceState)
@@ -71,8 +71,8 @@ func TestFinalizeCISLevelCompliance(t *testing.T) {
 		if !level.Enabled {
 			t.Fatalf("expected enabled=true")
 		}
-		if level.CompliancePercent != 0 {
-			t.Fatalf("expected compliance_percent=0, got %d", level.CompliancePercent)
+		if level.CompliancePercent != nil || level.ScoredControls != 0 {
+			t.Fatalf("expected compliance_percent=null over no scored controls, got %s over %d", showPct(level.CompliancePercent), level.ScoredControls)
 		}
 		if level.ComplianceState != "NOT_AVAILABLE" {
 			t.Fatalf("expected compliance_state=NOT_AVAILABLE, got %s", level.ComplianceState)
@@ -437,10 +437,10 @@ func (f fakeTrailDescriber) DescribeTrails(_ context.Context) ([]aws.Trail, erro
 }
 
 func TestCollectCloudTrailStatus_ListingFailureSetsSentinels(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	status := &CloudTrailStatus{}
 
-	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{err: errors.New("Throttling")}, "111111111111", status, componentsdk.LevelTrust)
+	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{err: errors.New("Throttling")}, "111111111111", accountAt(0).sub("account_security", "cloudtrail"), status, componentsdk.LevelTrust)
 
 	if status.TrailListingEvaluated {
 		t.Error("expected TrailListingEvaluated false on listing failure")
@@ -448,8 +448,10 @@ func TestCollectCloudTrailStatus_ListingFailureSetsSentinels(t *testing.T) {
 	if status.TrailListingErrorCode == "" {
 		t.Error("expected TrailListingErrorCode set on listing failure")
 	}
-	if status.Enabled {
-		t.Error("expected Enabled to stay false (unevaluated) on listing failure")
+	for _, field := range []string{"enabled", "multi_region_enabled", "organization_trail_enabled"} {
+		if !hasUnread(status.missing, field, 0) {
+			t.Errorf("expected %s to be left out on listing failure", field)
+		}
 	}
 	if len(c.warnings) != 1 {
 		t.Fatalf("expected 1 warning, got %v", c.warnings)
@@ -457,11 +459,11 @@ func TestCollectCloudTrailStatus_ListingFailureSetsSentinels(t *testing.T) {
 }
 
 func TestCollectCloudTrailStatus_SuccessSetsEvaluated(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	status := &CloudTrailStatus{}
 	trails := []aws.Trail{{Name: "main", IsLogging: true, TrailStatusEvaluated: true}}
 
-	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{trails: trails}, "111111111111", status, componentsdk.LevelTrust)
+	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{trails: trails}, "111111111111", accountAt(0).sub("account_security", "cloudtrail"), status, componentsdk.LevelTrust)
 
 	if !status.TrailListingEvaluated {
 		t.Error("expected TrailListingEvaluated true on success")
@@ -472,12 +474,12 @@ func TestCollectCloudTrailStatus_SuccessSetsEvaluated(t *testing.T) {
 }
 
 func TestCollectCloudTrailStatus_PartialStatusStillEvaluated(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	status := &CloudTrailStatus{}
 	trails := []aws.Trail{{Name: "main", IsLogging: true, TrailStatusEvaluated: true}}
 	err := &aws.TrailStatusUnavailableError{}
 
-	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{trails: trails, err: err}, "111111111111", status, componentsdk.LevelTrust)
+	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{trails: trails, err: err}, "111111111111", accountAt(0).sub("account_security", "cloudtrail"), status, componentsdk.LevelTrust)
 
 	if !status.TrailListingEvaluated {
 		t.Error("expected TrailListingEvaluated true when only per-trail statuses failed")
@@ -497,7 +499,7 @@ func (f fakeInspectorSummarizer) GetInspectorSummaryFromSecurityHub(_ context.Co
 }
 
 func TestCollectInspectorStatus_FailureSetsSentinels(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	status := &InspectorStatus{}
 
 	c.collectInspectorStatus(context.Background(), fakeInspectorSummarizer{err: errors.New("AccessDenied")}, "us-east-1", "111111111111", status, componentsdk.LevelTrust)
@@ -508,10 +510,15 @@ func TestCollectInspectorStatus_FailureSetsSentinels(t *testing.T) {
 	if status.StatusErrorCode == "" {
 		t.Error("expected StatusErrorCode set on failure")
 	}
+	for _, field := range []string{"enabled", "unpatched_server_percent", "total_affected_resources"} {
+		if !hasUnread(status.missing, field, 0) {
+			t.Errorf("expected %s to be left out on failure", field)
+		}
+	}
 }
 
 func TestCollectInspectorStatus_NilSummaryStillEvaluated(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	status := &InspectorStatus{}
 
 	c.collectInspectorStatus(context.Background(), fakeInspectorSummarizer{}, "us-east-1", "111111111111", status, componentsdk.LevelTrust)

@@ -9,6 +9,7 @@ import (
 	appautoscaling "github.com/aws/aws-sdk-go-v2/service/applicationautoscaling"
 	appautoscalingtypes "github.com/aws/aws-sdk-go-v2/service/applicationautoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	"github.com/locktivity/epack/componentsdk"
 )
 
 // ECSService is one service's capacity and deployment posture. Task
@@ -86,6 +87,13 @@ func (c *AWSClient) ListECSServices(ctx context.Context, region string) ([]ECSSe
 			})
 			if err != nil {
 				return nil, fmt.Errorf("describing ECS services in %s: %w", region, err)
+			}
+			if len(out.Failures) > 0 {
+				return nil, inResponse(out.ResultMetadata, componentsdk.CodeError(componentsdk.CodeVendorError, fmt.Errorf("describing ECS services in %s: %d services could not be described: %s", region, len(out.Failures), aws.ToString(out.Failures[0].Reason))))
+			}
+			// ECS answers each service asked for, as a service or a failure.
+			if len(out.Services) < end-start {
+				return nil, errIncomplete(out.ResultMetadata, "describing ECS services in "+region, "services", len(out.Services), end-start)
 			}
 			for _, s := range out.Services {
 				service := ECSService{

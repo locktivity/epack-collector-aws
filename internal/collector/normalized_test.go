@@ -14,31 +14,31 @@ func evaluatedAccountFixture() AccountPosture {
 		IAM: IAMMetrics{
 			CredentialReportEvaluated:    true,
 			RootCredentialStateEvaluated: true,
-			MFAEnabled:                   80,
+			MFAEnabled:                   intPtr(80),
 			RootMFAEnabled:               true,
 			RootAccessProtected:          true,
-			AccessKeysRotated:            90,
-			HardwareMFAEnabled:           30,
+			AccessKeysRotated:            intPtr(90),
+			HardwareMFAEnabled:           intPtr(30),
 		},
 		S3: S3Metrics{
 			BucketListingEvaluated:          true,
 			BucketCount:                     20,
-			DefaultEncryptionEnabled:        95,
+			DefaultEncryptionEnabled:        intPtr(95),
 			DefaultEncryptionEvaluatedCount: 20,
-			PublicAccessBlocked:             100,
-			VersioningEnabled:               75,
+			PublicAccessBlocked:             intPtr(100),
+			VersioningEnabled:               intPtr(75),
 		},
 		RDS: RDSMetrics{
 			RegionsEvaluatedCount:   2,
 			DatabaseCount:           3,
-			EncryptedAtRest:         100,
-			BackupRetentionAdequate: 100,
-			BackupRetentionMin:      14,
+			EncryptedAtRest:         intPtr(100),
+			BackupRetentionAdequate: intPtr(100),
+			BackupRetentionMin:      intPtr(14),
 		},
 		Network: NetworkMetrics{
 			RegionsEvaluatedCount: 2,
-			OpenToWorldSSH:        5,
-			OpenToWorldRDP:        0,
+			OpenToWorldSSH:        intPtr(5),
+			OpenToWorldRDP:        intPtr(0),
 		},
 		AccountSecurity: AccountSecurity{
 			CloudTrail: CloudTrailStatus{
@@ -49,7 +49,7 @@ func evaluatedAccountFixture() AccountPosture {
 			Inspector: InspectorStatus{
 				StatusEvaluated:        true,
 				Enabled:                true,
-				UnpatchedServerPercent: 10,
+				UnpatchedServerPercent: intPtr(10),
 			},
 		},
 	}
@@ -106,6 +106,12 @@ func TestToCloudPosture(t *testing.T) {
 		t.Errorf("Storage.PublicAccessBlockedPct = %v, want 100", acct.Storage.PublicAccessBlockedPct)
 	}
 
+	if acct.Logging.AuditLogEnabled == nil || !*acct.Logging.AuditLogEnabled {
+		t.Error("Logging.AuditLogEnabled != true, want true")
+	}
+	if acct.Logging.AuditLogAllRegions == nil || !*acct.Logging.AuditLogAllRegions {
+		t.Error("Logging.AuditLogAllRegions != true, want true")
+	}
 	if acct.Logging.CloudTrailEnabled == nil || !*acct.Logging.CloudTrailEnabled {
 		t.Error("Logging.CloudTrailEnabled != true, want true")
 	}
@@ -138,11 +144,11 @@ func TestToCloudPosture_MultipleAccounts(t *testing.T) {
 		Accounts: []AccountPosture{
 			{
 				AccountID: "111111111111",
-				IAM:       IAMMetrics{CredentialReportEvaluated: true, RootCredentialStateEvaluated: true, MFAEnabled: 100, RootMFAEnabled: true, RootAccessProtected: true},
+				IAM:       IAMMetrics{CredentialReportEvaluated: true, RootCredentialStateEvaluated: true, MFAEnabled: intPtr(100), RootMFAEnabled: true, RootAccessProtected: true},
 			},
 			{
 				AccountID: "222222222222",
-				IAM:       IAMMetrics{CredentialReportEvaluated: true, RootCredentialStateEvaluated: true, MFAEnabled: 50, RootMFAEnabled: false, RootAccessProtected: false},
+				IAM:       IAMMetrics{CredentialReportEvaluated: true, RootCredentialStateEvaluated: true, MFAEnabled: intPtr(50), RootMFAEnabled: false, RootAccessProtected: false},
 			},
 		},
 	}
@@ -211,7 +217,11 @@ func TestToCloudPosture_UncollectedIAMOmitted(t *testing.T) {
 	if err := json.Unmarshal(jsonBytes, &data); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
 	}
-	iamJSON := data["accounts"].([]any)[0].(map[string]any)["iam"].(map[string]any)
+	// A metric group with nothing collected in it is left out whole.
+	if iamJSON, present := data["accounts"].([]any)[0].(map[string]any)["iam"]; present {
+		t.Errorf("iam group serialized with nothing collected: %v", iamJSON)
+	}
+	var iamJSON map[string]any
 	for _, field := range []string{"mfa_coverage_pct", "root_mfa_enabled", "root_access_protected", "access_key_rotation_compliant_pct"} {
 		if _, present := iamJSON[field]; present {
 			t.Errorf("uncollected iam field %s serialized; want omitted", field)
@@ -279,9 +289,9 @@ func TestToCloudPosture_StoragePABOmittedWhenAnyBucketUnknown(t *testing.T) {
 			S3: S3Metrics{
 				BucketListingEvaluated:          true,
 				BucketCount:                     10,
-				PublicAccessBlocked:             90,
+				PublicAccessBlocked:             intPtr(90),
 				PublicAccessBlockUnknownCount:   1,
-				DefaultEncryptionEnabled:        100,
+				DefaultEncryptionEnabled:        intPtr(100),
 				DefaultEncryptionEvaluatedCount: 10,
 			},
 		}},
@@ -317,7 +327,7 @@ func TestToCloudPosture_StorageEncryptionOmittedWhenNoBucketEvaluated(t *testing
 }
 
 func TestToCloudPosture_UncollectedLoggingOmitted(t *testing.T) {
-	// A trail-listing failure must omit cloudtrail_enabled rather than
+	// A trail-listing failure must omit the audit log fields rather than
 	// publishing false (which scores as a critical finding).
 	output := &Output{
 		Accounts: []AccountPosture{{
@@ -329,6 +339,12 @@ func TestToCloudPosture_UncollectedLoggingOmitted(t *testing.T) {
 	}
 
 	logging := output.ToCloudPosture().Accounts[0].Logging
+	if logging.AuditLogEnabled != nil {
+		t.Errorf("AuditLogEnabled = %v, want nil", *logging.AuditLogEnabled)
+	}
+	if logging.AuditLogAllRegions != nil {
+		t.Errorf("AuditLogAllRegions = %v, want nil", *logging.AuditLogAllRegions)
+	}
 	if logging.CloudTrailEnabled != nil {
 		t.Errorf("CloudTrailEnabled = %v, want nil", *logging.CloudTrailEnabled)
 	}
@@ -356,6 +372,12 @@ func TestToCloudPosture_LoggingFalseOmittedWhenTrailStatusUnknown(t *testing.T) 
 	}
 
 	logging := output.ToCloudPosture().Accounts[0].Logging
+	if logging.AuditLogEnabled != nil {
+		t.Errorf("AuditLogEnabled = %v, want nil with unknown trail statuses", *logging.AuditLogEnabled)
+	}
+	if logging.AuditLogAllRegions != nil {
+		t.Errorf("AuditLogAllRegions = %v, want nil with unknown trail statuses", *logging.AuditLogAllRegions)
+	}
 	if logging.CloudTrailEnabled != nil {
 		t.Errorf("CloudTrailEnabled = %v, want nil with unknown trail statuses", *logging.CloudTrailEnabled)
 	}
@@ -382,12 +404,45 @@ func TestToCloudPosture_LoggingTrueSurvivesUnknownStatuses(t *testing.T) {
 	}
 
 	logging := output.ToCloudPosture().Accounts[0].Logging
+	if logging.AuditLogEnabled == nil || !*logging.AuditLogEnabled {
+		t.Error("AuditLogEnabled != true, want true")
+	}
+	if logging.AuditLogAllRegions != nil {
+		t.Errorf("AuditLogAllRegions = %v, want nil (false with unknown statuses)", *logging.AuditLogAllRegions)
+	}
 	if logging.CloudTrailEnabled == nil || !*logging.CloudTrailEnabled {
 		t.Error("CloudTrailEnabled != true, want true")
 	}
 	if logging.CloudTrailMultiregion != nil {
 		t.Errorf("CloudTrailMultiregion = %v, want nil (false with unknown statuses)", *logging.CloudTrailMultiregion)
 	}
+}
+
+func TestNormalizedLogging_DeprecatedNamesMatchAuditLogFields(t *testing.T) {
+	// cloud-posture v1 keeps cloudtrail_enabled and cloudtrail_multiregion as
+	// aliases of the audit_log_* fields, so profiles that read either name
+	// score the same.
+	cases := []CloudTrailStatus{
+		{},
+		{TrailListingEvaluated: true},
+		{TrailListingEvaluated: true, Enabled: true},
+		{TrailListingEvaluated: true, Enabled: true, MultiRegionEnabled: true},
+		{TrailListingEvaluated: true, Enabled: true, TrailStatusUnknownCount: 1},
+		{TrailListingEvaluated: true, TrailStatusUnknownCount: 1},
+	}
+	for _, ct := range cases {
+		logging := normalizedLogging(ct)
+		if !samePtr(logging.CloudTrailEnabled, logging.AuditLogEnabled) {
+			t.Errorf("%+v: cloudtrail_enabled = %v, audit_log_enabled = %v, want the same", ct, logging.CloudTrailEnabled, logging.AuditLogEnabled)
+		}
+		if !samePtr(logging.CloudTrailMultiregion, logging.AuditLogAllRegions) {
+			t.Errorf("%+v: cloudtrail_multiregion = %v, audit_log_all_regions = %v, want the same", ct, logging.CloudTrailMultiregion, logging.AuditLogAllRegions)
+		}
+	}
+}
+
+func samePtr(a, b *bool) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
 }
 
 func TestToCloudPosture_NetworkOmittedOnPartialRegions(t *testing.T) {
@@ -399,8 +454,8 @@ func TestToCloudPosture_NetworkOmittedOnPartialRegions(t *testing.T) {
 			Network: NetworkMetrics{
 				RegionsEvaluatedCount: 1,
 				RegionsFailed:         []string{"eu-west-1"},
-				OpenToWorldSSH:        0,
-				OpenToWorldRDP:        0,
+				OpenToWorldSSH:        intPtr(0),
+				OpenToWorldRDP:        intPtr(0),
 			},
 		}},
 	}
@@ -489,7 +544,7 @@ func TestToCloudPosture_ZeroRetention(t *testing.T) {
 				RDS: RDSMetrics{
 					RegionsEvaluatedCount: 1,
 					DatabaseCount:         1,
-					BackupRetentionMin:    0,
+					BackupRetentionMin:    intPtr(0),
 				},
 			},
 		},
@@ -556,7 +611,7 @@ func TestCloudPostureJSONStructure(t *testing.T) {
 	groupFields := map[string][]string{
 		"iam":           {"mfa_coverage_pct", "root_mfa_enabled", "root_access_protected", "access_key_rotation_compliant_pct"},
 		"storage":       {"encryption_pct", "public_access_blocked_pct"},
-		"logging":       {"cloudtrail_enabled", "cloudtrail_multiregion"},
+		"logging":       {"audit_log_enabled", "audit_log_all_regions", "cloudtrail_enabled", "cloudtrail_multiregion"},
 		"network":       {"ssh_open_to_world_pct", "rdp_open_to_world_pct"},
 		"backup":        {"retention_days_min"},
 		"vuln_scanning": {"enabled", "unpatched_pct"},
@@ -576,7 +631,7 @@ func TestCloudPostureJSONStructure(t *testing.T) {
 
 func TestToCloudPosture_FailedAccountStub(t *testing.T) {
 	// A configured account that never answered appears as a stub entry with
-	// collection_error_code and empty metric groups, and counts toward
+	// collection_error_code and no metric groups, and counts toward
 	// accounts_expected, so cardinality-all rules cannot silently pass over it.
 	output := &Output{
 		SchemaVersion: "1.0.0",
@@ -602,7 +657,7 @@ func TestToCloudPosture_FailedAccountStub(t *testing.T) {
 	if stub.CollectionErrorCode != "AccessDenied" {
 		t.Errorf("stub CollectionErrorCode = %q, want AccessDenied", stub.CollectionErrorCode)
 	}
-	if stub.IAM.MFACoveragePct != nil || stub.Storage.EncryptionPct != nil || stub.Logging.CloudTrailEnabled != nil {
+	if stub.IAM.MFACoveragePct != nil || stub.Storage.EncryptionPct != nil || stub.Logging.AuditLogEnabled != nil || stub.Logging.CloudTrailEnabled != nil {
 		t.Error("stub entry must carry no metric values")
 	}
 
@@ -615,9 +670,10 @@ func TestToCloudPosture_FailedAccountStub(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	stubJSON := data["accounts"].([]any)[1].(map[string]any)
-	iamJSON := stubJSON["iam"].(map[string]any)
-	if len(iamJSON) != 0 {
-		t.Errorf("stub iam group not empty: %v", iamJSON)
+	for _, group := range []string{"iam", "storage", "logging", "network", "backup", "vuln_scanning"} {
+		if value, present := stubJSON[group]; present {
+			t.Errorf("stub carries the %s group: %v", group, value)
+		}
 	}
 	if _, ok := stubJSON["collection_error_code"]; !ok {
 		t.Error("stub missing collection_error_code in JSON")

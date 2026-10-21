@@ -8,7 +8,6 @@ import (
 	"github.com/locktivity/epack/componentsdk"
 )
 
-const kmsKeySpecSymmetricDefault = "SYMMETRIC_DEFAULT"
 const kmsKeyStatePendingDeletion = "PendingDeletion"
 
 // collectKMSMetrics collects KMS posture for a single region, scoped to
@@ -24,7 +23,10 @@ func (c *Collector) collectKMSMetrics(ctx context.Context, client *aws.AWSClient
 		CustomerManagedKeyCount: len(keys),
 	}
 	for _, k := range keys {
-		if k.KeySpec == kmsKeySpecSymmetricDefault && !k.RotationEnabled {
+		if k.RotationErr != nil {
+			c.warn("account %s region %s: failed to read rotation status for KMS key %s: %v", accountID, region, k.KeyID, k.RotationErr)
+			out.missing.addPartial(k.RotationErr, 1, "cmks_with_rotation_disabled_count")
+		} else if k.Rotatable() && !k.RotationEnabled {
 			out.CMKsWithRotationDisabledCount++
 		}
 		if k.KeyState == kmsKeyStatePendingDeletion {
@@ -38,7 +40,9 @@ func (c *Collector) collectKMSMetrics(ctx context.Context, client *aws.AWSClient
 
 	out.Keys = make([]KMSKeyRow, 0, len(keys))
 	for _, k := range keys {
-		out.Keys = append(out.Keys, kmsKeyToRow(k, region, level))
+		row := kmsKeyToRow(k, region, level)
+		row.missing.add(k.RotationErr, "rotation_enabled")
+		out.Keys = append(out.Keys, row)
 	}
 	return out, nil
 }
@@ -77,10 +81,13 @@ func kmsKeyToRow(k aws.KMSKey, region string, level componentsdk.Level) KMSKeyRo
 // rows concatenate. The orchestrator's normalizeForLevel pass is the single
 // source of truth for the nil→[] flip at audit+.
 func mergeKMSMetrics(a, b KMSMetrics) KMSMetrics {
-	return KMSMetrics{
+	merged := KMSMetrics{
 		CustomerManagedKeyCount:       a.CustomerManagedKeyCount + b.CustomerManagedKeyCount,
 		CMKsWithRotationDisabledCount: a.CMKsWithRotationDisabledCount + b.CMKsWithRotationDisabledCount,
 		CMKsPendingDeletionCount:      a.CMKsPendingDeletionCount + b.CMKsPendingDeletionCount,
-		Keys:                          append(append([]KMSKeyRow(nil), a.Keys...), b.Keys...),
+		Keys:                          appendRows(a.Keys, b.Keys),
+		missing:                       a.missing,
 	}
+	merged.missing.merge(b.missing)
+	return merged
 }

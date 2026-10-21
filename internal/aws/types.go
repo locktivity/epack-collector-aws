@@ -1,7 +1,11 @@
 // Package aws provides AWS API client functionality.
 package aws
 
-import "time"
+import (
+	"time"
+
+	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
+)
 
 // CredentialReport represents a parsed IAM credential report.
 type CredentialReport struct {
@@ -117,22 +121,35 @@ type Role struct {
 // Bucket represents an S3 bucket with security settings.
 // DefaultEncryptionEnabled includes AWS's SSE-S3 baseline for new objects.
 type Bucket struct {
-	Name                         string
-	Region                       string
+	Name string
+
+	// Region is the bucket's home region; RegionErr is why it could not be
+	// resolved, in which case per-bucket calls go to us-east-1.
+	Region    string
+	RegionErr error
+
 	EffectivePublicAccessBlocked bool
 	PublicAccessBlock            PublicAccessBlockSettings
-	DefaultEncryptionEnabled     bool
-	DefaultEncryptionEvaluated   bool
-	DefaultEncryptionErrorCode   string
-	VersioningEnabled            bool
-	MFADeleteEnabled             bool
-	LoggingEnabled               bool
-	LoggingTargetBucket          string
-	SSLOnlyPolicy                bool
+
+	DefaultEncryptionEnabled   bool
+	DefaultEncryptionEvaluated bool
+	DefaultEncryptionErrorCode string
+	DefaultEncryptionErr       error
+
+	VersioningEnabled bool
+	MFADeleteEnabled  bool
+	VersioningErr     error
+
+	LoggingEnabled      bool
+	LoggingTargetBucket string
+	LoggingErr          error
+
+	// Policy is the bucket policy, nil when none is attached; PolicyErr is
+	// why it could not be read.
+	Policy    *BucketPolicy
+	PolicyErr error
 }
 
-// PublicAccessBlockSettings represents S3 Block Public Access flags read from
-// either account-level or bucket-level configuration.
 type PublicAccessBlockSettings struct {
 	BlockPublicACLs       bool
 	IgnorePublicACLs      bool
@@ -140,6 +157,9 @@ type PublicAccessBlockSettings struct {
 	RestrictPublicBuckets bool
 	Evaluated             bool
 	ErrorCode             string
+
+	// Err is why the settings could not be read.
+	Err error
 }
 
 // BlocksPublicAccess returns true when all four S3 Block Public Access flags
@@ -298,12 +318,22 @@ func (r SecurityGroupRule) IsOpenToWorld() bool {
 
 // IsSSH returns true if the rule covers SSH port 22.
 func (r SecurityGroupRule) IsSSH() bool {
-	return r.Protocol == "tcp" && r.FromPort <= 22 && r.ToPort >= 22
+	return r.CoversTCPPort(22)
 }
 
 // IsRDP returns true if the rule covers RDP port 3389.
 func (r SecurityGroupRule) IsRDP() bool {
-	return r.Protocol == "tcp" && r.FromPort <= 3389 && r.ToPort >= 3389
+	return r.CoversTCPPort(3389)
+}
+
+// CoversTCPPort reports whether the rule admits TCP traffic to port: a TCP
+// rule whose range holds it, or an all-traffic rule (protocol -1), which
+// names no ports.
+func (r SecurityGroupRule) CoversTCPPort(port int) bool {
+	if r.Protocol == "-1" {
+		return true
+	}
+	return r.Protocol == "tcp" && r.FromPort <= port && port <= r.ToPort
 }
 
 // IsAllPorts returns true if the rule allows all ports.
@@ -327,6 +357,10 @@ type Trail struct {
 	TrailStatusEvaluated      bool
 	TrailStatusInferred       bool
 	TrailStatusErrorCode      string
+
+	// StatusErr is why the trail's status could not be read, when it was
+	// neither read nor inferred.
+	StatusErr error
 }
 
 // ConfigRecorder represents an AWS Config recorder.
@@ -361,6 +395,11 @@ type GuardDutyDetector struct {
 	MalwareScanEnabled                     bool
 	HighOrCriticalFindings                 int
 	HighOrCriticalFindingsOlderThan48Hours int
+
+	// FindingsErr and StaleFindingsErr are why the counts above could not
+	// be read.
+	FindingsErr      error
+	StaleFindingsErr error
 }
 
 // GuardDutyFinding is a single unarchived high-or-critical GuardDuty finding,
@@ -385,6 +424,9 @@ type SecurityHubConfig struct {
 	StandardsARNs        []string
 	IntegrationCount     int
 	ProductSubscriptions []string
+
+	// IntegrationsErr is why the integrations could not be read.
+	IntegrationsErr error
 }
 
 // SecurityHubCISCompliance contains CIS control compliance counts.
@@ -425,6 +467,9 @@ type AccessAnalyzer struct {
 	ActiveFindingsCount   int
 	ArchivedFindingsCount int
 	FindingsUnresolved    bool
+
+	// FindingsErr is why the findings could not be counted.
+	FindingsErr error
 }
 
 // IdentityCenterInstance is a single AWS IAM Identity Center (formerly AWS SSO)
@@ -555,6 +600,17 @@ type KMSKey struct {
 	RotationEnabled bool
 	Description     string
 	Aliases         []string
+
+	// RotationErr is why the rotation status could not be read.
+	RotationErr error
+}
+
+// Rotatable reports whether KMS can rotate the key automatically: a
+// symmetric encryption key whose key material KMS generated. Asymmetric and
+// HMAC keys, imported key material, and keys in a custom key store cannot
+// rotate automatically.
+func (k KMSKey) Rotatable() bool {
+	return k.KeySpec == string(kmstypes.KeySpecSymmetricDefault) && k.Origin == string(kmstypes.OriginTypeAwsKms)
 }
 
 // CloudWatchLogGroup is a single CloudWatch Logs log group's posture-relevant

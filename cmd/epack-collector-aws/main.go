@@ -5,9 +5,6 @@
 package main
 
 import (
-	"errors"
-	"time"
-
 	"github.com/locktivity/epack-collector-aws/internal/collector"
 	"github.com/locktivity/epack/componentsdk"
 )
@@ -19,106 +16,5 @@ var (
 )
 
 func main() {
-	componentsdk.RunCollector(componentsdk.CollectorSpec{
-		Name:        "aws",
-		Version:     Version,
-		Commit:      Commit,
-		Description: "Collects AWS account security posture metrics",
-		Timeout:     10 * time.Minute,
-	}, run)
-}
-
-func run(ctx componentsdk.CollectorContext) error {
-	// Build config from SDK context
-	cfg := ctx.Config()
-	config := collector.Config{
-		AuthMode:   getString(cfg, "auth_mode"),
-		Regions:    getStringSlice(cfg, "regions"),
-		OnStatus:   ctx.Status,
-		OnProgress: ctx.Progress,
-	}
-
-	// Parse account configuration - supports three modes:
-	// 1. accounts array (multi-account)
-	// 2. role_arn (single account with assume role)
-	// 3. neither (use default credential chain)
-	if accounts, ok := cfg["accounts"].([]any); ok && len(accounts) > 0 {
-		for _, acct := range accounts {
-			if acctMap, ok := acct.(map[string]any); ok {
-				config.Accounts = append(config.Accounts, collector.AccountConfig{
-					RoleARN:    getString(acctMap, "role_arn"),
-					ExternalID: getString(acctMap, "external_id"),
-					Label:      getString(acctMap, "label"),
-				})
-			}
-		}
-	} else if roleARN := getString(cfg, "role_arn"); roleARN != "" {
-		// Single account with assume role
-		config.Accounts = []collector.AccountConfig{{
-			RoleARN:    roleARN,
-			ExternalID: getString(cfg, "external_id"),
-			Label:      getString(cfg, "label"),
-		}}
-	}
-	// If no accounts specified, collector will use default credentials
-
-	// Create collector and collect posture
-	c, err := collector.New(config)
-	if err != nil {
-		return componentsdk.NewConfigError("creating collector: %v", err)
-	}
-
-	output, err := c.Collect(ctx.Context(), ctx.Level())
-	if err != nil {
-		if errors.Is(err, collector.ErrNoUsableAccounts) {
-			return componentsdk.NewConfigError("collecting posture: %v", err)
-		}
-		return componentsdk.NewNetworkError("collecting posture: %v", err)
-	}
-
-	// Transform to normalized cloud-posture format
-	normalized := output.ToCloudPosture()
-
-	// Emit both detailed and normalized artifacts
-	return ctx.Emit([]componentsdk.CollectedArtifact{
-		{
-			// Detailed AWS-specific output
-			Data: output,
-			Path: "artifacts/aws.json",
-		},
-		{
-			// Normalized cloud posture for profile evaluation
-			Data:   normalized,
-			Schema: "evidencepack/cloud-posture@v1",
-			Path:   "artifacts/aws.cloud-posture.json",
-		},
-	})
-}
-
-// getString safely extracts a string from config map
-func getString(cfg map[string]any, key string) string {
-	if cfg == nil {
-		return ""
-	}
-	if v, ok := cfg[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
-// getStringSlice safely extracts a string slice from config map
-func getStringSlice(cfg map[string]any, key string) []string {
-	if cfg == nil {
-		return nil
-	}
-	if v, ok := cfg[key].([]any); ok {
-		result := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				result = append(result, s)
-			}
-		}
-		return result
-	}
-	return nil
+	componentsdk.RunCollector(collector.Spec(Version, Commit), collector.Run)
 }

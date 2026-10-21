@@ -56,24 +56,23 @@ type cloudFrontScan struct {
 	acls          []aws.WebACL
 	distributions []aws.CloudFrontDistribution
 	evaluated     bool
+	err           error
 }
 
 // collectWAFMetrics assembles the account's WAF posture: the CLOUDFRONT-scope
 // pass plus the merged regional scans, joined against the entry points each
 // web ACL protects.
 func (c *Collector) collectWAFMetrics(ctx context.Context, client *aws.AWSClient, accountID string, regional wafScanWithCounts, level componentsdk.Level) *WAFMetrics {
-	c.status("Collecting WAF metrics...")
-
 	scan := cloudFrontScan{evaluated: true}
 	if acls, err := client.ListWebACLs(ctx, aws.WAFScopeCloudFront, ""); err != nil {
-		scan = cloudFrontScan{}
+		scan = cloudFrontScan{err: err}
 		c.warn("account %s: failed to list CloudFront-scope web ACLs: %v", accountID, err)
 	} else {
 		scan.acls = acls
 	}
 	if scan.evaluated {
 		if distributions, err := client.ListCloudFrontDistributions(ctx); err != nil {
-			scan = cloudFrontScan{}
+			scan = cloudFrontScan{err: err}
 			c.warn("account %s: failed to list distributions for WAF coverage: %v", accountID, err)
 		} else {
 			scan.distributions = distributions
@@ -81,6 +80,12 @@ func (c *Collector) collectWAFMetrics(ctx context.Context, client *aws.AWSClient
 	}
 
 	out := assembleWAFMetrics(regional, scan, level)
+	if scan.err != nil {
+		out.missing.add(scan.err, "web_acl_count", "enabled_distribution_count", "covered_distribution_count", "distribution_coverage_pct", "rate_limiting_enforced")
+		if level.AtLeast(componentsdk.LevelAudit) {
+			out.missing.add(scan.err, "web_acls")
+		}
+	}
 	if out.WebACLsTruncated {
 		c.warn("account %s: web ACL inventory truncated to %d rows (%d dropped)", accountID, maxWebACLRows, out.WebACLsDroppedCount)
 	}
@@ -104,11 +109,13 @@ func assembleWAFMetrics(regional wafScanWithCounts, cloudfront cloudFrontScan, l
 
 	albs := internetFacingALBArns(regional.lbHeads)
 	out.InternetFacingALBCount = len(albs)
-	out.InternetFacingALBCoveragePct = percent(len(protectedALBArns(regional.acls, albs)), len(albs))
+	out.CoveredInternetFacingALBCount = len(protectedALBArns(regional.acls, albs))
+	out.InternetFacingALBCoveragePct = pctOf(out.CoveredInternetFacingALBCount, len(albs))
 
 	enabled, withWAF, byACL := distributionAttachments(cloudfront.distributions)
 	out.EnabledDistributionCount = enabled
-	out.DistributionCoveragePct = percent(withWAF, enabled)
+	out.CoveredDistributionCount = withWAF
+	out.DistributionCoveragePct = pctOf(withWAF, enabled)
 
 	associations := aclAssociations(regional.acls, cloudfront.acls, byACL)
 	out.WebACLCount = len(associations)
@@ -224,6 +231,7 @@ func webACLToRow(acl aws.WebACL, associated int, level componentsdk.Level) WebAC
 		LoggingEnabled:          acl.LoggingEnabled,
 		Rules:                   []WAFRuleRow{},
 	}
+	row.missing.add(acl.LoggingErr, "logging_enabled", "logging_destination_arn")
 	for _, rule := range acl.Rules {
 		row.Rules = append(row.Rules, WAFRuleRow{
 			Name:                 rule.Name,

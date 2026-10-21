@@ -50,8 +50,13 @@ func (c *AWSClient) ListCloudFrontDistributions(ctx context.Context) ([]CloudFro
 		if err != nil {
 			return nil, fmt.Errorf("listing CloudFront distributions: %w", err)
 		}
-		if page.DistributionList == nil {
-			continue
+		// CloudFront leaves Items out of an empty list, so Quantity is what
+		// says the list was read.
+		if page.DistributionList == nil || page.DistributionList.Quantity == nil {
+			return nil, errMissing(page.ResultMetadata, "listing CloudFront distributions", "DistributionList")
+		}
+		if page.DistributionList.Items == nil && *page.DistributionList.Quantity > 0 {
+			return nil, errMissing(page.ResultMetadata, "listing CloudFront distributions", "Items")
 		}
 		for _, d := range page.DistributionList.Items {
 			dist := CloudFrontDistribution{

@@ -22,8 +22,10 @@ func (c *Collector) collectECSMetrics(ctx context.Context, client *aws.AWSClient
 	}
 
 	out := aggregateECS(services, scaling, scalingErr == nil)
+	out.missing.addPartial(scalingErr, len(services), "services_with_autoscaling_count", "services_with_scaling_policy_count", "single_task_service_count")
 	if level.AtLeast(componentsdk.LevelAudit) {
 		byService := scalingByService(scaling)
+		out.Services = make([]ECSServiceRow, 0, len(services))
 		for _, s := range services {
 			row := ECSServiceRow{
 				Cluster:                       s.Cluster,
@@ -43,6 +45,7 @@ func (c *Collector) collectECSMetrics(ctx context.Context, client *aws.AWSClient
 				HealthCheckGracePeriodSeconds: s.HealthCheckGracePeriodSeconds,
 				ScalingUnresolved:             scalingErr != nil,
 			}
+			row.missing.add(scalingErr, "auto_scaled", "min_capacity", "max_capacity", "scaling_policy_types", "scaling_metrics")
 			if sc, ok := byService[s.Cluster+"/"+s.Name]; ok {
 				row.AutoScaled = true
 				row.MinCapacity = sc.MinCapacity
@@ -119,7 +122,8 @@ func aggregateECS(services []aws.ECSService, scaling []aws.ECSServiceScaling, sc
 // mergeECSMetrics combines per-region results. Aggregates sum; audit rows
 // concatenate.
 func mergeECSMetrics(a, b ECSMetrics) ECSMetrics {
-	return ECSMetrics{
+	merged := ECSMetrics{
+		missing:                         a.missing,
 		ClusterCount:                    a.ClusterCount + b.ClusterCount,
 		ServiceCount:                    a.ServiceCount + b.ServiceCount,
 		FargateServiceCount:             a.FargateServiceCount + b.FargateServiceCount,
@@ -131,6 +135,8 @@ func mergeECSMetrics(a, b ECSMetrics) ECSMetrics {
 		LoadBalancedServiceCount:        a.LoadBalancedServiceCount + b.LoadBalancedServiceCount,
 		ExecEnabledServiceCount:         a.ExecEnabledServiceCount + b.ExecEnabledServiceCount,
 		ScalingUnresolvedServiceCount:   a.ScalingUnresolvedServiceCount + b.ScalingUnresolvedServiceCount,
-		Services:                        append(append([]ECSServiceRow(nil), a.Services...), b.Services...),
+		Services:                        appendRows(a.Services, b.Services),
 	}
+	merged.missing.merge(b.missing)
+	return merged
 }

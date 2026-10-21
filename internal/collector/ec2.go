@@ -11,27 +11,30 @@ import (
 // collectEC2Metrics collects EC2 posture for a single region. Issues three
 // calls per region: DescribeInstances (always), DescribeVolumes (for encryption
 // join), and ListVPCs (for default-VPC classification). All three are cheap
-// paginated calls. Failures on volumes or VPCs degrade gracefully — we still
-// emit instance rows with the affected fields left at zero values.
+// paginated calls. A failure on volumes or VPCs leaves out only the values
+// that read would have given; instance rows are still emitted.
 func (c *Collector) collectEC2Metrics(ctx context.Context, client *aws.AWSClient, region, accountID string, level componentsdk.Level) (*EC2Metrics, error) {
 	instances, err := client.ListEC2Instances(ctx, region)
 	if err != nil {
 		return nil, err
 	}
 
-	volumes, err := client.ListEC2Volumes(ctx, region)
-	if err != nil {
-		c.warn("account %s region %s: failed to list EC2 volumes: %v", accountID, region, err)
-		volumes = map[string]aws.EBSVolumeState{}
-	}
-
-	defaultVPCByID, err := defaultVPCLookup(ctx, client, region)
-	if err != nil {
-		c.warn("account %s region %s: failed to list VPCs for EC2 enrichment: %v", accountID, region, err)
-		defaultVPCByID = map[string]bool{}
-	}
-
 	out := &EC2Metrics{}
+
+	volumes, volumesErr := client.ListEC2Volumes(ctx, region)
+	if volumesErr != nil {
+		c.warn("account %s region %s: failed to list EC2 volumes: %v", accountID, region, volumesErr)
+		volumes = map[string]aws.EBSVolumeState{}
+		out.missing.add(volumesErr, "instances_with_unencrypted_volume_count", "unattached_volume_count", "unattached_unencrypted_volume_count")
+	}
+
+	defaultVPCByID, vpcErr := defaultVPCLookup(ctx, client, region)
+	if vpcErr != nil {
+		c.warn("account %s region %s: failed to list VPCs for EC2 enrichment: %v", accountID, region, vpcErr)
+		defaultVPCByID = map[string]bool{}
+		out.missing.add(vpcErr, "default_vpc_count")
+	}
+
 	out.UnattachedVolumeCount, out.UnattachedUnencryptedVolumeCount = countUnattachedVolumes(volumes)
 	for _, inst := range instances {
 		if inst.State != "running" {
@@ -56,8 +59,14 @@ func (c *Collector) collectEC2Metrics(ctx context.Context, client *aws.AWSClient
 		return out, nil
 	}
 
+	out.Instances = make([]EC2InstanceRow, 0, len(instances))
 	for _, inst := range instances {
-		out.Instances = append(out.Instances, ec2InstanceToRow(inst, region, defaultVPCByID[inst.VPCID], volumes[inst.RootVolumeID].Encrypted, level))
+		row := ec2InstanceToRow(inst, region, defaultVPCByID[inst.VPCID], volumes[inst.RootVolumeID].Encrypted, level)
+		row.missing.add(vpcErr, "in_default_vpc")
+		if inst.RootVolumeID != "" {
+			row.missing.add(volumesErr, "root_volume_encrypted")
+		}
+		out.Instances = append(out.Instances, row)
 	}
 	return out, nil
 }
@@ -165,12 +174,17 @@ func truncateTags(in map[string]string, cap int) map[string]string {
 // Trust aggregates sum directly; instance rows concatenate. The cap is applied
 // by the caller after all regions have been merged.
 func mergeEC2Metrics(a, b EC2Metrics) EC2Metrics {
-	return EC2Metrics{
+	merged := EC2Metrics{
 		InstanceCount:                       a.InstanceCount + b.InstanceCount,
 		IMDSv2RequiredCount:                 a.IMDSv2RequiredCount + b.IMDSv2RequiredCount,
 		PublicIPCount:                       a.PublicIPCount + b.PublicIPCount,
 		DefaultVPCCount:                     a.DefaultVPCCount + b.DefaultVPCCount,
 		InstancesWithUnencryptedVolumeCount: a.InstancesWithUnencryptedVolumeCount + b.InstancesWithUnencryptedVolumeCount,
+		UnattachedVolumeCount:               a.UnattachedVolumeCount + b.UnattachedVolumeCount,
+		UnattachedUnencryptedVolumeCount:    a.UnattachedUnencryptedVolumeCount + b.UnattachedUnencryptedVolumeCount,
 		Instances:                           append(append([]EC2InstanceRow(nil), a.Instances...), b.Instances...),
+		missing:                             a.missing,
 	}
+	merged.missing.merge(b.missing)
+	return merged
 }

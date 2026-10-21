@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
@@ -107,21 +108,31 @@ func TestApplyGuardDutyNotificationScan(t *testing.T) {
 	const arn = "arn:aws:sns:us-east-1:123456789012:security-alerts"
 
 	var fn GuardDutyFindingNotification
+	var missing unread
 
-	applyGuardDutyNotificationScan(&fn, guardDutyNotificationScan{
+	applyGuardDutyNotificationScan(&fn, &missing, guardDutyNotificationScan{
 		evaluated:      true,
 		rules:          []aws.GuardDutyNotificationRule{snsRule(true, arn)},
 		reach:          map[string]*aws.SNSTopicSubscribers{arn: topic(arn, 3, 1)},
 		adminAccountID: "999999999999",
 	}, "us-east-1", true)
 
-	applyGuardDutyNotificationScan(&fn, guardDutyNotificationScan{
+	applyGuardDutyNotificationScan(&fn, &missing, guardDutyNotificationScan{
 		evaluated: true,
 		rules:     []aws.GuardDutyNotificationRule{{Name: "to-central-bus", Enabled: true, TargetsByKind: map[string]int{"event_bus": 1}}},
 		reach:     map[string]*aws.SNSTopicSubscribers{},
 	}, "eu-west-1", true)
 
-	applyGuardDutyNotificationScan(&fn, guardDutyNotificationScan{}, "ap-southeast-2", true)
+	applyGuardDutyNotificationScan(&fn, &missing, guardDutyNotificationScan{rulesErr: errors.New("listing rules: AccessDeniedException")}, "ap-southeast-2", true)
+
+	for _, field := range []string{"finding_notification/rule_count", "finding_notification/detector_regions_routed_count"} {
+		if !hasUnread(missing, field, 1) {
+			t.Errorf("%s is not marked unread for the unresolved region: %+v", field, missing)
+		}
+	}
+	if !hasUnread(missing, "finding_notification/rules", 0) {
+		t.Errorf("rules are not marked unread for the unresolved region: %+v", missing)
+	}
 
 	if fn.DetectorRegionsCount != 3 || fn.DetectorRegionsEvaluatedCount != 2 || fn.DetectorRegionsUnresolvedCount != 1 {
 		t.Errorf("region counts = %d/%d/%d, want 3/2/1",
@@ -160,7 +171,8 @@ func TestApplyGuardDutyNotificationScanTrustLevelSkipsRows(t *testing.T) {
 	const arn = "arn:aws:sns:us-east-1:123456789012:security-alerts"
 
 	var fn GuardDutyFindingNotification
-	applyGuardDutyNotificationScan(&fn, guardDutyNotificationScan{
+	var missing unread
+	applyGuardDutyNotificationScan(&fn, &missing, guardDutyNotificationScan{
 		evaluated: true,
 		rules:     []aws.GuardDutyNotificationRule{snsRule(true, arn)},
 		reach:     map[string]*aws.SNSTopicSubscribers{arn: topic(arn, 1, 0)},

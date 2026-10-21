@@ -13,6 +13,18 @@ type networkMetricsWithCounts struct {
 	NetworkMetrics
 	vpcCount           int
 	securityGroupCount int
+	openSSH            int
+	openRDP            int
+}
+
+// finalize computes the exposure percentages from the merged counts, nil
+// when there are no security groups.
+func (m *networkMetricsWithCounts) finalize() {
+	m.SecurityGroupCount = m.securityGroupCount
+	m.OpenToWorldSSH = pctOf(m.openSSH, m.securityGroupCount)
+	m.OpenToWorldSSHSecurityGroupCount = m.openSSH
+	m.OpenToWorldRDP = pctOf(m.openRDP, m.securityGroupCount)
+	m.OpenToWorldRDPSecurityGroupCount = m.openRDP
 }
 
 // collectNetworkMetrics collects network security metrics for a single region.
@@ -39,18 +51,24 @@ func (c *Collector) collectNetworkMetrics(ctx context.Context, client *aws.AWSCl
 func (c *Collector) collectVPCMetrics(ctx context.Context, client *aws.AWSClient, region string, accountID string, result *networkMetricsWithCounts, level componentsdk.Level) error {
 	includeFlowLogs := level.AtLeast(componentsdk.LevelInternal)
 	vpcs, err := client.ListVPCs(ctx, region, includeFlowLogs)
+	var flowLogsErr error
 	if err != nil {
-		var flowLogsErr *aws.FlowLogsUnavailableError
-		if !errors.As(err, &flowLogsErr) || len(vpcs) == 0 {
+		var unavailable *aws.FlowLogsUnavailableError
+		if !errors.As(err, &unavailable) {
 			return err
 		}
+		flowLogsErr = err
 		c.warn("account %s region %s: failed to collect VPC flow log status: %v", accountID, region, err)
 	}
 
 	result.vpcCount = len(vpcs)
 
 	if level.AtLeast(componentsdk.LevelAudit) {
-		result.VPCs = append(result.VPCs, vpcSummaries(vpcs, region, includeFlowLogs)...)
+		rows := vpcSummaries(vpcs, region, includeFlowLogs)
+		for i := range rows {
+			rows[i].missing.add(flowLogsErr, "flow_logs_enabled")
+		}
+		result.VPCs = append(make([]VPCSummary, 0, len(rows)), rows...)
 	}
 
 	return nil
@@ -86,11 +104,11 @@ func (c *Collector) collectSecurityGroupMetrics(ctx context.Context, client *aws
 	result.securityGroupCount = len(sgs)
 
 	stats := analyzeSecurityGroups(sgs)
-
-	result.OpenToWorldSSH = percent(stats.openSSH, len(sgs))
-	result.OpenToWorldRDP = percent(stats.openRDP, len(sgs))
+	result.openSSH = stats.openSSH
+	result.openRDP = stats.openRDP
 
 	if level.AtLeast(componentsdk.LevelAudit) {
+		result.SecurityGroups = make([]SecurityGroupSummary, 0, len(sgs))
 		for _, sg := range sgs {
 			exposure := analyzeSecurityGroupExposure(sg)
 			row := SecurityGroupSummary{
@@ -195,33 +213,14 @@ func mergeNetworkMetrics(a, b networkMetricsWithCounts) networkMetricsWithCounts
 	result := a
 	result.vpcCount += b.vpcCount
 	result.securityGroupCount += b.securityGroupCount
-
-	// Audit-level slices: concatenate across regions.
-	if len(b.VPCs) > 0 {
-		result.VPCs = append(result.VPCs, b.VPCs...)
-	}
-	if len(b.SecurityGroups) > 0 {
-		result.SecurityGroups = append(result.SecurityGroups, b.SecurityGroups...)
-	}
-
-	sgAll := a.securityGroupCount + b.securityGroupCount
-	if sgAll > 0 {
-		result.OpenToWorldSSH = weightedAverage(a.OpenToWorldSSH, a.securityGroupCount, b.OpenToWorldSSH, b.securityGroupCount)
-		result.OpenToWorldRDP = weightedAverage(a.OpenToWorldRDP, a.securityGroupCount, b.OpenToWorldRDP, b.securityGroupCount)
-	}
-
+	result.openSSH += b.openSSH
+	result.openRDP += b.openRDP
+	result.VPCs = appendRows(result.VPCs, b.VPCs)
+	result.SecurityGroups = appendRows(result.SecurityGroups, b.SecurityGroups)
+	result.missing.merge(b.missing)
 	return result
 }
 
 func boolPtr(v bool) *bool {
 	return &v
-}
-
-// weightedAverage computes a weighted average of two values.
-func weightedAverage(val1, weight1, val2, weight2 int) int {
-	total := weight1 + weight2
-	if total == 0 {
-		return 0
-	}
-	return (val1*weight1 + val2*weight2) / total
 }

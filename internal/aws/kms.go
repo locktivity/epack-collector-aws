@@ -15,9 +15,10 @@ import (
 // with the metadata needed for posture analysis. AWS-managed keys are filtered
 // out because customers have no posture lever over them.
 //
-// Per key, this issues DescribeKey (always) and GetKeyRotationStatus (symmetric
-// CMKs only — asymmetric keys reject the call). Aliases are sourced from a
-// single per-region ListAliases call and joined into each row.
+// Per key, this issues DescribeKey (always) and GetKeyRotationStatus (for a
+// key KMS can rotate, as KMSKey.Rotatable says; other keys reject the call).
+// Aliases are sourced from a single per-region ListAliases call and joined
+// into each row.
 func (c *AWSClient) ListKMSCustomerKeys(ctx context.Context, region string) ([]KMSKey, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
@@ -48,7 +49,7 @@ func (c *AWSClient) ListKMSCustomerKeys(ctx context.Context, region string) ([]K
 	return keys, nil
 }
 
-// projectKMSKey fetches DescribeKey + (for symmetric CMKs) GetKeyRotationStatus
+// projectKMSKey fetches DescribeKey + (for rotatable keys) GetKeyRotationStatus
 // and projects the result into our KMSKey shape. Returns ok=false for
 // AWS-managed keys so the caller can filter them out without extra branches.
 func projectKMSKey(ctx context.Context, client *kms.Client, keyID string, aliasesByKey map[string][]string) (KMSKey, bool, error) {
@@ -57,7 +58,10 @@ func projectKMSKey(ctx context.Context, client *kms.Client, keyID string, aliase
 		return KMSKey{}, false, fmt.Errorf("describing KMS key %s: %w", keyID, err)
 	}
 	m := descOut.KeyMetadata
-	if m == nil || m.KeyManager != kmstypes.KeyManagerTypeCustomer {
+	if m == nil {
+		return KMSKey{}, false, errMissing(descOut.ResultMetadata, "describing KMS key "+keyID, "KeyMetadata")
+	}
+	if m.KeyManager != kmstypes.KeyManagerTypeCustomer {
 		return KMSKey{}, false, nil
 	}
 
@@ -75,15 +79,15 @@ func projectKMSKey(ctx context.Context, client *kms.Client, keyID string, aliase
 		Aliases:      aliasesByKey[keyID],
 	}
 
-	// Rotation only applies to symmetric CMKs whose key material AWS controls;
-	// asymmetric, HMAC, and external/CloudHSM origin keys reject the call.
-	if row.KeySpec == string(kmstypes.KeySpecSymmetricDefault) && row.Origin == string(kmstypes.OriginTypeAwsKms) {
+	if row.Rotatable() {
 		rotOut, err := client.GetKeyRotationStatus(ctx, &kms.GetKeyRotationStatusInput{KeyId: aws.String(keyID)})
-		if err != nil {
-			if !isExpectedRotationStatusError(err) {
-				return KMSKey{}, false, fmt.Errorf("getting rotation status for KMS key %s: %w", keyID, err)
-			}
-		} else {
+		switch {
+		case err != nil && isRotationUnsupported(err):
+		case err != nil:
+			row.RotationErr = fmt.Errorf("getting rotation status for KMS key %s: %w", keyID, err)
+		case rotOut.KeyId == nil:
+			row.RotationErr = errMissing(rotOut.ResultMetadata, "getting rotation status for KMS key "+keyID, "KeyId")
+		default:
 			row.RotationEnabled = rotOut.KeyRotationEnabled
 		}
 	}
@@ -91,19 +95,11 @@ func projectKMSKey(ctx context.Context, client *kms.Client, keyID string, aliase
 	return row, true, nil
 }
 
-// isExpectedRotationStatusError matches the error codes AWS returns for keys
-// that don't support rotation. Treated as "rotation not applicable" (false)
-// rather than collection failure.
-func isExpectedRotationStatusError(err error) bool {
+// isRotationUnsupported reports AWS answering that the key cannot rotate,
+// which reads as rotation disabled.
+func isRotationUnsupported(err error) bool {
 	var apiErr smithy.APIError
-	if !errors.As(err, &apiErr) {
-		return false
-	}
-	switch apiErr.ErrorCode() {
-	case "UnsupportedOperationException", "AccessDeniedException", "DisabledException":
-		return true
-	}
-	return false
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "UnsupportedOperationException"
 }
 
 func listKMSAliasesByKey(ctx context.Context, client *kms.Client) (map[string][]string, error) {

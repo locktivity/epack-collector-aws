@@ -7,7 +7,7 @@ import (
 )
 
 func TestWarnAccumulatesWarnings(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 
 	c.warn("first warning: %s", "alpha")
 	c.warn("second warning: %d", 42)
@@ -24,7 +24,7 @@ func TestWarnAccumulatesWarnings(t *testing.T) {
 }
 
 func TestWarningsResetBetweenCollections(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 
 	// Simulate warnings from a previous run
 	c.warnings = []string{"stale warning"}

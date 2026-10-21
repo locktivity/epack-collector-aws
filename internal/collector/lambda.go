@@ -10,8 +10,8 @@ import (
 
 // collectLambdaMetrics collects Lambda posture for a single region. At audit
 // level or higher, per-function follow-up calls (GetPolicy, ListFunctionUrlConfigs)
-// populate the corresponding flags; failures of either degrade gracefully (we
-// emit a warning and leave the field at its zero value).
+// populate the corresponding flags; a failure of either leaves those flags
+// out with a warning.
 func (c *Collector) collectLambdaMetrics(ctx context.Context, client *aws.AWSClient, region, accountID string, level componentsdk.Level) (*LambdaMetrics, error) {
 	functions, err := client.ListLambdaFunctions(ctx, region)
 	if err != nil {
@@ -31,12 +31,15 @@ func (c *Collector) collectLambdaMetrics(ctx context.Context, client *aws.AWSCli
 		return out, nil
 	}
 
+	publicURLs := 0
+	out.Functions = make([]LambdaFunctionRow, 0, len(functions))
 	for _, f := range functions {
 		row := lambdaFunctionToRow(f, region, level)
 
 		hasPolicy, err := client.LambdaFunctionHasResourcePolicy(ctx, region, f.Name)
 		if err != nil {
 			c.warn("account %s region %s lambda %s: failed to get resource policy: %v", accountID, region, f.Name, err)
+			row.missing.add(err, "has_resource_policy")
 		} else {
 			row.HasResourcePolicy = hasPolicy
 		}
@@ -44,16 +47,19 @@ func (c *Collector) collectLambdaMetrics(ctx context.Context, client *aws.AWSCli
 		hasURL, authType, err := client.LambdaFunctionURLAuthType(ctx, region, f.Name)
 		if err != nil {
 			c.warn("account %s region %s lambda %s: failed to get function URL config: %v", accountID, region, f.Name, err)
+			row.missing.add(err, "has_function_url", "function_url_auth_type")
+			out.missing.addPartial(err, 1, "public_function_url_count")
 		} else {
 			row.HasFunctionURL = hasURL
 			row.FunctionURLAuthType = authType
 			if hasURL && authType == "NONE" {
-				out.PublicFunctionURLCount++
+				publicURLs++
 			}
 		}
 
 		out.Functions = append(out.Functions, row)
 	}
+	out.PublicFunctionURLCount = &publicURLs
 
 	return out, nil
 }
@@ -99,10 +105,13 @@ func lambdaFunctionToRow(f aws.LambdaFunction, region string, level componentsdk
 // metric block. Trust aggregates sum directly; audit rows concatenate. The
 // cap is applied by the caller after all regions have been merged.
 func mergeLambdaMetrics(a, b LambdaMetrics) LambdaMetrics {
-	return LambdaMetrics{
+	merged := LambdaMetrics{
 		FunctionCount:          a.FunctionCount + b.FunctionCount,
 		DeprecatedRuntimeCount: a.DeprecatedRuntimeCount + b.DeprecatedRuntimeCount,
-		PublicFunctionURLCount: a.PublicFunctionURLCount + b.PublicFunctionURLCount,
+		PublicFunctionURLCount: sumCounts(a.PublicFunctionURLCount, b.PublicFunctionURLCount),
 		Functions:              append(append([]LambdaFunctionRow(nil), a.Functions...), b.Functions...),
+		missing:                a.missing,
 	}
+	merged.missing.merge(b.missing)
+	return merged
 }

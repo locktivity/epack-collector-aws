@@ -41,9 +41,10 @@ The active level appears in the output artifact as the top-level
 ### IAM (`iam`)
 
 - **trust**: `iam_users_present`, MFA / hardware-MFA / access-key-rotation
-  percentages, literal root MFA state, root credential-presence flags, root
-  access protection, and centralized root access feature evidence when the
-  caller is the Organizations management account or delegated administrator.
+  percentages and the user counts they are taken of, literal root MFA state,
+  root credential-presence flags, root access protection, and centralized root
+  access feature evidence when the caller is the Organizations management
+  account or delegated administrator.
 - **audit**: `users[]` (per-user MFA + access-key + console flags),
   `roles[]` (per-role ARN, external-trust flag, wildcard-principal flag,
   the foreign principal account IDs, and a best-effort
@@ -57,11 +58,12 @@ The active level appears in the output artifact as the top-level
 
 - **trust**: bucket count; per-bucket aggregate percentages for public access
   blocked after applying account-level S3 Block Public Access, evaluated
-  default encryption, versioning, logging; account-level public-access-block
-  flag; public-access-block unknown count; default-encryption evaluated,
-  inferred, and unknown counts; log sink bucket count. The `logging_enabled`
-  percentage excludes server access log destination buckets from the
-  denominator (they don't need their own logging).
+  default encryption, versioning, logging, each with the bucket count it is
+  taken of; account-level public-access-block flag; public-access-block
+  unknown count; default-encryption evaluated, inferred, and unknown counts;
+  log sink bucket count. The `logging_enabled` percentage excludes server
+  access log destination buckets from the denominator (they don't need their
+  own logging).
 - **audit**: `buckets[]` per-bucket row (the same data the percentages were
   computed from, plus region and `is_log_sink` flag). `default_encryption_enabled`
   is `null` when the bucket's encryption setting could not be evaluated. A
@@ -73,10 +75,11 @@ The active level appears in the output artifact as the top-level
 ### RDS (`rds`)
 
 - **trust**: aggregate percentages for encryption, public accessibility,
-  deletion protection, backup retention adequacy, Multi-AZ, plus
-  database-port ingress counts: instances whose security groups allow
-  ingress from the internet on the listening port, and instances left
-  unevaluated (reachability there is unproven, not open).
+  deletion protection, backup retention adequacy, Multi-AZ, each with the
+  database count it is taken of, plus database-port ingress counts: instances
+  whose security groups allow ingress from the internet on the listening
+  port, and instances left unevaluated (reachability there is unproven, not
+  open).
 - **audit**: `instances[]` and `clusters[]` per-resource rows. Instance rows
   carry the database-port ingress verdict: `db_port_ingress_evaluated`,
   `db_port_open_to_internet`, and `db_port_ingress_sources`, the CIDR blocks
@@ -87,7 +90,8 @@ The active level appears in the output artifact as the top-level
 
 ### Network (`network`)
 
-- **trust**: aggregate percentages for SSH/RDP open-to-world.
+- **trust**: aggregate percentages for SSH/RDP open-to-world, each with the
+  security group count it is taken of.
 - **audit**: `vpcs[]`, `security_groups[]` per-resource rows.
 - **internal**: VPC rows gain flow-log provenance: `flow_logs_evaluated`,
   `flow_logs_enabled` when evaluated, and `flow_logs_error_code` when the
@@ -112,7 +116,8 @@ per-rule / per-finding detail at internal.
   `detectors[]` per-region and `finding_notification.rules[]` per-rule at
   audit; `findings[]` per unarchived high-or-critical finding at internal.
 - **Security Hub**: enabled-standards inventory + integration count at audit.
-- **Inspector**: raw finding + resource counts at audit.
+- **Inspector**: the unpatched and affected EC2 instance counts the
+  percentage is taken from at trust; raw finding counts at audit.
 
 ### IAM Identity Center (`identity_center`)
 
@@ -170,8 +175,9 @@ per-rule / per-finding detail at internal.
 
 Scoped to CUSTOMER-managed keys only. AWS-managed keys offer no posture lever.
 
-- **trust**: customer-managed key count, count of symmetric CMKs with
-  rotation disabled, count pending deletion.
+- **trust**: customer-managed key count, count of keys KMS can rotate
+  (symmetric, with key material KMS generated) that have rotation disabled,
+  count pending deletion.
 - **audit**: `keys[]` per-key row (state, usage, spec, origin, multi-region,
   creation/deletion dates, rotation flag, aliases).
 - **internal**: rows gain `description`.
@@ -205,8 +211,9 @@ collector source by build-time lint.
 - **trust**: web ACL count, coverage of internet-facing entry points
   (`internet_facing_alb_coverage_pct` over internet-facing application load
   balancers, `distribution_coverage_pct` over enabled CloudFront
-  distributions), and `rate_limiting_enforced`: whether any web ACL with an
-  attached resource has an active blocking rate-based rule.
+  distributions, each with the covered count it is taken of), and
+  `rate_limiting_enforced`: whether any web ACL with an attached resource has
+  an active blocking rate-based rule.
   `regions_evaluated_count` and `cloudfront_scope_evaluated` record which
   scopes were actually read.
 - **audit**: `web_acls[]` per-ACL rows: name, scope, region, default action,
@@ -216,19 +223,22 @@ collector source by build-time lint.
   `logging_destination_arn`, identifying the exact resources each web ACL is
   attached to.
 
-## Artifact contract: null vs `[]` vs `[...]`
+## Artifact contract: absent vs `[]` vs `[...]`
 
 Level-gated array fields in the artifact follow a strict contract that lets
 consumers read fields without consulting `collected_at_level`:
 
-- **`null`**: the field was NOT collected at the active level. (Trust-only
-  collection emits `null` for every audit / internal field.)
+- **absent**: the field is not collected at the active level. (Trust-only
+  collection leaves out every audit / internal field.)
 - **`[]`**: the field WAS collected; the fleet is empty.
 - **`[...]`**: the field was collected and has rows.
+- **`null`**: the collector tried to read the field and could not. The run's
+  result artifact records why.
 
 The same contract applies to internal-level pointer fields like
-`iam.credential_report`: `null` when not collected, a populated object
-(possibly with an empty inner `users` array) when collected.
+`iam.credential_report`: absent when not collected, `null` when the report
+could not be read, and a populated object (possibly with an empty inner
+`users` array) when collected.
 
 ### Per-resource scalar fields use a different contract
 

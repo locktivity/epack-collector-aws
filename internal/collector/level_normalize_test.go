@@ -13,7 +13,7 @@ import (
 // is table-driven over the canonical lists of gated paths. The tests here
 // cover the few things that test doesn't:
 //   - PreservesAlreadyPopulated: idempotence of the normalizer.
-//   - illustrative null/[] shape checks on a single field.
+//   - illustrative absent/[] shape checks on a single field.
 
 func TestNormalizeForLevel_PreservesAlreadyPopulated(t *testing.T) {
 	p := &AccountPosture{
@@ -44,15 +44,15 @@ func TestNormalizeForLevel_AuditEmitsEmptyArrayNotNull(t *testing.T) {
 	}
 }
 
-// And at trust level, the same field marshals as null (clearly "not collected").
-func TestNormalizeForLevel_TrustEmitsNull(t *testing.T) {
+// And at trust level, the same field is absent: it is not collected there.
+func TestNormalizeForLevel_TrustLeavesOutLevelGatedArrays(t *testing.T) {
 	p := &AccountPosture{AccountID: "x"}
 	normalizeForLevel(p, componentsdk.LevelTrust)
 	b, err := json.Marshal(p.IAM)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if !strings.Contains(string(b), `"users":null`) {
-		t.Errorf("trust-level IAM should marshal users as `null`, got: %s", b)
+	if strings.Contains(string(b), `"users"`) {
+		t.Errorf("trust-level IAM should leave users out, got: %s", b)
 	}
 }

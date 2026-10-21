@@ -93,6 +93,6 @@ func mergeSecretsManagerMetrics(a, b SecretsManagerMetrics) SecretsManagerMetric
 		SecretsWithoutRotationCount:    a.SecretsWithoutRotationCount + b.SecretsWithoutRotationCount,
 		SecretsWithoutCustomerKMSCount: a.SecretsWithoutCustomerKMSCount + b.SecretsWithoutCustomerKMSCount,
 		SecretsPendingDeletionCount:    a.SecretsPendingDeletionCount + b.SecretsPendingDeletionCount,
-		Secrets:                        append(append([]SecretsManagerSecretRow(nil), a.Secrets...), b.Secrets...),
+		Secrets:                        appendRows(a.Secrets, b.Secrets),
 	}
 }
