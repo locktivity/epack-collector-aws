@@ -15,11 +15,18 @@ func (c *Collector) collectCloudFrontMetrics(ctx context.Context, client *aws.AW
 	distributions, err := client.ListCloudFrontDistributions(ctx)
 	if err != nil {
 		c.warn("account %s: failed to collect CloudFront distributions: %v", accountID, err)
-		return &CloudFrontMetrics{DistributionsErrorCode: apiErrorCode(err)}
+		out := &CloudFrontMetrics{DistributionsErrorCode: apiErrorCode(err)}
+		out.missing.add(err, "distribution_count", "disabled_distribution_count", "distributions_allowing_plaintext_viewers_count",
+			"distributions_with_http_only_origin_count", "distributions_with_match_viewer_origin_count", "distributions_by_minimum_tls")
+		if level.AtLeast(componentsdk.LevelAudit) {
+			out.missing.add(err, "distributions")
+		}
+		return out
 	}
 
 	out := aggregateCloudFrontDistributions(distributions)
 	if level.AtLeast(componentsdk.LevelAudit) {
+		out.Distributions = make([]CloudFrontDistributionRow, 0, len(distributions))
 		for _, d := range distributions {
 			out.Distributions = append(out.Distributions, cloudFrontDistributionToRow(d))
 		}

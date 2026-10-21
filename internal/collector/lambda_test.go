@@ -96,13 +96,13 @@ func TestMergeLambdaMetrics_SumsAggregatesAndConcatsFunctions(t *testing.T) {
 	a := LambdaMetrics{
 		FunctionCount:          3,
 		DeprecatedRuntimeCount: 1,
-		PublicFunctionURLCount: 0,
+		PublicFunctionURLCount: intPtr(0),
 		Functions:              []LambdaFunctionRow{{Name: "east-1"}, {Name: "east-2"}},
 	}
 	b := LambdaMetrics{
 		FunctionCount:          5,
 		DeprecatedRuntimeCount: 2,
-		PublicFunctionURLCount: 1,
+		PublicFunctionURLCount: intPtr(1),
 		Functions:              []LambdaFunctionRow{{Name: "west-1"}},
 	}
 	got := mergeLambdaMetrics(a, b)
@@ -112,8 +112,12 @@ func TestMergeLambdaMetrics_SumsAggregatesAndConcatsFunctions(t *testing.T) {
 	if got.DeprecatedRuntimeCount != 3 {
 		t.Errorf("DeprecatedRuntimeCount: expected 3, got %d", got.DeprecatedRuntimeCount)
 	}
-	if got.PublicFunctionURLCount != 1 {
-		t.Errorf("PublicFunctionURLCount: expected 1, got %d", got.PublicFunctionURLCount)
+	if !pctIs(got.PublicFunctionURLCount, 1) {
+		t.Errorf("PublicFunctionURLCount: expected 1, got %s", showPct(got.PublicFunctionURLCount))
+	}
+	// A count no region read stays unset rather than becoming 0.
+	if got := mergeLambdaMetrics(LambdaMetrics{}, LambdaMetrics{}); got.PublicFunctionURLCount != nil {
+		t.Errorf("PublicFunctionURLCount: expected unset when no region read it, got %s", showPct(got.PublicFunctionURLCount))
 	}
 	if len(got.Functions) != 3 {
 		t.Errorf("expected 3 functions after merge, got %d", len(got.Functions))

@@ -96,6 +96,7 @@ func (c *Collector) collectRDSEventAlerting(ctx context.Context, client *aws.AWS
 	if err != nil {
 		c.warn("region %s: failed to read RDS event subscriptions; backup alerting is unproven: %v", region, err)
 		metrics.EventSubscriptionsUnresolvedRegionCount++
+		metrics.missing.add(err, "event_subscription_count", "backup_failure_alerting_subscription_count", "backup_failure_alerting_reaching_subscriber_count")
 		return
 	}
 
@@ -110,6 +111,7 @@ func (c *Collector) collectRDSEventAlerting(ctx context.Context, client *aws.AWS
 		if err != nil {
 			c.warn("region %s: failed to read subscribers for RDS event subscription %s", region, sub.ID)
 			metrics.BackupAlertingTopicsUnresolvedCount++
+			metrics.missing.addPartial(err, 1, "backup_failure_alerting_reaching_subscriber_count")
 			continue
 		}
 		if subscribers.Confirmed > 0 {

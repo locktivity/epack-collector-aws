@@ -26,12 +26,17 @@ func (c *Collector) collectStoredImageMetrics(ctx context.Context, client *aws.A
 		}
 	}
 
+	audit := level.AtLeast(componentsdk.LevelAudit)
 	public, err := client.ListPublicOwnedSnapshots(ctx, region)
 	if err != nil {
 		// The exposure question is the sharper one, so a failure here must not
 		// be readable as "nothing is public".
 		c.warn("account %s region %s: failed to check snapshot public exposure: %v", accountID, region, err)
 		out.SnapshotExposureUnknown = true
+		out.missing.add(err, "public_snapshot_count")
+		if audit {
+			out.missing.add(err, "public_snapshots")
+		}
 	} else {
 		out.PublicSnapshotCount = len(public)
 	}
@@ -40,7 +45,11 @@ func (c *Collector) collectStoredImageMetrics(ctx context.Context, client *aws.A
 	if err != nil {
 		c.warn("account %s region %s: failed to collect AMIs: %v", accountID, region, err)
 		out.ImageExposureUnknown = true
-		return out, nil
+		out.missing.add(err, "image_count", "images_with_unencrypted_volume_count", "public_image_count")
+		if audit {
+			out.missing.add(err, "public_images")
+		}
+		images = nil
 	}
 
 	out.ImageCount = len(images)
@@ -53,12 +62,14 @@ func (c *Collector) collectStoredImageMetrics(ctx context.Context, client *aws.A
 		}
 	}
 
-	if !level.AtLeast(componentsdk.LevelAudit) {
+	if !audit {
 		return out, nil
 	}
 
 	// Only the exposed resources get rows. A public snapshot or AMI is
 	// actionable and rare; the full inventory is neither.
+	out.PublicSnapshots = []PublicResourceRow{}
+	out.PublicImages = []PublicResourceRow{}
 	for _, s := range public {
 		out.PublicSnapshots = append(out.PublicSnapshots, PublicResourceRow{ID: s.SnapshotID, Region: region, Encrypted: s.Encrypted})
 	}
@@ -76,7 +87,7 @@ func (c *Collector) collectStoredImageMetrics(ctx context.Context, client *aws.A
 // mergeStoredImageMetrics combines per-region results. Unknown flags OR: one
 // region failing leaves the account's exposure unproven.
 func mergeStoredImageMetrics(a, b StoredImageMetrics) StoredImageMetrics {
-	return StoredImageMetrics{
+	merged := StoredImageMetrics{
 		SnapshotCount:                    a.SnapshotCount + b.SnapshotCount,
 		UnencryptedSnapshotCount:         a.UnencryptedSnapshotCount + b.UnencryptedSnapshotCount,
 		PublicSnapshotCount:              a.PublicSnapshotCount + b.PublicSnapshotCount,
@@ -85,7 +96,10 @@ func mergeStoredImageMetrics(a, b StoredImageMetrics) StoredImageMetrics {
 		ImagesWithUnencryptedVolumeCount: a.ImagesWithUnencryptedVolumeCount + b.ImagesWithUnencryptedVolumeCount,
 		PublicImageCount:                 a.PublicImageCount + b.PublicImageCount,
 		ImageExposureUnknown:             a.ImageExposureUnknown || b.ImageExposureUnknown,
-		PublicSnapshots:                  append(append([]PublicResourceRow(nil), a.PublicSnapshots...), b.PublicSnapshots...),
-		PublicImages:                     append(append([]PublicResourceRow(nil), a.PublicImages...), b.PublicImages...),
+		PublicSnapshots:                  appendRows(a.PublicSnapshots, b.PublicSnapshots),
+		PublicImages:                     appendRows(a.PublicImages, b.PublicImages),
+		missing:                          a.missing,
 	}
+	merged.missing.merge(b.missing)
+	return merged
 }

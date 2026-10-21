@@ -16,6 +16,7 @@ func (c *Collector) collectAutoScalingMetrics(ctx context.Context, client *aws.A
 
 	out := aggregateAutoScalingGroups(groups)
 	if level.AtLeast(componentsdk.LevelAudit) {
+		out.Groups = make([]AutoScalingGroupRow, 0, len(groups))
 		for _, g := range groups {
 			out.Groups = append(out.Groups, AutoScalingGroupRow{
 				Name:                          g.Name,
@@ -81,6 +82,6 @@ func mergeAutoScalingMetrics(a, b AutoScalingMetrics) AutoScalingMetrics {
 		GroupsWithELBHealthCheckCount:                a.GroupsWithELBHealthCheckCount + b.GroupsWithELBHealthCheckCount,
 		LoadBalancedGroupsWithoutELBHealthCheckCount: a.LoadBalancedGroupsWithoutELBHealthCheckCount + b.LoadBalancedGroupsWithoutELBHealthCheckCount,
 		GroupsOnLaunchConfigurationsCount:            a.GroupsOnLaunchConfigurationsCount + b.GroupsOnLaunchConfigurationsCount,
-		Groups:                                       append(append([]AutoScalingGroupRow(nil), a.Groups...), b.Groups...),
+		Groups:                                       appendRows(a.Groups, b.Groups),
 	}
 }

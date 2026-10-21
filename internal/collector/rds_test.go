@@ -44,57 +44,61 @@ func TestDBClusterToRow_InternalPopulatesRestorableTime(t *testing.T) {
 }
 
 func TestMergeRDSMetrics(t *testing.T) {
+	// Region a: 2 instances (one public) and 1 cluster, all encrypted,
+	// protected, backed up, and multi-AZ. Region b: the same with none.
 	a := rdsMetricsWithCounts{
-		RDSMetrics: RDSMetrics{
-			EncryptedAtRest:         100,
-			PubliclyAccessible:      50,
-			DeletionProtection:      100,
-			BackupRetentionAdequate: 100,
-			MultiAZEnabled:          100,
-		},
-		instanceCount: 2,
-		clusterCount:  1,
+		instanceCount:      2,
+		clusterCount:       1,
+		encrypted:          3,
+		publicAccess:       1,
+		deletionProtection: 3,
+		multiAZ:            3,
+		adequateBackup:     3,
+		minRetention:       14,
 	}
 	b := rdsMetricsWithCounts{
-		RDSMetrics: RDSMetrics{
-			EncryptedAtRest:         0,
-			PubliclyAccessible:      0,
-			DeletionProtection:      0,
-			BackupRetentionAdequate: 0,
-			MultiAZEnabled:          0,
-		},
 		instanceCount: 2,
 		clusterCount:  1,
+		minRetention:  1,
 	}
 
 	got := mergeRDSMetrics(a, b)
-	if got.EncryptedAtRest != 50 {
-		t.Fatalf("expected EncryptedAtRest=50, got %d", got.EncryptedAtRest)
+	got.finalize()
+	if !pctIs(got.EncryptedAtRest, 50) {
+		t.Fatalf("expected EncryptedAtRest=50, got %s", showPct(got.EncryptedAtRest))
 	}
-	if got.PubliclyAccessible != 25 {
-		t.Fatalf("expected PubliclyAccessible=25, got %d", got.PubliclyAccessible)
+	if !pctIs(got.PubliclyAccessible, 25) {
+		t.Fatalf("expected PubliclyAccessible=25 over the 4 instances, got %s", showPct(got.PubliclyAccessible))
 	}
-	if got.DeletionProtection != 50 {
-		t.Fatalf("expected DeletionProtection=50, got %d", got.DeletionProtection)
+	if !pctIs(got.DeletionProtection, 50) {
+		t.Fatalf("expected DeletionProtection=50, got %s", showPct(got.DeletionProtection))
 	}
-	if got.BackupRetentionAdequate != 50 {
-		t.Fatalf("expected BackupRetentionAdequate=50, got %d", got.BackupRetentionAdequate)
+	if !pctIs(got.BackupRetentionAdequate, 50) {
+		t.Fatalf("expected BackupRetentionAdequate=50, got %s", showPct(got.BackupRetentionAdequate))
 	}
-	if got.MultiAZEnabled != 50 {
-		t.Fatalf("expected MultiAZEnabled=50, got %d", got.MultiAZEnabled)
+	if !pctIs(got.MultiAZEnabled, 50) {
+		t.Fatalf("expected MultiAZEnabled=50, got %s", showPct(got.MultiAZEnabled))
 	}
-	if got.instanceCount != 4 {
-		t.Fatalf("expected instanceCount=4, got %d", got.instanceCount)
+	if !pctIs(got.BackupRetentionMin, 1) {
+		t.Fatalf("expected BackupRetentionMin=1, got %s", showPct(got.BackupRetentionMin))
 	}
-	if got.clusterCount != 2 {
-		t.Fatalf("expected clusterCount=2, got %d", got.clusterCount)
+	if got.instanceCount != 4 || got.InstanceCount != 4 {
+		t.Fatalf("expected 4 instances, got %d and %d", got.instanceCount, got.InstanceCount)
+	}
+	if got.clusterCount != 2 || got.DatabaseCount != 6 {
+		t.Fatalf("expected 2 clusters and 6 databases, got %d and %d", got.clusterCount, got.DatabaseCount)
 	}
 }
 
 func TestMergeRDSMetricsZeroCounts(t *testing.T) {
-	got := mergeRDSMetrics(rdsMetricsWithCounts{}, rdsMetricsWithCounts{})
-	if got.EncryptedAtRest != 0 || got.PubliclyAccessible != 0 || got.MultiAZEnabled != 0 {
-		t.Fatalf("expected zero metrics, got %+v", got.RDSMetrics)
+	got := mergeRDSMetrics(rdsMetricsWithCounts{minRetention: -1}, rdsMetricsWithCounts{minRetention: -1})
+	got.finalize()
+	// No databases is no population: every percentage is null, not 0.
+	if got.EncryptedAtRest != nil || got.PubliclyAccessible != nil || got.MultiAZEnabled != nil || got.BackupRetentionMin != nil {
+		t.Fatalf("expected null metrics with no databases, got %+v", got.RDSMetrics)
+	}
+	if got.DatabaseCount != 0 {
+		t.Fatalf("expected DatabaseCount=0, got %d", got.DatabaseCount)
 	}
 }
 

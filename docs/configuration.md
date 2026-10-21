@@ -174,7 +174,7 @@ The collector needs read-only AWS permissions in each target account. The minimu
 
 All actions are List, Describe, or Get. Value-reading APIs (`secretsmanager:GetSecretValue`, `ssm:GetParameter`, etc.) are intentionally absent and are forbidden in collector source by a build-time lint.
 
-If a surface is missing its required permissions, the collector emits a per-surface AccessDenied diagnostic warning and continues; it does not fail the whole run.
+If a surface is missing its required permissions, the collector emits a per-surface AccessDenied diagnostic warning and continues; it does not fail the whole run. Each value a denied call leaves out gets a `permission_denied` gap in `artifacts/aws.collector-result.json` that names the call. When AWS's message names the IAM action, as in "not authorized to perform: iam:GenerateCredentialReport", the gap names it in `missing_permission`, and its warning says where to allow it: the collector's IAM policy, or the service control policy or permissions boundary that allows the action nowhere. When a policy denies the action explicitly, the warning names that policy and the gap names no permission to grant, because an explicit deny overrides any allow.
 
 `iam:ListOrganizationsFeatures` only evaluates centralized root access from the AWS Organizations management account or an IAM delegated administrator account. Member-account roles record the AWS error code in the evidence pack instead of inferring the organization-level state.
 
@@ -407,13 +407,17 @@ collectors:
 
 ### "Access Denied" Errors
 
-1. Verify the IAM role/user has all required permissions
+1. Verify the IAM role/user has all required permissions. Each gap in `artifacts/aws.collector-result.json` names the call AWS denied, and `missing_permission` names the IAM action to allow when AWS's message names one.
 2. Check that the trust policy allows the collector's identity
 3. Ensure the external ID matches (if configured)
 
+### Rejected Credentials
+
+A token or access key AWS does not accept, such as an identity token with the wrong audience or a deleted access key, fails the run with exit code 3 and the code `auth_failed`. No evidence is emitted. When some configured accounts sign in and others do not, the run succeeds and lists the others under `failed_accounts`.
+
 ### "Credential Report Not Ready"
 
-The collector automatically retries generating the credential report. If it times out after 10 attempts, check IAM permissions for `iam:GenerateCredentialReport`.
+The collector polls for the credential report for up to 45 seconds. When it is still not ready, the IAM user metrics are null, `credential_report_error_code` is `CredentialReportTimeout`, and the result artifact records them as timed out. A later run usually finds the report ready. If it never is, check IAM permissions for `iam:GenerateCredentialReport`.
 
 ### "Service Not Available in Region"
 
@@ -421,4 +425,4 @@ Some services (like GuardDuty) may not be available in all regions. The collecto
 
 ### Rate Limiting
 
-The AWS SDK automatically handles rate limiting with exponential backoff. For large accounts with many resources, collection may take several minutes.
+The collector retries throttled AWS calls with backoff. A call still throttled after its retries leaves the values it would have given null, and the result artifact records them as rate limited. For large accounts with many resources, collection may take several minutes.

@@ -22,25 +22,43 @@ func (c *Collector) collectMonitoringMetrics(ctx context.Context, client *aws.AW
 	}
 
 	out := &MonitoringMetrics{AlarmCount: len(alarms)}
+	if level.AtLeast(componentsdk.LevelAudit) {
+		out.Alarms = make([]CloudWatchAlarmRow, 0, len(alarms))
+	}
 	if len(alarms) == 0 {
 		return out, nil
 	}
 
 	// One lookup per distinct topic, not per alarm: alarms commonly share one.
+	// A topic whose subscribers could not be read leaves every count that
+	// depends on it unknown, never counted as unreached.
 	reach := map[string]*aws.SNSTopicSubscribers{}
+	unresolved := map[string]error{}
+	var firstErr error
 	for _, alarm := range alarms {
 		for _, topic := range alarm.NotificationTopics {
 			if _, seen := reach[topic]; seen {
+				continue
+			}
+			if _, failed := unresolved[topic]; failed {
 				continue
 			}
 			subs, subErr := client.GetSNSTopicSubscribers(ctx, region, topic)
 			if subErr != nil {
 				c.warn("account %s region %s: failed to read SNS subscribers: %v", accountID, region, subErr)
 				out.TopicsUnresolvedCount++
+				unresolved[topic] = subErr
+				if firstErr == nil {
+					firstErr = subErr
+				}
 				continue
 			}
 			reach[topic] = subs
 		}
+	}
+	if len(unresolved) > 0 {
+		out.missing.addPartial(firstErr, len(unresolved), "notification_topic_count", "topics_without_confirmed_subscriber_count",
+			"subscriptions_by_protocol", "subscriptions_pending_confirmation_count", "alarms_reaching_subscriber_count")
 	}
 
 	out.NotificationTopicCount = len(reach)
@@ -76,16 +94,21 @@ func (c *Collector) collectMonitoringMetrics(ctx context.Context, client *aws.AW
 		return out, nil
 	}
 
-	out.Alarms = make([]CloudWatchAlarmRow, 0, len(alarms))
 	for _, alarm := range alarms {
-		out.Alarms = append(out.Alarms, cloudWatchAlarmToRow(alarm, region, reach))
+		row := cloudWatchAlarmToRow(alarm, region, reach)
+		if !row.ReachesSubscriber && alarm.ActionsEnabled {
+			for _, topic := range alarm.NotificationTopics {
+				if err, failed := unresolved[topic]; failed {
+					row.missing.add(err, "reaches_subscriber")
+					break
+				}
+			}
+		}
+		out.Alarms = append(out.Alarms, row)
 	}
 	return out, nil
 }
 
-// alarmReachesSubscriber reports whether the alarm would actually notify a
-// person or system: actions on, a notification topic, and that topic holding at
-// least one confirmed subscriber.
 func alarmReachesSubscriber(alarm aws.CloudWatchAlarm, reach map[string]*aws.SNSTopicSubscribers) bool {
 	if !alarm.ActionsEnabled {
 		return false
@@ -120,6 +143,7 @@ func cloudWatchAlarmToRow(alarm aws.CloudWatchAlarm, region string, reach map[st
 // audit rows concatenate.
 func mergeMonitoringMetrics(a, b MonitoringMetrics) MonitoringMetrics {
 	merged := MonitoringMetrics{
+		missing:                               a.missing,
 		AlarmCount:                            a.AlarmCount + b.AlarmCount,
 		AlarmsWithActionsDisabledCount:        a.AlarmsWithActionsDisabledCount + b.AlarmsWithActionsDisabledCount,
 		AlarmsWithoutNotificationCount:        a.AlarmsWithoutNotificationCount + b.AlarmsWithoutNotificationCount,
@@ -129,8 +153,9 @@ func mergeMonitoringMetrics(a, b MonitoringMetrics) MonitoringMetrics {
 		TopicsWithoutConfirmedSubscriberCount: a.TopicsWithoutConfirmedSubscriberCount + b.TopicsWithoutConfirmedSubscriberCount,
 		TopicsUnresolvedCount:                 a.TopicsUnresolvedCount + b.TopicsUnresolvedCount,
 		SubscriptionsPendingConfirmationCount: a.SubscriptionsPendingConfirmationCount + b.SubscriptionsPendingConfirmationCount,
-		Alarms:                                append(append([]CloudWatchAlarmRow(nil), a.Alarms...), b.Alarms...),
+		Alarms:                                appendRows(a.Alarms, b.Alarms),
 	}
+	merged.missing.merge(b.missing)
 	for _, src := range []map[string]int{a.SubscriptionsByProtocol, b.SubscriptionsByProtocol} {
 		for protocol, count := range src {
 			if merged.SubscriptionsByProtocol == nil {

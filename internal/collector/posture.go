@@ -1,7 +1,14 @@
 // Package collector provides AWS account posture collection functionality.
 package collector
 
-import "time"
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/locktivity/epack-collector-aws/internal/aws"
+	"github.com/locktivity/epack/componentsdk"
+)
 
 // Auth mode constants for AWS authentication strategy.
 const (
@@ -28,9 +35,25 @@ type Config struct {
 	Accounts []AccountConfig `json:"accounts"`  // Accounts to collect from
 	Regions  []string        `json:"regions"`   // Regions to scan (empty = all enabled)
 
-	// Progress callbacks (optional, set by main to report status)
+	// Progress callbacks (optional, set by the handler to report status)
 	OnStatus   StatusFunc   `json:"-"`
 	OnProgress ProgressFunc `json:"-"`
+
+	// HTTPClient sends every AWS call. Nil keeps the AWS SDK's own client.
+	HTTPClient *http.Client `json:"-"`
+
+	// OIDC holds the variables OIDC mode reads its identity token from.
+	OIDC aws.OIDCEnv `json:"-"`
+
+	// Recorder takes the values the collector leaves out of its artifacts.
+	Recorder *componentsdk.Recorder `json:"-"`
+
+	// Now is the run's clock. It defaults to time.Now.
+	Now func() time.Time `json:"-"`
+
+	// Wait pauses between polls, such as for the IAM credential report. It
+	// defaults to sleeping.
+	Wait func(ctx context.Context, d time.Duration) error `json:"-"`
 }
 
 // AccountConfig holds configuration for a single AWS account.
@@ -60,6 +83,9 @@ type FailedAccountRecord struct {
 	RoleARN   string `json:"role_arn,omitempty"`
 	Label     string `json:"label,omitempty"`
 	ErrorCode string `json:"error_code"`
+
+	// err is why the account could not be collected.
+	err error
 }
 
 // Diagnostics contains warnings and errors encountered during collection.
@@ -109,8 +135,8 @@ type AccountPosture struct {
 type IAMMetrics struct {
 	// Trust: the user aggregates below are derived from the IAM credential
 	// report and are meaningful only when credential_report_evaluated is true.
-	// On collection failure they hold zero values (which would otherwise read
-	// as worst-case posture) and credential_report_error_code carries the cause.
+	// On collection failure they are left out and credential_report_error_code
+	// carries the cause.
 	CredentialReportEvaluated bool   `json:"credential_report_evaluated"`
 	CredentialReportErrorCode string `json:"credential_report_error_code,omitempty"`
 
@@ -123,12 +149,21 @@ type IAMMetrics struct {
 	// rather than missing data; a policy object means it is configured.
 	PasswordPolicyEvaluated bool               `json:"password_policy_evaluated"`
 	PasswordPolicyErrorCode string             `json:"password_policy_error_code,omitempty"`
-	PasswordPolicy          *IAMPasswordPolicy `json:"password_policy,omitempty"`
+	PasswordPolicy          *IAMPasswordPolicy `json:"password_policy"`
 
-	IAMUsersPresent    bool `json:"iam_users_present"`
-	MFAEnabled         int  `json:"mfa_enabled"`
-	HardwareMFAEnabled int  `json:"hardware_mfa_enabled"`
-	AccessKeysRotated  int  `json:"access_keys_rotated"`
+	// The percentages are over the IAM users in the credential report (the
+	// root user excluded) and the users among them with an active access
+	// key. Each is null when its population is empty, and each count beside
+	// it is the users it is taken of.
+	IAMUsersPresent             bool `json:"iam_users_present"`
+	IAMUserCount                int  `json:"iam_user_count"`
+	AccessKeyUserCount          int  `json:"access_key_user_count"`
+	MFAEnabled                  *int `json:"mfa_enabled"`
+	MFAEnabledUserCount         int  `json:"mfa_enabled_user_count"`
+	HardwareMFAEnabled          *int `json:"hardware_mfa_enabled"`
+	HardwareMFAEnabledUserCount *int `json:"hardware_mfa_enabled_user_count"`
+	AccessKeysRotated           *int `json:"access_keys_rotated"`
+	AccessKeysRotatedUserCount  int  `json:"access_keys_rotated_user_count"`
 
 	// Root credential state comes from the credential report's root row or the
 	// account summary; the Root* fields below are meaningful only when
@@ -156,13 +191,13 @@ type IAMMetrics struct {
 	OrganizationAccountsEvaluated bool   `json:"organization_accounts_evaluated"`
 	OrganizationAccountsErrorCode string `json:"organization_accounts_error_code,omitempty"`
 
-	// Audit: present (possibly []) when collected at audit+; null when not collected.
-	Users []IAMUser `json:"users"`
-	Roles []IAMRole `json:"roles"`
+	// Audit: present (possibly []) when collected at audit+; absent when not collected.
+	Users []IAMUser `json:"users,omitzero"`
+	Roles []IAMRole `json:"roles,omitzero"`
 
 	// Internal: present (with possibly-empty Users) when collected at internal;
-	// null when not collected.
-	CredentialReport *IAMCredentialReport `json:"credential_report"`
+	// absent when not collected.
+	CredentialReport *IAMCredentialReport `json:"credential_report,omitempty"`
 }
 
 // IAMCredentialReport is the internal-level per-user activity inventory derived
@@ -239,8 +274,7 @@ type IAMRole struct {
 type S3Metrics struct {
 	// Trust: the bucket aggregates below are derived from the bucket listing
 	// and are meaningful only when bucket_listing_evaluated is true. On listing
-	// failure they hold zero values (which would otherwise read as worst-case
-	// posture) and bucket_listing_error_code carries the cause.
+	// failure they are left out and bucket_listing_error_code carries the cause.
 	BucketListingEvaluated bool   `json:"bucket_listing_evaluated"`
 	BucketListingErrorCode string `json:"bucket_listing_error_code,omitempty"`
 
@@ -256,23 +290,38 @@ type S3Metrics struct {
 	// partial means a transport statement exists but does not conclusively
 	// cover every principal, action, and resource; unknown means the policy
 	// could not be read and must never be reported as unenforced.
-	TLSEnforcedBucketCount           int  `json:"tls_enforced_bucket_count"`
-	TLSEnforcementPartialBucketCount int  `json:"tls_enforcement_partial_bucket_count"`
-	TLSUnenforcedBucketCount         int  `json:"tls_unenforced_bucket_count"`
-	TLSEnforcementUnknownBucketCount int  `json:"tls_enforcement_unknown_bucket_count,omitempty"`
-	PublicAccessBlocked              int  `json:"public_access_blocked"`
-	PublicAccessBlockUnknownCount    int  `json:"public_access_block_unknown_count"`
-	DefaultEncryptionEnabled         int  `json:"default_encryption_enabled"`
-	DefaultEncryptionEvaluatedCount  int  `json:"default_encryption_evaluated_count"`
-	DefaultEncryptionInferredCount   int  `json:"default_encryption_inferred_count"`
-	DefaultEncryptionUnknownCount    int  `json:"default_encryption_unknown_count"`
-	VersioningEnabled                int  `json:"versioning_enabled"`
-	LoggingEnabled                   int  `json:"logging_enabled"`
-	LogSinkBucketCount               int  `json:"log_sink_bucket_count"`
-	AccountPublicAccessBlockEnabled  bool `json:"account_public_access_block_enabled"`
+	TLSEnforcedBucketCount              int  `json:"tls_enforced_bucket_count"`
+	TLSEnforcementPartialBucketCount    int  `json:"tls_enforcement_partial_bucket_count"`
+	TLSUnenforcedBucketCount            int  `json:"tls_unenforced_bucket_count"`
+	TLSEnforcementUnknownBucketCount    int  `json:"tls_enforcement_unknown_bucket_count,omitempty"`
+	PublicAccessBlocked                 *int `json:"public_access_blocked"`
+	PublicAccessBlockedBucketCount      int  `json:"public_access_blocked_bucket_count"`
+	PublicAccessBlockUnknownCount       int  `json:"public_access_block_unknown_count"`
+	DefaultEncryptionEnabled            *int `json:"default_encryption_enabled"`
+	DefaultEncryptionEnabledBucketCount int  `json:"default_encryption_enabled_bucket_count"`
+	DefaultEncryptionEvaluatedCount     int  `json:"default_encryption_evaluated_count"`
+	DefaultEncryptionInferredCount      int  `json:"default_encryption_inferred_count"`
+	DefaultEncryptionUnknownCount       int  `json:"default_encryption_unknown_count"`
+	VersioningEnabled                   *int `json:"versioning_enabled"`
+	VersioningEnabledBucketCount        int  `json:"versioning_enabled_bucket_count"`
+	LoggingEnabled                      *int `json:"logging_enabled"`
+	LoggingEnabledBucketCount           int  `json:"logging_enabled_bucket_count"`
+	LogSinkBucketCount                  int  `json:"log_sink_bucket_count"`
+	LoggingRequiredBucketCount          int  `json:"logging_required_bucket_count"`
+	AccountPublicAccessBlockEnabled     bool `json:"account_public_access_block_enabled"`
 
-	// Audit: present (possibly []) when collected at audit+; null when not collected.
-	Buckets []S3Bucket `json:"buckets"`
+	// Audit: present (possibly []) when collected at audit+; absent when not collected.
+	Buckets []S3Bucket `json:"buckets,omitzero"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
+
+	// bucketNames are the account's buckets, nil when the listing failed;
+	// accountPAB and accountPABErr are the account-level block and why it
+	// could not be read. Trail bucket retention reads them.
+	bucketNames   map[string]bool
+	accountPAB    aws.PublicAccessBlockSettings
+	accountPABErr error
 }
 
 // S3Bucket is a per-bucket audit-level inventory row.
@@ -294,6 +343,9 @@ type S3Bucket struct {
 	Policy    *S3BucketPolicy    `json:"policy,omitempty"`
 	ACL       *S3BucketACL       `json:"acl,omitempty"`
 	Lifecycle *S3BucketLifecycle `json:"lifecycle,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // S3BucketPolicy carries the raw bucket policy document. Absent buckets (no
@@ -367,12 +419,22 @@ type RDSMetrics struct {
 	DMLLoggingNotClassifiedCount int `json:"dml_logging_not_classified_count"`
 	DatabaseCount                int `json:"database_count"`
 
-	EncryptedAtRest         int `json:"encrypted_at_rest"`
-	PubliclyAccessible      int `json:"publicly_accessible"`
-	DeletionProtection      int `json:"deletion_protection"`
-	BackupRetentionAdequate int `json:"backup_retention_adequate"` // % with retention >= 7 days
-	BackupRetentionMin      int `json:"backup_retention_min"`      // Minimum retention days across all instances
-	MultiAZEnabled          int `json:"multi_az_enabled"`
+	// The percentages are over the databases (instances and clusters), and
+	// publicly_accessible over the instances alone, since a cluster has no
+	// address of its own. Each is null when its population is empty, and
+	// each count beside it is the databases it is taken of.
+	InstanceCount                        int  `json:"instance_count"`
+	EncryptedAtRest                      *int `json:"encrypted_at_rest"`
+	EncryptedAtRestDatabaseCount         int  `json:"encrypted_at_rest_database_count"`
+	PubliclyAccessible                   *int `json:"publicly_accessible"`
+	PubliclyAccessibleInstanceCount      int  `json:"publicly_accessible_instance_count"`
+	DeletionProtection                   *int `json:"deletion_protection"`
+	DeletionProtectionDatabaseCount      int  `json:"deletion_protection_database_count"`
+	BackupRetentionAdequate              *int `json:"backup_retention_adequate"` // % with retention >= 7 days
+	BackupRetentionAdequateDatabaseCount int  `json:"backup_retention_adequate_database_count"`
+	BackupRetentionMin                   *int `json:"backup_retention_min"` // Minimum retention days across all databases
+	MultiAZEnabled                       *int `json:"multi_az_enabled"`
+	MultiAZEnabledDatabaseCount          int  `json:"multi_az_enabled_database_count"`
 
 	// Database-port ingress across instances: whether any security group
 	// allows ingress from the internet on the database's listening port.
@@ -381,9 +443,12 @@ type RDSMetrics struct {
 	DBPortOpenToInternetCount     int `json:"db_port_open_to_internet_count"`
 	DBPortIngressUnevaluatedCount int `json:"db_port_ingress_unevaluated_count,omitempty"`
 
-	// Audit: present (possibly []) when collected at audit+; null when not collected.
-	Instances []RDSInstance `json:"instances"`
-	Clusters  []RDSCluster  `json:"clusters"`
+	// Audit: present (possibly []) when collected at audit+; absent when not collected.
+	Instances []RDSInstance `json:"instances,omitzero"`
+	Clusters  []RDSCluster  `json:"clusters,omitzero"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // RDSInstance is a per-instance audit-level inventory row.
@@ -412,6 +477,9 @@ type RDSInstance struct {
 
 	// Internal:
 	LatestRestorableTime string `json:"latest_restorable_time,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // RDSCluster is a per-cluster audit-level inventory row. Clusters are not
@@ -444,12 +512,21 @@ type NetworkMetrics struct {
 	RegionsEvaluatedCount int      `json:"regions_evaluated_count"`
 	RegionsFailed         []string `json:"regions_failed,omitempty"`
 
-	OpenToWorldSSH int `json:"open_to_world_ssh"`
-	OpenToWorldRDP int `json:"open_to_world_rdp"`
+	// The exposure percentages are over the security groups, null when the
+	// regions hold none, and each count beside one is the groups it is
+	// taken of.
+	SecurityGroupCount               int  `json:"security_group_count"`
+	OpenToWorldSSH                   *int `json:"open_to_world_ssh"`
+	OpenToWorldSSHSecurityGroupCount int  `json:"open_to_world_ssh_security_group_count"`
+	OpenToWorldRDP                   *int `json:"open_to_world_rdp"`
+	OpenToWorldRDPSecurityGroupCount int  `json:"open_to_world_rdp_security_group_count"`
 
-	// Audit: present (possibly []) when collected at audit+; null when not collected.
-	VPCs           []VPCSummary           `json:"vpcs"`
-	SecurityGroups []SecurityGroupSummary `json:"security_groups"`
+	// Audit: present (possibly []) when collected at audit+; absent when not collected.
+	VPCs           []VPCSummary           `json:"vpcs,omitzero"`
+	SecurityGroups []SecurityGroupSummary `json:"security_groups,omitzero"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // VPCSummary is a per-VPC audit-level inventory row.
@@ -460,6 +537,9 @@ type VPCSummary struct {
 	FlowLogsEnabled   *bool  `json:"flow_logs_enabled,omitempty"`
 	FlowLogsEvaluated *bool  `json:"flow_logs_evaluated,omitempty"`
 	FlowLogsErrorCode string `json:"flow_logs_error_code,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // SecurityGroupSummary is a per-SG audit-level inventory row. The OpenToWorld*
@@ -527,8 +607,7 @@ type CloudTrailStatus struct {
 
 	// Trust: the summary booleans below are derived from the trail listing and
 	// are meaningful only when trail_listing_evaluated is true. On listing
-	// failure they hold zero values (which would otherwise read as worst-case
-	// posture) and trail_listing_error_code carries the cause.
+	// failure they are left out and trail_listing_error_code carries the cause.
 	TrailListingEvaluated bool   `json:"trail_listing_evaluated"`
 	TrailListingErrorCode string `json:"trail_listing_error_code,omitempty"`
 
@@ -540,8 +619,11 @@ type CloudTrailStatus struct {
 	TrailStatusUnknownCount   int  `json:"trail_status_unknown_count"`
 
 	// Audit: present (possibly []) when collected at audit+ and CloudTrail is
-	// enabled; null when not collected or when DescribeTrails failed.
-	Trails []CloudTrailTrail `json:"trails"`
+	// enabled; absent when not collected.
+	Trails []CloudTrailTrail `json:"trails,omitzero"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // CloudTrailTrail is a per-trail audit-level inventory row.
@@ -572,6 +654,9 @@ type CloudTrailTrail struct {
 	// Internal:
 	KMSKeyARN         string `json:"kms_key_arn,omitempty"`
 	CloudWatchLogsARN string `json:"cloudwatch_logs_arn,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // ConfigStatus contains AWS Config status.
@@ -586,17 +671,20 @@ type ConfigStatus struct {
 	RecorderRunning bool `json:"recorder_running"`
 
 	// Audit: present (possibly []) when collected at audit+ and Config is
-	// enabled; null when not collected.
-	Recorders []ConfigRecorderRow `json:"recorders"`
+	// enabled; absent when not collected.
+	Recorders []ConfigRecorderRow `json:"recorders,omitzero"`
 
 	// Internal: rule-by-rule compliance state. Lets a reviewer see which
 	// specific managed or custom rules are firing without needing console
 	// access. Truncated at ConfigRulesCap to keep artifact size bounded.
 	// Present (possibly []) when collected at internal and Config is enabled;
-	// null when not collected. Truncation companions emit at the same level.
-	Rules             []ConfigRuleRow `json:"rules"`
+	// absent when not collected. Truncation companions emit at the same level.
+	Rules             []ConfigRuleRow `json:"rules,omitzero"`
 	RulesTruncated    bool            `json:"rules_truncated"`
 	RulesDroppedCount int             `json:"rules_dropped_count"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // ConfigRecorderRow is a per-recorder audit-level row.
@@ -647,7 +735,10 @@ type AccessAnalyzerStatus struct {
 	AnalyzersWithUnresolvedFindingsCount int `json:"analyzers_with_unresolved_findings_count,omitempty"`
 
 	// Audit:
-	Analyzers []AccessAnalyzerRow `json:"analyzers,omitempty"`
+	Analyzers []AccessAnalyzerRow `json:"analyzers,omitzero"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // AccessAnalyzerRow is an audit-level analyzer inventory row.
@@ -659,6 +750,9 @@ type AccessAnalyzerRow struct {
 	ActiveFindingsCount   int    `json:"active_findings_count"`
 	ArchivedFindingsCount int    `json:"archived_findings_count"`
 	FindingsUnresolved    bool   `json:"findings_unresolved,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // GuardDutyStatus contains GuardDuty status and high-severity finding counts.
@@ -675,17 +769,20 @@ type GuardDutyStatus struct {
 	FindingNotification GuardDutyFindingNotification `json:"finding_notification"`
 
 	// Audit: present (possibly []) when collected at audit+ and GuardDuty is
-	// enabled in at least one region; null when not collected.
-	Detectors []GuardDutyDetectorRow `json:"detectors"`
+	// enabled in at least one region; absent when not collected.
+	Detectors []GuardDutyDetectorRow `json:"detectors,omitzero"`
 
 	// Internal: unarchived high-or-critical findings across all detectors,
 	// suitable for breach-investigation triage. Sorted severity-desc then
 	// updated-desc; truncated per-detector at GuardDutyFindingsCap. Present
-	// (possibly []) when collected at internal; null when not collected.
+	// (possibly []) when collected at internal; absent when not collected.
 	// Truncation companions emit at the same level.
-	Findings             []GuardDutyFindingRow `json:"findings"`
+	Findings             []GuardDutyFindingRow `json:"findings,omitzero"`
 	FindingsTruncated    bool                  `json:"findings_truncated"`
 	FindingsDroppedCount int                   `json:"findings_dropped_count"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // GuardDutyDetectorRow is a per-region GuardDuty detector audit-level row.
@@ -699,6 +796,9 @@ type GuardDutyDetectorRow struct {
 	MalwareScanEnabled                     bool   `json:"malware_scan_enabled"`
 	HighOrCriticalFindings                 int    `json:"high_or_critical_findings"`
 	HighOrCriticalFindingsOlderThan48Hours int    `json:"high_or_critical_findings_older_than_48h"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // GuardDutyFindingRow is a per-finding internal-level row. Severity is the raw
@@ -751,8 +851,8 @@ type GuardDutyFindingNotification struct {
 	AdministratorAccountID                 string         `json:"administrator_account_id,omitempty"`
 
 	// Audit: per-rule rows. Present (possibly []) when collected at audit+;
-	// null when not collected.
-	Rules []GuardDutyNotificationRuleRow `json:"rules"`
+	// absent when not collected.
+	Rules []GuardDutyNotificationRuleRow `json:"rules,omitzero"`
 }
 
 // GuardDutyNotificationRuleRow is a per-rule audit-level row. Topic rows name
@@ -766,6 +866,9 @@ type GuardDutyNotificationRuleRow struct {
 	TargetsByKind     map[string]int                  `json:"targets_by_kind,omitempty"`
 	ReachesSubscriber bool                            `json:"reaches_subscriber"`
 	Topics            []GuardDutyNotificationTopicRow `json:"topics,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // GuardDutyNotificationTopicRow summarises one SNS target's reach as counts.
@@ -790,19 +893,25 @@ type SecurityHubStatus struct {
 	CISAWSFoundationsBenchmarkUnknownLevel CISComplianceByLevel `json:"cis_aws_foundations_benchmark_unknown_level"`
 
 	// Audit: arrays present (possibly []) when collected at audit+ and
-	// SecurityHub is enabled; null when not collected. Scalars retain their
-	// resource-conditional omitempty since false/0 has no meaning when
-	// SecurityHub itself isn't enabled.
+	// SecurityHub is enabled; absent when not collected. AutoEnableControls
+	// retains its resource-conditional omitempty since false has no meaning
+	// when SecurityHub itself isn't enabled. IntegrationCount is nil below
+	// audit, when SecurityHub isn't enabled, or when the read failed, so a 0
+	// that was read is still emitted.
 	AutoEnableControls   bool     `json:"auto_enable_controls,omitempty"`
-	StandardsARNs        []string `json:"standards_arns"`
-	IntegrationCount     int      `json:"integration_count,omitempty"`
-	ProductSubscriptions []string `json:"product_subscriptions"`
+	StandardsARNs        []string `json:"standards_arns,omitzero"`
+	IntegrationCount     *int     `json:"integration_count,omitempty"`
+	ProductSubscriptions []string `json:"product_subscriptions,omitzero"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // CISComplianceByLevel contains compliance details for a CIS benchmark profile level.
 type CISComplianceByLevel struct {
 	Enabled              bool   `json:"enabled"`
-	CompliancePercent    int    `json:"compliance_percent"`
+	ScoredControls       int    `json:"scored_controls"`
+	CompliancePercent    *int   `json:"compliance_percent"`
 	ComplianceState      string `json:"compliance_state"`
 	PassedControls       int    `json:"passed_controls"`
 	FailedControls       int    `json:"failed_controls"`
@@ -818,21 +927,26 @@ type CISComplianceByLevel struct {
 // re-deriving from the percentage.
 type InspectorStatus struct {
 	// Trust: Enabled and UnpatchedServerPercent are meaningful only when
-	// status_evaluated is true. On collection failure they hold zero values
-	// and status_error_code carries the cause. Evaluated true with Enabled
-	// false means Inspector was genuinely observed as not enabled.
+	// status_evaluated is true. On collection failure they are left out and
+	// status_error_code carries the cause. Evaluated true with Enabled false
+	// means Inspector was genuinely observed as not enabled. The percentage
+	// is UnpatchedResources over TotalAffectedResources, null when that is 0.
 	StatusEvaluated bool   `json:"status_evaluated"`
 	StatusErrorCode string `json:"status_error_code,omitempty"`
 
 	Enabled                bool `json:"enabled"`
-	UnpatchedServerPercent int  `json:"unpatched_server_percent"`
+	UnpatchedServerPercent *int `json:"unpatched_server_percent"`
+	TotalAffectedResources int  `json:"total_affected_resources"`
+	UnpatchedResources     int  `json:"unpatched_resources"`
 
-	// Audit:
-	TotalFindings          int `json:"total_findings,omitempty"`
-	PatchedFindings        int `json:"patched_findings,omitempty"`
-	UnpatchedFindings      int `json:"unpatched_findings,omitempty"`
-	TotalAffectedResources int `json:"total_affected_resources,omitempty"`
-	UnpatchedResources     int `json:"unpatched_resources,omitempty"`
+	// Audit: nil below audit or when the read failed, so a 0 that was read
+	// is still emitted.
+	TotalFindings     *int `json:"total_findings,omitempty"`
+	PatchedFindings   *int `json:"patched_findings,omitempty"`
+	UnpatchedFindings *int `json:"unpatched_findings,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // AutoScalingMetrics covers EC2 auto scaling groups: the instance-based
@@ -859,7 +973,7 @@ type AutoScalingMetrics struct {
 	LoadBalancedGroupsWithoutELBHealthCheckCount int `json:"load_balanced_groups_without_elb_health_check_count"`
 	GroupsOnLaunchConfigurationsCount            int `json:"groups_on_launch_configurations_count"`
 
-	Groups []AutoScalingGroupRow `json:"groups,omitempty"`
+	Groups []AutoScalingGroupRow `json:"groups,omitzero"`
 }
 
 // AutoScalingGroupRow is an audit-level group inventory row.
@@ -874,7 +988,7 @@ type AutoScalingGroupRow struct {
 	HealthCheckGracePeriodSeconds int32  `json:"health_check_grace_period_seconds,omitempty"`
 	UsesLaunchTemplate            bool   `json:"uses_launch_template"`
 	LoadBalanced                  bool   `json:"load_balanced"`
-	SuspendedProcessCount         int    `json:"suspended_process_count,omitempty"`
+	SuspendedProcessCount         int    `json:"suspended_process_count"`
 	PolicyCount                   int    `json:"policy_count"`
 }
 
@@ -908,7 +1022,10 @@ type ECSMetrics struct {
 	// the autoscaling and single-task findings rather than counted unscaled.
 	ScalingUnresolvedServiceCount int `json:"scaling_unresolved_service_count,omitempty"`
 
-	Services []ECSServiceRow `json:"services,omitempty"`
+	Services []ECSServiceRow `json:"services,omitzero"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // ECSServiceRow is an audit-level service inventory row.
@@ -929,11 +1046,14 @@ type ECSServiceRow struct {
 	MinimumHealthyPercent         int32    `json:"minimum_healthy_percent,omitempty"`
 	MaximumPercent                int32    `json:"maximum_percent,omitempty"`
 	AssignsPublicIP               bool     `json:"assigns_public_ip"`
-	SubnetCount                   int      `json:"subnet_count,omitempty"`
+	SubnetCount                   int      `json:"subnet_count"`
 	LoadBalanced                  bool     `json:"load_balanced"`
 	ExecuteCommandEnabled         bool     `json:"execute_command_enabled"`
 	HealthCheckGracePeriodSeconds int32    `json:"health_check_grace_period_seconds,omitempty"`
 	ScalingUnresolved             bool     `json:"scaling_unresolved,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // SESMetrics covers outbound mail transport enforcement. SES attempts TLS on
@@ -954,8 +1074,11 @@ type SESMetrics struct {
 	SendingDisabledIdentityCount int `json:"sending_disabled_identity_count"`
 	IdentitiesUnresolvedCount    int `json:"identities_unresolved_count,omitempty"`
 
-	ConfigurationSets []SESConfigurationSetRow `json:"configuration_sets,omitempty"`
-	Identities        []SESIdentityRow         `json:"identities,omitempty"`
+	ConfigurationSets []SESConfigurationSetRow `json:"configuration_sets,omitzero"`
+	Identities        []SESIdentityRow         `json:"identities,omitzero"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // SESConfigurationSetRow is an audit-level configuration set row.
@@ -964,6 +1087,9 @@ type SESConfigurationSetRow struct {
 	Region     string `json:"region"`
 	TLSPolicy  string `json:"tls_policy,omitempty"`
 	Unresolved bool   `json:"unresolved,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // SESIdentityRow is an audit-level sending identity row.
@@ -975,6 +1101,9 @@ type SESIdentityRow struct {
 	DefaultConfigurationSet string `json:"default_configuration_set,omitempty"`
 	DefaultRequiresTLS      bool   `json:"default_requires_tls"`
 	Unresolved              bool   `json:"unresolved,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // WAFMetrics covers WAFv2 coverage of the account's internet-facing entry
@@ -990,21 +1119,26 @@ type WAFMetrics struct {
 	RegionsEvaluatedCount    int  `json:"regions_evaluated_count"`
 	CloudFrontScopeEvaluated bool `json:"cloudfront_scope_evaluated"`
 
-	// Coverage pairs: the denominator plus the share, so an empty fleet's 0%
-	// is legible. Exact protected counts live on the audit rows.
-	InternetFacingALBCount       int `json:"internet_facing_alb_count"`
-	InternetFacingALBCoveragePct int `json:"internet_facing_alb_coverage_pct"`
+	// Coverage triples: the population, the covered count, and the share,
+	// so an empty fleet's missing share is legible.
+	InternetFacingALBCount        int  `json:"internet_facing_alb_count"`
+	CoveredInternetFacingALBCount int  `json:"covered_internet_facing_alb_count"`
+	InternetFacingALBCoveragePct  *int `json:"internet_facing_alb_coverage_pct"`
 
-	EnabledDistributionCount int `json:"enabled_distribution_count"`
-	DistributionCoveragePct  int `json:"distribution_coverage_pct"`
+	EnabledDistributionCount int  `json:"enabled_distribution_count"`
+	CoveredDistributionCount int  `json:"covered_distribution_count"`
+	DistributionCoveragePct  *int `json:"distribution_coverage_pct"`
 
 	// RateLimitingEnforced is true when at least one web ACL with an attached
 	// resource carries an active rate-based rule whose action is block.
 	RateLimitingEnforced bool `json:"rate_limiting_enforced"`
 
-	WebACLs             []WebACLRow `json:"web_acls,omitempty"`
+	WebACLs             []WebACLRow `json:"web_acls,omitzero"`
 	WebACLsTruncated    bool        `json:"web_acls_truncated"`
 	WebACLsDroppedCount int         `json:"web_acls_dropped_count"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // WebACLRow is an audit-level web ACL inventory row. Arn, associated resource
@@ -1022,6 +1156,9 @@ type WebACLRow struct {
 	Arn                    string   `json:"arn,omitempty"`
 	AssociatedResourceArns []string `json:"associated_resource_arns,omitempty"`
 	LoggingDestinationArn  string   `json:"logging_destination_arn,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // WAFRuleRow is one rule's enforcement posture within a web ACL.
@@ -1060,7 +1197,10 @@ type CloudFrontMetrics struct {
 
 	DistributionsByMinimumTLS map[string]int `json:"distributions_by_minimum_tls,omitempty"`
 
-	Distributions []CloudFrontDistributionRow `json:"distributions,omitempty"`
+	Distributions []CloudFrontDistributionRow `json:"distributions,omitzero"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // CloudFrontDistributionRow is an audit-level distribution inventory row.
@@ -1071,10 +1211,10 @@ type CloudFrontDistributionRow struct {
 	Enabled                bool     `json:"enabled"`
 	AllowsPlaintextViewers bool     `json:"allows_plaintext_viewers"`
 	MinimumProtocolVersion string   `json:"minimum_protocol_version,omitempty"`
-	HTTPOnlyOriginCount    int      `json:"http_only_origin_count,omitempty"`
-	MatchViewerOriginCount int      `json:"match_viewer_origin_count,omitempty"`
-	HTTPSOnlyOriginCount   int      `json:"https_only_origin_count,omitempty"`
-	S3OriginCount          int      `json:"s3_origin_count,omitempty"`
+	HTTPOnlyOriginCount    int      `json:"http_only_origin_count"`
+	MatchViewerOriginCount int      `json:"match_viewer_origin_count"`
+	HTTPSOnlyOriginCount   int      `json:"https_only_origin_count"`
+	S3OriginCount          int      `json:"s3_origin_count"`
 }
 
 // LoadBalancerMetrics covers load balancer transport enforcement: which hops
@@ -1110,8 +1250,11 @@ type LoadBalancerMetrics struct {
 	// posture is unproven rather than clean.
 	ListenersUnresolvedCount int `json:"listeners_unresolved_count,omitempty"`
 
-	LoadBalancers []LoadBalancerRow `json:"load_balancers,omitempty"`
-	TargetGroups  []TargetGroupRow  `json:"target_groups,omitempty"`
+	LoadBalancers []LoadBalancerRow `json:"load_balancers,omitzero"`
+	TargetGroups  []TargetGroupRow  `json:"target_groups,omitzero"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // LoadBalancerRow is an audit-level load balancer inventory row.
@@ -1123,6 +1266,9 @@ type LoadBalancerRow struct {
 	AvailabilityZoneCount int           `json:"availability_zone_count"`
 	Listeners             []ListenerRow `json:"listeners,omitempty"`
 	ListenersUnresolved   bool          `json:"listeners_unresolved,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // TargetGroupRow is an audit-level target group row: how the load balancer
@@ -1165,8 +1311,11 @@ type StoredImageMetrics struct {
 	ImageExposureUnknown             bool `json:"image_exposure_unknown,omitempty"`
 
 	// Audit: only the exposed resources, which are the actionable ones.
-	PublicSnapshots []PublicResourceRow `json:"public_snapshots,omitempty"`
-	PublicImages    []PublicResourceRow `json:"public_images,omitempty"`
+	PublicSnapshots []PublicResourceRow `json:"public_snapshots,omitzero"`
+	PublicImages    []PublicResourceRow `json:"public_images,omitzero"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // PublicResourceRow identifies a resource anyone can read.
@@ -1202,9 +1351,12 @@ type MonitoringMetrics struct {
 	SubscriptionsByProtocol               map[string]int `json:"subscriptions_by_protocol,omitempty"`
 	SubscriptionsPendingConfirmationCount int            `json:"subscriptions_pending_confirmation_count"`
 
-	Alarms             []CloudWatchAlarmRow `json:"alarms,omitempty"`
+	Alarms             []CloudWatchAlarmRow `json:"alarms,omitzero"`
 	AlarmsTruncated    bool                 `json:"alarms_truncated,omitempty"`
 	AlarmsDroppedCount int                  `json:"alarms_dropped_count,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // CloudWatchAlarmRow is an audit-level alarm definition.
@@ -1220,7 +1372,10 @@ type CloudWatchAlarmRow struct {
 	StateValue         string   `json:"state_value"`
 	NotificationTopics int      `json:"notification_topics"`
 	ReachesSubscriber  bool     `json:"reaches_subscriber"`
-	OtherActionCount   int      `json:"other_action_count,omitempty"`
+	OtherActionCount   int      `json:"other_action_count"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // IAMPasswordPolicy is the account password policy for IAM console sign-in.
@@ -1259,22 +1414,25 @@ type IdentityCenterStatus struct {
 	InstanceARN        string `json:"instance_arn,omitempty"`
 	InstanceRegion     string `json:"instance_region,omitempty"`
 	IdentityStoreID    string `json:"identity_store_id,omitempty"`
-	UserCount          int    `json:"user_count,omitempty"`
-	GroupCount         int    `json:"group_count,omitempty"`
-	PermissionSetCount int    `json:"permission_set_count,omitempty"`
+	UserCount          int    `json:"user_count"`
+	GroupCount         int    `json:"group_count"`
+	PermissionSetCount int    `json:"permission_set_count"`
 
 	// Audit: present (possibly []) when collected at audit+ and IdC is
-	// enabled; null when not collected at this level. AccountAssignments rows
+	// enabled; absent when not collected at this level. AccountAssignments rows
 	// are meaningful only when assignments_evaluated is true: on listing
 	// failure the array is empty, the marker is false, and a diagnostic names
 	// the cause. Truncation companions emit at the same level.
-	PermissionSets          []IdentityCenterPermissionSetRow `json:"permission_sets"`
-	Users                   []IdentityCenterUserRow          `json:"users"`
-	Groups                  []IdentityCenterGroupRow         `json:"groups"`
-	AccountAssignments      []IdentityCenterAssignmentRow    `json:"account_assignments"`
+	PermissionSets          []IdentityCenterPermissionSetRow `json:"permission_sets,omitzero"`
+	Users                   []IdentityCenterUserRow          `json:"users,omitzero"`
+	Groups                  []IdentityCenterGroupRow         `json:"groups,omitzero"`
+	AccountAssignments      []IdentityCenterAssignmentRow    `json:"account_assignments,omitzero"`
 	AssignmentsEvaluated    bool                             `json:"assignments_evaluated"`
 	AssignmentsTruncated    bool                             `json:"assignments_truncated"`
 	AssignmentsDroppedCount int                              `json:"assignments_dropped_count"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // IdentityCenterPermissionSetRow is a per-permission-set audit-level row.
@@ -1314,6 +1472,9 @@ type IdentityCenterGroupRow struct {
 	Description   string   `json:"description,omitempty"`
 	MemberCount   int      `json:"member_count"`
 	MemberUserIDs []string `json:"member_user_ids"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // IdentityCenterAssignmentRow is one principal-to-permission-set-to-account
@@ -1339,14 +1500,17 @@ type LambdaMetrics struct {
 	FunctionCount          int `json:"function_count"`
 	DeprecatedRuntimeCount int `json:"deprecated_runtime_count"`
 
-	// Audit: array present (possibly []) when collected at audit+; null when
+	// Audit: array present (possibly []) when collected at audit+; absent when
 	// not collected. PublicFunctionURLCount is an audit-only enrichment
 	// (requires per-function URL config calls). Truncation companions emit
 	// at the same level.
-	PublicFunctionURLCount int                 `json:"public_function_url_count,omitempty"`
-	Functions              []LambdaFunctionRow `json:"functions"`
+	PublicFunctionURLCount *int                `json:"public_function_url_count,omitempty"`
+	Functions              []LambdaFunctionRow `json:"functions,omitzero"`
 	FunctionsTruncated     bool                `json:"functions_truncated"`
 	FunctionsDroppedCount  int                 `json:"functions_dropped_count"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // LambdaFunctionRow is a per-function audit-level row. Internal-level fields
@@ -1380,6 +1544,9 @@ type LambdaFunctionRow struct {
 	PackageType   string   `json:"package_type,omitempty"`
 	DeadLetterARN string   `json:"dead_letter_arn,omitempty"`
 	EnvVarNames   []string `json:"env_var_names,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // EC2Metrics contains EC2 posture across all collected regions.
@@ -1403,11 +1570,14 @@ type EC2Metrics struct {
 	UnattachedVolumeCount            int `json:"unattached_volume_count"`
 	UnattachedUnencryptedVolumeCount int `json:"unattached_unencrypted_volume_count"`
 
-	// Audit: present (possibly []) when collected at audit+; null when not
+	// Audit: present (possibly []) when collected at audit+; absent when not
 	// collected. Truncation companions emit at the same level.
-	Instances             []EC2InstanceRow `json:"instances"`
+	Instances             []EC2InstanceRow `json:"instances,omitzero"`
 	InstancesTruncated    bool             `json:"instances_truncated"`
 	InstancesDroppedCount int              `json:"instances_dropped_count"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // EC2InstanceRow is a per-instance audit-level row. Internal-level fields
@@ -1440,6 +1610,9 @@ type EC2InstanceRow struct {
 	KeyName               string            `json:"key_name,omitempty"`
 	Tags                  map[string]string `json:"tags,omitempty"`
 	AttachedVolumeIDs     []string          `json:"attached_volume_ids,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // CloudWatchLogsMetrics contains CloudWatch Logs posture across all collected
@@ -1462,9 +1635,9 @@ type CloudWatchLogsMetrics struct {
 	LogGroupsWithoutRetentionCount   int `json:"log_groups_without_retention_count"`
 	LogGroupsWithoutCustomerKMSCount int `json:"log_groups_without_customer_kms_count"`
 
-	// Audit: present (possibly []) when collected at audit+; null when not
+	// Audit: present (possibly []) when collected at audit+; absent when not
 	// collected. Truncation companions emit at the same level.
-	LogGroups             []CloudWatchLogGroupRow `json:"log_groups"`
+	LogGroups             []CloudWatchLogGroupRow `json:"log_groups,omitzero"`
 	LogGroupsTruncated    bool                    `json:"log_groups_truncated"`
 	LogGroupsDroppedCount int                     `json:"log_groups_dropped_count"`
 }
@@ -1502,11 +1675,14 @@ type KMSMetrics struct {
 	CMKsWithRotationDisabledCount int `json:"cmks_with_rotation_disabled_count"`
 	CMKsPendingDeletionCount      int `json:"cmks_pending_deletion_count"`
 
-	// Audit: present (possibly []) when collected at audit+; null when not
+	// Audit: present (possibly []) when collected at audit+; absent when not
 	// collected. Truncation companions emit at the same level.
-	Keys             []KMSKeyRow `json:"keys"`
+	Keys             []KMSKeyRow `json:"keys,omitzero"`
 	KeysTruncated    bool        `json:"keys_truncated"`
 	KeysDroppedCount int         `json:"keys_dropped_count"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // KMSKeyRow is a per-CMK audit-level row. Internal-level fields (Description)
@@ -1532,6 +1708,9 @@ type KMSKeyRow struct {
 
 	// Internal:
 	Description string `json:"description,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // SecretsManagerMetrics contains Secrets Manager posture across all collected
@@ -1549,9 +1728,9 @@ type SecretsManagerMetrics struct {
 	SecretsWithoutCustomerKMSCount int `json:"secrets_without_customer_kms_count"`
 	SecretsPendingDeletionCount    int `json:"secrets_pending_deletion_count"`
 
-	// Audit: present (possibly []) when collected at audit+; null when not
+	// Audit: present (possibly []) when collected at audit+; absent when not
 	// collected. Truncation companions emit at the same level.
-	Secrets             []SecretsManagerSecretRow `json:"secrets"`
+	Secrets             []SecretsManagerSecretRow `json:"secrets,omitzero"`
 	SecretsTruncated    bool                      `json:"secrets_truncated"`
 	SecretsDroppedCount int                       `json:"secrets_dropped_count"`
 }
@@ -1600,9 +1779,9 @@ type SSMParametersMetrics struct {
 	SecureStringCount                    int `json:"secure_string_count"`
 	SecureStringsWithoutCustomerKMSCount int `json:"secure_strings_without_customer_kms_count"`
 
-	// Audit: present (possibly []) when collected at audit+; null when not
+	// Audit: present (possibly []) when collected at audit+; absent when not
 	// collected. Truncation companions emit at the same level.
-	Parameters             []SSMParameterRow `json:"parameters"`
+	Parameters             []SSMParameterRow `json:"parameters,omitzero"`
 	ParametersTruncated    bool              `json:"parameters_truncated"`
 	ParametersDroppedCount int               `json:"parameters_dropped_count"`
 }
@@ -1634,10 +1813,10 @@ type SSMParameterRow struct {
 }
 
 // NewOutput creates a new Output with the current timestamp.
-func NewOutput() *Output {
+func NewOutput(now time.Time) *Output {
 	return &Output{
 		SchemaVersion: SchemaVersion,
-		CollectedAt:   time.Now().UTC().Format(time.RFC3339),
+		CollectedAt:   now.UTC().Format(time.RFC3339),
 		Accounts:      []AccountPosture{},
 	}
 }

@@ -23,6 +23,9 @@ type LoadBalancer struct {
 
 	Listeners []LoadBalancerListener
 
+	// ListenersErr is why the listeners could not be read.
+	ListenersErr error
+
 	// ListenersUnresolved marks a load balancer whose listeners could not be
 	// read. It stays in the result so its transport posture can be reported as
 	// unproven rather than silently dropped.
@@ -96,6 +99,7 @@ func (c *AWSClient) ListLoadBalancers(ctx context.Context, region string) ([]Loa
 			listeners, err := c.listListeners(ctx, client, aws.ToString(lb.LoadBalancerArn), region)
 			if err != nil {
 				row.ListenersUnresolved = true
+				row.ListenersErr = err
 			} else {
 				row.Listeners = listeners
 			}

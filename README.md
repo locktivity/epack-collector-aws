@@ -145,9 +145,14 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
       "regions": ["us-east-1", "us-west-2"],
       "iam": {
         "iam_users_present": true,
+        "iam_user_count": 20,
+        "access_key_user_count": 5,
         "mfa_enabled": 95,
+        "mfa_enabled_user_count": 19,
         "hardware_mfa_enabled": 0,
+        "hardware_mfa_enabled_user_count": 0,
         "access_keys_rotated": 80,
+        "access_keys_rotated_user_count": 4,
         "root_mfa_enabled": true,
         "root_credentials_present": true,
         "root_password_present": true,
@@ -160,26 +165,42 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
         "root_sessions_feature_enabled": true
       },
       "s3": {
+        "bucket_count": 20,
         "public_access_blocked": 100,
+        "public_access_blocked_bucket_count": 20,
         "default_encryption_enabled": 95,
+        "default_encryption_enabled_bucket_count": 19,
         "default_encryption_evaluated_count": 20,
         "default_encryption_inferred_count": 0,
         "default_encryption_unknown_count": 0,
         "versioning_enabled": 60,
-        "logging_enabled": 40,
+        "versioning_enabled_bucket_count": 12,
+        "logging_enabled": 44,
+        "logging_enabled_bucket_count": 8,
         "log_sink_bucket_count": 2,
+        "logging_required_bucket_count": 18,
         "account_public_access_block_enabled": true
       },
       "rds": {
+        "database_count": 10,
+        "instance_count": 8,
         "encrypted_at_rest": 100,
+        "encrypted_at_rest_database_count": 10,
         "publicly_accessible": 0,
+        "publicly_accessible_instance_count": 0,
         "deletion_protection": 90,
+        "deletion_protection_database_count": 9,
         "backup_retention_adequate": 100,
-        "multi_az_enabled": 80
+        "backup_retention_adequate_database_count": 10,
+        "multi_az_enabled": 80,
+        "multi_az_enabled_database_count": 8
       },
       "network": {
+        "security_group_count": 50,
         "open_to_world_ssh": 2,
-        "open_to_world_rdp": 0
+        "open_to_world_ssh_security_group_count": 1,
+        "open_to_world_rdp": 0,
+        "open_to_world_rdp_security_group_count": 0
       },
       "account_security": {
         "cloudtrail": {
@@ -207,6 +228,7 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
           "enabled": true,
           "cis_aws_foundations_benchmark_level_1": {
             "enabled": true,
+            "scored_controls": 50,
             "compliance_percent": 88,
             "compliance_state": "WARNING",
             "passed_controls": 44,
@@ -216,6 +238,7 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
           },
           "cis_aws_foundations_benchmark_level_2": {
             "enabled": true,
+            "scored_controls": 67,
             "compliance_percent": 82,
             "compliance_state": "FAILED",
             "passed_controls": 55,
@@ -225,6 +248,7 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
           },
           "cis_aws_foundations_benchmark_unknown_level": {
             "enabled": true,
+            "scored_controls": 10,
             "compliance_percent": 90,
             "compliance_state": "FAILED",
             "passed_controls": 9,
@@ -235,7 +259,9 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
         },
         "inspector": {
           "enabled": true,
-          "unpatched_server_percent": 25
+          "unpatched_server_percent": 25,
+          "total_affected_resources": 8,
+          "unpatched_resources": 2
         }
       },
       "identity_center": {
@@ -286,6 +312,27 @@ Trust-level fields are always present. Audit and internal levels add
 inside each surface — see [docs/levels.md](docs/levels.md) for the
 artifact contract and per-surface field breakdowns.
 
+Each percentage is a whole number rounded down, with the count it is taken of
+beside it, such as `mfa_enabled_user_count` for `mfa_enabled`, and the count it
+is over, such as `iam_user_count`.
+
+A value the collector could not read, such as a percentage whose source call
+was denied, is null. The run's result artifact
+(`artifacts/aws.collector-result.json` under the default collector name)
+records each value left out with a code such as `permission_denied` or
+`rate_limited`, and the AWS call that failed. When AWS's denial names the IAM
+action, the gap names it in `missing_permission`, and its warning says where
+to allow it. A percentage over an empty population, such as `mfa_enabled` with
+no IAM users or `public_access_blocked` with no buckets, is also null, and the
+count it is over is 0. The result also records the steps of the run and the
+identity the collector signed in as, with `auth_method` set to
+`workload_identity` for a role assumed with a web identity token or
+`access_key` for static access keys. The run fails only when its configuration
+is invalid or no configured account can be signed in to, and its exit code
+then says why: a rejected token or access key exits 3 with `auth_failed`. An
+account that fails to sign in while others succeed is listed under
+`failed_accounts`.
+
 ## Upgrading from v0.1.x
 
 The v0.2.x line is backward-compatible at the schema layer: all new fields
@@ -304,16 +351,17 @@ What's new:
 - **`level` config knob** is added; default is `trust` (zero behavior change
   from v0.1.x if omitted).
 - **Existing surfaces gain inventory arrays** at audit/internal level
-  (`iam.users`, `s3.buckets`, etc.). At trust level these emit as `null`
-  for the "collected vs not collected" contract — see
-  [docs/levels.md](docs/levels.md#artifact-contract-null-vs--vs-).
+  (`iam.users`, `s3.buckets`, etc.). At trust level they are absent, for
+  the "collected vs not collected" contract. See
+  [docs/levels.md](docs/levels.md#artifact-contract-absent-vs--vs-).
 
 What you may need to do:
 
 - **Update your IAM role** to include the new permissions if you want to
   run at `audit` or `internal` level (see the
   [Required IAM Permissions](#required-iam-permissions) section). Without
-  them the new surfaces emit zeros with an AccessDenied diagnostic warning.
+  them the new surfaces' values are null, recorded as `permission_denied`,
+  with a diagnostic warning.
 - **No code change** needed for consumers that ignore unknown fields.
 
 ## Development
@@ -327,6 +375,12 @@ make test
 
 # Lint
 make lint
+
+# Conformance at the epack version go.mod pins, as CI runs it
+make conformance
+
+# Rewrite docs/schema/trace-map.json after changing collector code or tests
+make trace-map
 
 # SDK conformance test
 make sdk-test

@@ -24,6 +24,20 @@ func TestAnalyzeSecurityGroupExposure(t *testing.T) {
 	}
 }
 
+// A rule for all traffic (protocol -1) names no ports, so open to the world
+// it exposes SSH and RDP alike.
+func TestAnalyzeSecurityGroupExposure_AllTrafficOpenToWorld(t *testing.T) {
+	open := aws.SecurityGroup{IngressRules: []aws.SecurityGroupRule{{Protocol: "-1", CIDRBlocks: []string{"::/0"}}}}
+	if got := analyzeSecurityGroupExposure(open); !got.hasOpenSSH || !got.hasOpenRDP {
+		t.Fatalf("all traffic from ::/0: exposure = %+v, want SSH and RDP open", got)
+	}
+
+	internal := aws.SecurityGroup{IngressRules: []aws.SecurityGroupRule{{Protocol: "-1", CIDRBlocks: []string{"10.0.0.0/8"}}}}
+	if got := analyzeSecurityGroupExposure(internal); got.hasOpenSSH || got.hasOpenRDP {
+		t.Fatalf("all traffic from 10.0.0.0/8: exposure = %+v, want neither open", got)
+	}
+}
+
 func TestAnalyzeSecurityGroups(t *testing.T) {
 	sgs := []aws.SecurityGroup{
 		{
@@ -52,45 +66,41 @@ func TestAnalyzeSecurityGroups(t *testing.T) {
 	}
 }
 
-func TestWeightedAverage(t *testing.T) {
-	if got := weightedAverage(50, 2, 100, 2); got != 75 {
-		t.Fatalf("expected 75, got %d", got)
-	}
-	if got := weightedAverage(1, 0, 99, 0); got != 0 {
-		t.Fatalf("expected 0 for zero total weight, got %d", got)
-	}
-}
-
 func TestMergeNetworkMetrics(t *testing.T) {
 	a := networkMetricsWithCounts{
-		NetworkMetrics: NetworkMetrics{
-			OpenToWorldSSH: 50,
-			OpenToWorldRDP: 100,
-		},
 		vpcCount:           2,
 		securityGroupCount: 2,
+		openSSH:            1,
+		openRDP:            2,
 	}
 	b := networkMetricsWithCounts{
-		NetworkMetrics: NetworkMetrics{
-			OpenToWorldSSH: 0,
-			OpenToWorldRDP: 0,
-		},
 		vpcCount:           2,
 		securityGroupCount: 2,
 	}
 
 	got := mergeNetworkMetrics(a, b)
-	if got.OpenToWorldSSH != 25 {
-		t.Fatalf("expected OpenToWorldSSH=25, got %d", got.OpenToWorldSSH)
+	got.finalize()
+	if !pctIs(got.OpenToWorldSSH, 25) {
+		t.Fatalf("expected OpenToWorldSSH=25, got %s", showPct(got.OpenToWorldSSH))
 	}
-	if got.OpenToWorldRDP != 50 {
-		t.Fatalf("expected OpenToWorldRDP=50, got %d", got.OpenToWorldRDP)
+	if !pctIs(got.OpenToWorldRDP, 50) {
+		t.Fatalf("expected OpenToWorldRDP=50, got %s", showPct(got.OpenToWorldRDP))
+	}
+	if got.SecurityGroupCount != 4 {
+		t.Fatalf("expected SecurityGroupCount=4, got %d", got.SecurityGroupCount)
 	}
 	if got.vpcCount != 4 {
 		t.Fatalf("expected vpcCount=4, got %d", got.vpcCount)
 	}
 	if got.securityGroupCount != 4 {
 		t.Fatalf("expected securityGroupCount=4, got %d", got.securityGroupCount)
+	}
+
+	// No security groups anywhere is no population, not 0% exposed.
+	empty := networkMetricsWithCounts{}
+	empty.finalize()
+	if empty.OpenToWorldSSH != nil || empty.OpenToWorldRDP != nil {
+		t.Fatalf("expected null exposure with no security groups, got %s and %s", showPct(empty.OpenToWorldSSH), showPct(empty.OpenToWorldRDP))
 	}
 }
 

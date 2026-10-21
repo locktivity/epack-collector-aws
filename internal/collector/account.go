@@ -10,29 +10,33 @@ import (
 	"github.com/locktivity/epack/componentsdk"
 )
 
-// collectAccountSecurity collects account-level security service status.
-// level is passed through to per-service collectors that gate audit / internal fields.
-func (c *Collector) collectAccountSecurity(ctx context.Context, client *aws.AWSClient, primaryRegion string, regions []string, accountID string, level componentsdk.Level) *AccountSecurity {
+// collectAccountSecurity collects account-level security service status,
+// each service as a step. level is passed through to per-service collectors
+// that gate audit / internal fields.
+func (c *Collector) collectAccountSecurity(steps *stepper, client *aws.AWSClient, primaryRegion string, regions []string, accountID string, at at, s3 *S3Metrics, level componentsdk.Level) *AccountSecurity {
 	security := &AccountSecurity{}
 
-	c.status("Checking CloudTrail...")
-	trails := c.collectCloudTrailStatus(ctx, client, accountID, &security.CloudTrail, level)
-	c.resolveTrailBucketRetention(ctx, client, accountID, trails, &security.CloudTrail)
+	ctx := steps.next("cloudtrail", "CloudTrail trails")
+	trailsAt := at.sub("account_security", "cloudtrail")
+	trails := c.collectCloudTrailStatus(ctx, client, accountID, trailsAt, &security.CloudTrail, level)
+	c.resolveTrailBucketRetention(ctx, client, accountID, trailsAt, trails, s3, &security.CloudTrail)
+	c.recordCloudTrailUnread(trailsAt, &security.CloudTrail)
 
-	c.status("Checking AWS Config...")
-	c.collectConfigStatus(ctx, client, primaryRegion, accountID, &security.Config, level)
+	c.collectConfigStatus(steps.next("config", "AWS Config"), client, primaryRegion, accountID, &security.Config, level)
+	c.collectGuardDutyStatus(steps.next("guardduty", "GuardDuty"), client, regions, accountID, &security.GuardDuty, level)
+	c.collectAccessAnalyzerStatus(steps.next("access_analyzer", "IAM Access Analyzer"), client, regions, accountID, &security.AccessAnalyzer, level)
+	c.collectSecurityHubStatus(steps.next("security_hub", "Security Hub"), client, primaryRegion, accountID, &security.SecurityHub, level)
+	c.collectInspectorStatus(steps.next("inspector", "Inspector"), client, primaryRegion, accountID, &security.Inspector, level)
 
-	c.status("Checking GuardDuty...")
-	c.collectGuardDutyStatus(ctx, client, regions, accountID, &security.GuardDuty, level)
-
-	c.status("Checking IAM Access Analyzer...")
-	c.collectAccessAnalyzerStatus(ctx, client, regions, accountID, &security.AccessAnalyzer, level)
-
-	c.status("Checking Security Hub...")
-	c.collectSecurityHubStatus(ctx, client, primaryRegion, accountID, &security.SecurityHub, level)
-
-	c.status("Checking Inspector...")
-	c.collectInspectorStatus(ctx, client, primaryRegion, accountID, &security.Inspector, level)
+	secAt := at.sub("account_security")
+	c.recordUnread(secAt.sub("config"), security.Config.missing)
+	c.recordUnread(secAt.sub("guardduty"), security.GuardDuty.missing)
+	recordRowsUnread(c, secAt.sub("guardduty", "detectors"), security.GuardDuty.Detectors, func(r *GuardDutyDetectorRow) unread { return r.missing })
+	recordRowsUnread(c, secAt.sub("guardduty", "finding_notification", "rules"), security.GuardDuty.FindingNotification.Rules, func(r *GuardDutyNotificationRuleRow) unread { return r.missing })
+	c.recordUnread(secAt.sub("access_analyzer"), security.AccessAnalyzer.missing)
+	recordRowsUnread(c, secAt.sub("access_analyzer", "analyzers"), security.AccessAnalyzer.Analyzers, func(r *AccessAnalyzerRow) unread { return r.missing })
+	c.recordUnread(secAt.sub("security_hub"), security.SecurityHub.missing)
+	c.recordUnread(secAt.sub("inspector"), security.Inspector.missing)
 
 	return security
 }
@@ -43,14 +47,22 @@ type trailDescriber interface {
 	DescribeTrails(ctx context.Context) ([]aws.Trail, error)
 }
 
-// collectCloudTrailStatus collects CloudTrail configuration status.
-func (c *Collector) collectCloudTrailStatus(ctx context.Context, client trailDescriber, accountID string, status *CloudTrailStatus, level componentsdk.Level) []aws.Trail {
+// collectCloudTrailStatus collects CloudTrail configuration status. When the
+// trails cannot be listed, every value that depends on them is left out.
+func (c *Collector) collectCloudTrailStatus(ctx context.Context, client trailDescriber, accountID string, at at, status *CloudTrailStatus, level componentsdk.Level) []aws.Trail {
 	trails, err := client.DescribeTrails(ctx)
 	if err != nil {
 		var statusErr *aws.TrailStatusUnavailableError
 		if !errors.As(err, &statusErr) || len(trails) == 0 {
 			status.TrailListingErrorCode = apiErrorCode(err)
 			c.warn("account %s: failed to collect CloudTrail status: %v", accountID, err)
+			status.missing.add(err, "enabled", "multi_region_enabled", "organization_trail_enabled")
+			status.missing.add(err, trailRetentionCounts...)
+			status.missing.add(err, trailObjectLockCounts...)
+			status.missing.add(err, trailPublicAccessCounts...)
+			if level.AtLeast(componentsdk.LevelAudit) {
+				status.missing.add(err, "trails")
+			}
 			return nil
 		}
 		c.warn("account %s: failed to collect one or more CloudTrail trail statuses: %v", accountID, err)
@@ -65,6 +77,9 @@ func (c *Collector) collectCloudTrailStatus(ctx context.Context, client trailDes
 	return trails
 }
 
+// summarizeCloudTrailStatus sets whether a trail is logging, a multi-region
+// one, and an organization one. A trail whose status is unknown leaves a flag
+// unknown unless another trail already settles it.
 func summarizeCloudTrailStatus(status *CloudTrailStatus, trails []aws.Trail) {
 	trails = dedupeTrails(trails)
 	for _, trail := range trails {
@@ -86,6 +101,27 @@ func summarizeCloudTrailStatus(status *CloudTrailStatus, trails []aws.Trail) {
 			status.OrganizationTrailEnabled = true
 		}
 	}
+	for _, trail := range trails {
+		if trail.StatusErr == nil {
+			continue
+		}
+		if !status.Enabled {
+			status.missing.addPartial(trail.StatusErr, 1, "enabled")
+		}
+		if trail.IsMultiRegionTrail && !status.MultiRegionEnabled {
+			status.missing.addPartial(trail.StatusErr, 1, "multi_region_enabled")
+		}
+		if trail.IsOrganizationTrail && !status.OrganizationTrailEnabled {
+			status.missing.addPartial(trail.StatusErr, 1, "organization_trail_enabled")
+		}
+	}
+}
+
+// recordCloudTrailUnread writes the CloudTrail values a failed read left
+// unknown as gaps.
+func (c *Collector) recordCloudTrailUnread(at at, status *CloudTrailStatus) {
+	c.recordUnread(at, status.missing)
+	recordRowsUnread(c, at.sub("trails"), status.Trails, func(r *CloudTrailTrail) unread { return r.missing })
 }
 
 // trailsToInventory projects the trail list onto per-trail rows. Audit emits
@@ -112,6 +148,7 @@ func trailsToInventory(trails []aws.Trail, level componentsdk.Level) []CloudTrai
 			TrailStatusInferred:      t.TrailStatusInferred,
 			TrailStatusErrorCode:     t.TrailStatusErrorCode,
 		}
+		row.missing.add(t.StatusErr, "is_logging")
 		if level.AtLeast(componentsdk.LevelInternal) {
 			if t.KMSKeyId != nil {
 				row.KMSKeyARN = *t.KMSKeyId
@@ -163,11 +200,19 @@ func shouldReplaceDuplicateTrail(existing, candidate aws.Trail) bool {
 	return false
 }
 
-// collectConfigStatus collects AWS Config status.
+// collectConfigStatus collects AWS Config status. A failed read leaves the
+// values that depend on it out.
 func (c *Collector) collectConfigStatus(ctx context.Context, client *aws.AWSClient, region string, accountID string, status *ConfigStatus, level componentsdk.Level) {
 	recorders, err := client.DescribeConfigRecorders(ctx, region)
 	if err != nil {
 		c.warn("account %s: failed to collect AWS Config status: %v", accountID, err)
+		status.missing.add(err, "enabled", "recorder_running")
+		if level.AtLeast(componentsdk.LevelAudit) {
+			status.missing.add(err, "recorders")
+		}
+		if level.AtLeast(componentsdk.LevelInternal) {
+			status.missing.add(err, "rules")
+		}
 		return
 	}
 	if len(recorders) == 0 {
@@ -189,6 +234,7 @@ func (c *Collector) collectConfigStatus(ctx context.Context, client *aws.AWSClie
 		rules, err := client.ListConfigRules(ctx, region)
 		if err != nil {
 			c.warn("account %s: failed to collect AWS Config rules: %v", accountID, err)
+			status.missing.add(err, "rules")
 			return
 		}
 		rows := configRulesToInventory(rules, region)
@@ -250,6 +296,7 @@ type guardDutyRegionScan struct {
 	listErr      error
 	notification guardDutyNotificationScan
 	findings     []GuardDutyFindingRow
+	findingsErr  error
 	truncated    bool
 	dropped      int
 	warnings     []string
@@ -259,7 +306,7 @@ type guardDutyRegionScan struct {
 // their findings. It runs on its own Collector copy so concurrent regions
 // buffer warnings independently; the caller replays them in region order.
 func (c *Collector) scanGuardDutyRegion(ctx context.Context, client *aws.AWSClient, region, accountID string, level componentsdk.Level) guardDutyRegionScan {
-	rc := &Collector{config: c.config, tokenSource: c.tokenSource}
+	rc := c.regionCopy()
 	var s guardDutyRegionScan
 
 	s.detectors, s.listErr = client.ListGuardDutyDetectors(ctx, region)
@@ -279,6 +326,9 @@ func (c *Collector) scanGuardDutyRegion(ctx context.Context, client *aws.AWSClie
 			findings, truncated, err := client.ListGuardDutyFindings(ctx, region, d.DetectorID, GuardDutyFindingsCap)
 			if err != nil {
 				rc.warn("account %s region %s detector %s: failed to collect GuardDuty findings: %v", accountID, region, d.DetectorID, err)
+				if s.findingsErr == nil {
+					s.findingsErr = err
+				}
 				continue
 			}
 			for _, f := range findings {
@@ -297,37 +347,68 @@ func (c *Collector) scanGuardDutyRegion(ctx context.Context, client *aws.AWSClie
 	return s
 }
 
-// collectGuardDutyStatus collects GuardDuty status across all regions.
+// collectGuardDutyStatus collects GuardDuty status across all regions. A
+// region whose detectors could not be read leaves every value that sums over
+// regions unknown.
 func (c *Collector) collectGuardDutyStatus(ctx context.Context, client *aws.AWSClient, regions []string, accountID string, status *GuardDutyStatus, level componentsdk.Level) {
 	scans := mapConcurrent(regions, regionConcurrency, func(region string) guardDutyRegionScan {
 		return c.scanGuardDutyRegion(ctx, client, region, accountID, level)
 	})
 
+	audit := level.AtLeast(componentsdk.LevelAudit)
+	internal := level.AtLeast(componentsdk.LevelInternal)
+	failedRegions := 0
+	var firstErr error
 	for i, region := range regions {
 		s := scans[i]
 		c.warnings = append(c.warnings, s.warnings...)
-		if s.listErr != nil || len(s.detectors) == 0 {
+		if s.listErr != nil {
+			failedRegions++
+			if firstErr == nil {
+				firstErr = s.listErr
+			}
+			continue
+		}
+		if len(s.detectors) == 0 {
 			continue
 		}
 
 		status.Enabled = true
 		for _, d := range s.detectors {
 			status.UnremediatedFindingsOver48Hours += d.HighOrCriticalFindingsOlderThan48Hours
+			status.missing.addPartial(d.StaleFindingsErr, 1, "unremediated_findings_over_48h")
 		}
-		applyGuardDutyNotificationScan(&status.FindingNotification, s.notification, region, level.AtLeast(componentsdk.LevelAudit))
+		applyGuardDutyNotificationScan(&status.FindingNotification, &status.missing, s.notification, region, audit)
 
-		if level.AtLeast(componentsdk.LevelAudit) {
+		if audit {
 			for _, d := range s.detectors {
-				status.Detectors = append(status.Detectors, guardDutyDetectorToRow(d, region))
+				row := guardDutyDetectorToRow(d, region)
+				row.missing.add(d.FindingsErr, "high_or_critical_findings")
+				row.missing.add(d.StaleFindingsErr, "high_or_critical_findings_older_than_48h")
+				status.Detectors = append(status.Detectors, row)
 			}
 		}
 
-		if level.AtLeast(componentsdk.LevelInternal) {
+		if internal {
 			status.Findings = append(status.Findings, s.findings...)
+			status.missing.add(s.findingsErr, "findings")
 			if s.truncated {
 				status.FindingsTruncated = true
 			}
 			status.FindingsDroppedCount += s.dropped
+		}
+	}
+
+	if failedRegions > 0 {
+		if !status.Enabled {
+			status.missing.addPartial(firstErr, failedRegions, "enabled")
+		}
+		status.missing.addPartial(firstErr, failedRegions, "unremediated_findings_over_48h", "finding_notification")
+		if audit {
+			status.missing.add(firstErr, "detectors")
+		}
+		if internal {
+			status.missing.add(firstErr, "findings")
 		}
 	}
 }
@@ -370,14 +451,25 @@ func guardDutyDetectorToRow(d aws.GuardDutyDetector, region string) GuardDutyDet
 	}
 }
 
-// collectSecurityHubStatus collects Security Hub status.
+// collectSecurityHubStatus collects Security Hub status. A failed read leaves
+// the values that depend on it out.
 func (c *Collector) collectSecurityHubStatus(ctx context.Context, client *aws.AWSClient, region string, accountID string, status *SecurityHubStatus, level componentsdk.Level) {
+	cisLevels := []string{"cis_aws_foundations_benchmark_level_1", "cis_aws_foundations_benchmark_level_2", "cis_aws_foundations_benchmark_unknown_level"}
+	audit := level.AtLeast(componentsdk.LevelAudit)
 	hubConfig, err := client.GetSecurityHubConfig(ctx, region)
 	if err != nil {
 		c.warn("account %s: failed to collect Security Hub status: %v", accountID, err)
+		status.missing.add(err, "enabled")
+		status.missing.add(err, cisLevels...)
+		if audit {
+			status.missing.add(err, "auto_enable_controls", "standards_arns", "integration_count", "product_subscriptions")
+		}
 		return
 	}
 	if hubConfig == nil {
+		finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkLevel1)
+		finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkLevel2)
+		finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkUnknownLevel)
 		return
 	}
 
@@ -396,6 +488,7 @@ func (c *Collector) collectSecurityHubStatus(ctx context.Context, client *aws.AW
 		complianceByLevel, err := client.GetSecurityHubCISComplianceByLevel(ctx, region, standardID)
 		if err != nil {
 			c.warn("account %s: failed to collect CIS compliance for %s: %v", accountID, standardID, err)
+			status.missing.addPartial(err, 1, cisLevels...)
 			continue
 		}
 		if complianceByLevel == nil {
@@ -410,11 +503,14 @@ func (c *Collector) collectSecurityHubStatus(ctx context.Context, client *aws.AW
 	finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkLevel2)
 	finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkUnknownLevel)
 
-	if level.AtLeast(componentsdk.LevelAudit) {
+	if audit {
 		status.AutoEnableControls = hubConfig.AutoEnableControls
-		status.StandardsARNs = append([]string(nil), hubConfig.StandardsARNs...)
-		status.IntegrationCount = hubConfig.IntegrationCount
-		status.ProductSubscriptions = append([]string(nil), hubConfig.ProductSubscriptions...)
+		status.StandardsARNs = append([]string{}, hubConfig.StandardsARNs...)
+		if hubConfig.IntegrationsErr == nil {
+			status.IntegrationCount = intPtr(hubConfig.IntegrationCount)
+		}
+		status.ProductSubscriptions = append([]string{}, hubConfig.ProductSubscriptions...)
+		status.missing.add(hubConfig.IntegrationsErr, "integration_count", "product_subscriptions")
 	}
 }
 
@@ -431,22 +527,26 @@ func (c *Collector) collectInspectorStatus(ctx context.Context, client inspector
 	if err != nil {
 		status.StatusErrorCode = apiErrorCode(err)
 		c.warn("account %s: failed to collect Inspector status: %v", accountID, err)
+		status.missing.add(err, "enabled", "unpatched_server_percent", "total_affected_resources", "unpatched_resources")
+		if level.AtLeast(componentsdk.LevelAudit) {
+			status.missing.add(err, "total_findings", "patched_findings", "unpatched_findings")
+		}
 		return
 	}
 	status.StatusEvaluated = true
 	if summary == nil {
-		return
+		summary = &aws.InspectorSummary{}
 	}
 
 	status.Enabled = summary.Enabled
-	status.UnpatchedServerPercent = percent(summary.UnpatchedResources, summary.TotalAffectedResources)
+	status.TotalAffectedResources = summary.TotalAffectedResources
+	status.UnpatchedResources = summary.UnpatchedResources
+	status.UnpatchedServerPercent = pctOf(summary.UnpatchedResources, summary.TotalAffectedResources)
 
 	if level.AtLeast(componentsdk.LevelAudit) {
-		status.TotalFindings = summary.TotalFindings
-		status.PatchedFindings = summary.PatchedFindings
-		status.UnpatchedFindings = summary.UnpatchedFindings
-		status.TotalAffectedResources = summary.TotalAffectedResources
-		status.UnpatchedResources = summary.UnpatchedResources
+		status.TotalFindings = intPtr(summary.TotalFindings)
+		status.PatchedFindings = intPtr(summary.PatchedFindings)
+		status.UnpatchedFindings = intPtr(summary.UnpatchedFindings)
 	}
 }
 
@@ -473,7 +573,8 @@ func mergeCISLevelCompliance(target *CISComplianceByLevel, source aws.SecurityHu
 func finalizeCISLevelCompliance(level *CISComplianceByLevel) {
 	scoredControls := level.PassedControls + level.FailedControls + level.WarningControls
 	level.Enabled = scoredControls > 0 || level.NotAvailableControls > 0
-	level.CompliancePercent = percent(level.PassedControls, scoredControls)
+	level.ScoredControls = scoredControls
+	level.CompliancePercent = pctOf(level.PassedControls, scoredControls)
 	level.ComplianceState = cisComplianceState(level.PassedControls, level.FailedControls, level.WarningControls, level.NotAvailableControls)
 }
 

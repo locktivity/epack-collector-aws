@@ -7,17 +7,18 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 	"github.com/locktivity/epack/componentsdk"
 )
 
 // Collector collects AWS account security posture.
 type Collector struct {
-	config      Config
-	tokenSource stscreds.IdentityTokenRetriever // Token source for OIDC mode
-	warnings    []string                        // Service-level warnings accumulated during collection
+	config   Config
+	warnings []string         // Service-level warnings accumulated during collection
+	gaps     *gapLog          // Values left out of the artifacts, and why
+	now      func() time.Time // The run's clock
 }
 
 // ErrNoUsableAccounts means no accounts were configured and the implicit
@@ -47,7 +48,17 @@ func (c *Collector) progress(current, total int64, message string) {
 
 // New creates a new Collector with the given configuration.
 func New(config Config) (*Collector, error) {
-	return &Collector{config: config}, nil
+	now := config.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &Collector{config: config, gaps: newGapLog(config.Recorder), now: now}, nil
+}
+
+// regionCopy returns a Collector for one concurrent region scan: it shares
+// the configuration, clock, and gap log, and buffers its own warnings.
+func (c *Collector) regionCopy() *Collector {
+	return &Collector{config: c.config, gaps: c.gaps, now: c.now}
 }
 
 // Collect fetches and aggregates security posture metrics for all configured accounts.
@@ -55,7 +66,7 @@ func New(config Config) (*Collector, error) {
 // levels are treated as LevelTrust by the SDK reader; callers should not pre-validate.
 // See the README for the per-surface field availability per level.
 func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Output, error) {
-	output := NewOutput()
+	output := NewOutput(c.now())
 	output.CollectedAtLevel = string(level)
 
 	// Reset service-level warnings from any previous run
@@ -73,12 +84,13 @@ func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Out
 
 	// Track account errors and warnings for diagnostics
 	var accountErrors []string
+	var accountFailures []error
 	var warnings []string
 
 	// Determine effective auth mode and initialize
 	authMode, oidcWarnings, err := c.initializeAuth(accounts)
 	if err != nil {
-		return nil, err
+		return nil, componentsdk.ConfigError{Err: err}
 	}
 	warnings = append(warnings, oidcWarnings...)
 
@@ -86,15 +98,17 @@ func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Out
 	for i, acct := range accounts {
 		c.progress(int64(i+1), total, fmt.Sprintf("Collecting account %d of %d", i+1, len(accounts)))
 
-		posture, err := c.collectAccount(ctx, acct, authMode, level)
+		posture, err := c.collectAccount(ctx, acct, authMode, level, len(output.Accounts))
 		if err != nil {
 			errMsg := formatAccountError(acct, err)
 			accountErrors = append(accountErrors, errMsg)
+			accountFailures = append(accountFailures, fmt.Errorf("%s: %w", accountRef(acct), err))
 			output.FailedAccounts = append(output.FailedAccounts, FailedAccountRecord{
 				AccountID: accountIDFromRoleARN(acct.RoleARN),
 				RoleARN:   acct.RoleARN,
 				Label:     acct.Label,
 				ErrorCode: apiErrorCode(err),
+				err:       err,
 			})
 			c.status(errMsg)
 			continue
@@ -114,59 +128,81 @@ func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Out
 		}
 	}
 
-	// Partial failure emits stubs and succeeds; total failure must not exit 0
-	// with an empty artifact (COL-034: exit 0 only when collection succeeds).
+	// Partial failure emits stubs and succeeds; total failure fails the run
+	// with the first account's code, since every account failed to sign in.
 	// With no accounts configured, the implicit default-credentials account
-	// failing is a configuration problem, not a collection one: report it as
-	// such so an unconfigured run exits with the config error code.
+	// failing is a configuration problem unless AWS rejected the credentials
+	// it found: report it as such so an unconfigured run exits with the
+	// config error code.
 	if len(output.Accounts) == 0 && len(accountErrors) > 0 {
 		if len(c.config.Accounts) == 0 {
-			return nil, fmt.Errorf("%w: %s", ErrNoUsableAccounts, strings.Join(accountErrors, "; "))
+			switch componentsdk.Classify(accountFailures[0]) {
+			case componentsdk.CodeAuthFailed, componentsdk.CodePermissionDenied:
+				return nil, accountFailures[0]
+			}
+			return nil, componentsdk.ConfigError{Err: fmt.Errorf("%w: %s", ErrNoUsableAccounts, strings.Join(accountErrors, "; "))}
 		}
-		return nil, fmt.Errorf("all %d configured accounts failed: %s", len(accounts), strings.Join(accountErrors, "; "))
+		return nil, fmt.Errorf("all %d configured accounts failed: %w", len(accounts), errors.Join(accountFailures...))
 	}
 
 	c.status("Collection complete")
 	return output, nil
 }
 
-// collectAccount collects posture for a single AWS account.
-func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig, authMode string, level componentsdk.Level) (*AccountPosture, error) {
-	// Create client for this account
-	c.status("Connecting to AWS...")
-	client, err := c.createClient(ctx, acctConfig, authMode)
+// collectAccount collects posture for a single AWS account, which will be
+// entry index of the artifact's accounts. Only the sign-in fails it; every
+// later read that fails leaves its values out with a gap.
+func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig, authMode string, level componentsdk.Level, index int) (*AccountPosture, error) {
+	steps := &stepper{ctx: ctx}
+	defer steps.end()
+
+	signIn := steps.next("sign_in", "Sign in")
+	client, err := c.createClient(signIn, acctConfig, authMode)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get account ID
-	accountID, err := client.GetCallerIdentity(ctx)
+	identity, err := client.GetCallerIdentity(signIn)
 	if err != nil {
 		return nil, fmt.Errorf("getting account ID: %w", err)
 	}
+	accountID := identity.Account
 	c.status(fmt.Sprintf("Connected to account %s", accountID))
-
-	// Determine regions to scan
-	regions, err := c.getRegions(ctx, client)
-	if err != nil {
-		return nil, err
+	if index == 0 {
+		c.signedInAs(identity, client.AuthMethod())
 	}
-	c.status(fmt.Sprintf("Scanning %d regions", len(regions)))
+	at := accountAt(index)
+
+	// Determine regions to scan. Without the region list, nothing regional
+	// can be measured, so every regional surface is left out.
+	accountCtx := steps.next("account", "Account alias and regions")
+	regions, err := c.getRegions(accountCtx, client)
+	if err != nil {
+		c.warn("account %s: failed to list enabled regions: %v", accountID, err)
+		posture := NewAccountPosture(accountID, nil)
+		c.collectAccountAlias(accountCtx, client, accountID, at, posture)
+		c.collectGlobalMetrics(steps, client, accountID, at, posture, level)
+		posture.AccountSecurity = *c.collectCloudTrailOnly(steps.next("cloudtrail", "CloudTrail trails"), client, accountID, at, &posture.S3, level)
+		c.gaps.leaveOut(err, at.p("regions"))
+		c.leaveOutRegional(err, at)
+		normalizeForLevel(posture, level)
+		return posture, nil
+	}
 
 	posture := NewAccountPosture(accountID, regions)
+	c.collectAccountAlias(accountCtx, client, accountID, at, posture)
 
-	// Get account alias
-	alias, _ := client.GetAccountAlias(ctx)
-	posture.AccountAlias = alias
-
-	// Collect global metrics (IAM, S3)
-	c.collectGlobalMetrics(ctx, client, accountID, posture, level)
+	// Collect global metrics (IAM, S3, CloudFront)
+	c.collectGlobalMetrics(steps, client, accountID, at, posture, level)
 
 	// Collect regional metrics (RDS, Network, Lambda, EC2, CloudWatch Logs, KMS, Secrets Manager, SSM, WAF)
-	c.collectRegionalMetrics(ctx, client, regions, accountID, posture, level)
+	steps.end()
+	c.status(fmt.Sprintf("Scanning %d regions", len(regions)))
+	c.collectRegionalMetrics(ctx, client, regions, accountID, at, posture, level)
 
 	// Collect account security services
-	c.collectSecurityServices(ctx, client, regions, posture, level)
+	c.collectSecurityServices(steps, client, regions, at, posture, level)
 
 	// Strict-superset normalization: at audit+, every level-gated array is
 	// non-nil so consumers can rely on []  vs `null` to distinguish "fleet
@@ -177,11 +213,78 @@ func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig
 	return posture, nil
 }
 
+// collectAccountAlias reads the account alias, leaving it out with a gap
+// when the read fails.
+func (c *Collector) collectAccountAlias(ctx context.Context, client *aws.AWSClient, accountID string, at at, posture *AccountPosture) {
+	alias, err := client.GetAccountAlias(ctx)
+	if err != nil {
+		c.warn("account %s: failed to read the account alias: %v", accountID, err)
+		c.gaps.leaveOut(err, at.p("account_alias"))
+		return
+	}
+	posture.AccountAlias = alias
+}
+
+// regionalSurfaces are the parts of an account's posture measured per region,
+// or in the primary region the region list names.
+var regionalSurfaces = [][]any{
+	{"rds"}, {"network"}, {"lambda"}, {"ec2"}, {"cloudwatch_logs"}, {"monitoring"},
+	{"stored_images"}, {"load_balancers"}, {"ses"}, {"ecs"}, {"auto_scaling"}, {"waf"},
+	{"kms"}, {"secrets_manager"}, {"ssm_parameters"}, {"identity_center"},
+	{"account_security", "config"}, {"account_security", "guardduty"},
+	{"account_security", "access_analyzer"}, {"account_security", "security_hub"},
+	{"account_security", "inspector"},
+}
+
+// leaveOutRegional records every regional surface as left out because the
+// region list could not be read.
+func (c *Collector) leaveOutRegional(err error, at at) {
+	c.gaps.rec.Helper()
+	for _, surface := range regionalSurfaces {
+		c.gaps.leaveOut(err, at.p(surface...))
+	}
+}
+
+// collectCloudTrailOnly collects the account security surfaces that need no
+// region list: CloudTrail and its delivery buckets.
+func (c *Collector) collectCloudTrailOnly(ctx context.Context, client *aws.AWSClient, accountID string, at at, s3 *S3Metrics, level componentsdk.Level) *AccountSecurity {
+	security := &AccountSecurity{}
+	trailsAt := at.sub("account_security", "cloudtrail")
+	trails := c.collectCloudTrailStatus(ctx, client, accountID, trailsAt, &security.CloudTrail, level)
+	c.resolveTrailBucketRetention(ctx, client, accountID, trailsAt, trails, s3, &security.CloudTrail)
+	c.recordCloudTrailUnread(trailsAt, &security.CloudTrail)
+	return security
+}
+
+// signedInAs records the principal the run signed in as, the first
+// account's role session or user, and how its credentials prove it.
+func (c *Collector) signedInAs(identity aws.CallerIdentity, authMethod string) {
+	if c.config.Recorder == nil {
+		return
+	}
+	kind := "user"
+	if strings.Contains(identity.ARN, ":assumed-role/") {
+		kind = "role"
+	}
+	c.config.Recorder.SignedInAs(componentsdk.Principal{
+		Provider:   "aws",
+		Kind:       kind,
+		TenantID:   identity.Account,
+		AuthMethod: authMethod,
+		ID:         identity.ARN,
+	})
+}
+
+// clientOptions configures every AWS client the collector builds.
+func (c *Collector) clientOptions() aws.Options {
+	return aws.Options{HTTPClient: c.config.HTTPClient, Now: c.now, Wait: c.config.Wait}
+}
+
 // createClient creates an AWS client for the given account configuration.
 func (c *Collector) createClient(ctx context.Context, acctConfig AccountConfig, authMode string) (*aws.AWSClient, error) {
 	// No role ARN means use default credentials
 	if acctConfig.RoleARN == "" {
-		client, err := aws.NewClient(ctx)
+		client, err := aws.NewClient(ctx, c.clientOptions())
 		if err != nil {
 			return nil, fmt.Errorf("creating AWS client: %w", err)
 		}
@@ -191,14 +294,15 @@ func (c *Collector) createClient(ctx context.Context, acctConfig AccountConfig, 
 	// Route based on auth mode
 	switch authMode {
 	case AuthModeOIDC:
-		client, err := aws.NewClientWithWebIdentity(ctx, acctConfig.RoleARN, c.tokenSource)
+		tokens := c.config.OIDC.TokenSource(ctx, c.config.HTTPClient)
+		client, err := aws.NewClientWithWebIdentity(ctx, acctConfig.RoleARN, tokens, c.clientOptions())
 		if err != nil {
 			return nil, fmt.Errorf("creating AWS client with web identity: %w", err)
 		}
 		return client, nil
 
 	case AuthModeAssumeRole:
-		client, err := aws.NewClientWithRole(ctx, acctConfig.RoleARN, acctConfig.ExternalID)
+		client, err := aws.NewClientWithRole(ctx, acctConfig.RoleARN, acctConfig.ExternalID, c.clientOptions())
 		if err != nil {
 			return nil, fmt.Errorf("creating AWS client with role: %w", err)
 		}
@@ -222,17 +326,14 @@ func (c *Collector) getRegions(ctx context.Context, client *aws.AWSClient) ([]st
 	return regions, nil
 }
 
-// collectGlobalMetrics collects IAM and S3 metrics (global services).
-// level is passed through to per-surface collectors that gate audit / internal fields.
-func (c *Collector) collectGlobalMetrics(ctx context.Context, client *aws.AWSClient, accountID string, posture *AccountPosture, level componentsdk.Level) {
-	// IAM metrics (global)
-	c.status("Collecting IAM metrics...")
-	posture.IAM = *c.collectIAMMetrics(ctx, client, accountID, level)
-
-	// S3 metrics (global bucket list)
-	c.status("Collecting S3 metrics...")
-	posture.S3 = *c.collectS3Metrics(ctx, client, accountID, level)
-	posture.CloudFront = *c.collectCloudFrontMetrics(ctx, client, accountID, level)
+// collectGlobalMetrics collects the global services' metrics, IAM, S3, and
+// CloudFront, each as a step. level is passed through to per-surface
+// collectors that gate audit / internal fields.
+func (c *Collector) collectGlobalMetrics(steps *stepper, client *aws.AWSClient, accountID string, at at, posture *AccountPosture, level componentsdk.Level) {
+	posture.IAM = *c.collectIAMMetrics(steps.next("iam", "IAM users, roles, and password policy"), client, accountID, at, level)
+	posture.S3 = *c.collectS3Metrics(steps.next("s3", "S3 buckets"), client, accountID, at, level)
+	posture.CloudFront = *c.collectCloudFrontMetrics(steps.next("cloudfront", "CloudFront distributions"), client, accountID, level)
+	c.recordUnread(at.sub("cloudfront"), posture.CloudFront.missing)
 }
 
 // regionScan holds one region's raw surface results and the warnings emitted
@@ -273,148 +374,204 @@ type regionScan struct {
 	warnings         []string
 }
 
-// scanRegion collects every regional surface for one region. It runs on its
-// own Collector copy so concurrent regions buffer warnings independently; the
-// caller replays them in region order.
-func (c *Collector) scanRegion(ctx context.Context, client *aws.AWSClient, region, accountID string, level componentsdk.Level) regionScan {
-	rc := &Collector{config: c.config, tokenSource: c.tokenSource}
+// scanRegion collects every regional surface for one region, each in its
+// step. It runs on its own Collector copy so concurrent regions buffer
+// warnings independently; the caller replays them in region order.
+func (c *Collector) scanRegion(steps *regionalSteps, client *aws.AWSClient, region, accountID string, level componentsdk.Level) regionScan {
+	rc := c.regionCopy()
 	var s regionScan
+	step := func(name, title string, collect func(ctx context.Context)) {
+		collect(steps.enter(name, title))
+		steps.leave(name)
+	}
 
-	if s.rds, s.rdsErr = rc.collectRDSMetrics(ctx, client, region, level); s.rdsErr != nil {
-		rc.warn("account %s region %s: failed to collect RDS metrics: %v", accountID, region, s.rdsErr)
-	}
-	if s.network, s.networkErr = rc.collectNetworkMetrics(ctx, client, region, accountID, level); s.networkErr != nil {
-		rc.warn("account %s region %s: failed to collect network metrics: %v", accountID, region, s.networkErr)
-	}
-	if s.lambda, s.lambdaErr = rc.collectLambdaMetrics(ctx, client, region, accountID, level); s.lambdaErr != nil {
-		rc.warn("account %s region %s: failed to collect Lambda metrics: %v", accountID, region, s.lambdaErr)
-	}
-	if s.ec2, s.ec2Err = rc.collectEC2Metrics(ctx, client, region, accountID, level); s.ec2Err != nil {
-		rc.warn("account %s region %s: failed to collect EC2 metrics: %v", accountID, region, s.ec2Err)
-	}
-	if s.cwLogs, s.cwLogsErr = rc.collectCloudWatchLogsMetrics(ctx, client, region, accountID, level); s.cwLogsErr != nil {
-		rc.warn("account %s region %s: failed to collect CloudWatch Logs metrics: %v", accountID, region, s.cwLogsErr)
-	}
-	if s.monitoring, s.monitoringErr = rc.collectMonitoringMetrics(ctx, client, region, accountID, level); s.monitoringErr != nil {
-		rc.warn("account %s region %s: failed to collect monitoring metrics: %v", accountID, region, s.monitoringErr)
-	}
-	if s.storedImages, s.storedImagesErr = rc.collectStoredImageMetrics(ctx, client, region, accountID, level); s.storedImagesErr != nil {
-		rc.warn("account %s region %s: failed to collect snapshot and AMI metrics: %v", accountID, region, s.storedImagesErr)
-	}
-	if s.loadBalancers, s.loadBalancersErr = rc.collectLoadBalancerMetrics(ctx, client, region, accountID, level); s.loadBalancersErr != nil {
-		rc.warn("account %s region %s: failed to collect load balancer metrics: %v", accountID, region, s.loadBalancersErr)
-	}
-	if s.ses, s.sesErr = rc.collectSESMetrics(ctx, client, region, accountID, level); s.sesErr != nil {
-		rc.warn("account %s region %s: failed to collect SES metrics: %v", accountID, region, s.sesErr)
-	}
-	if s.ecs, s.ecsErr = rc.collectECSMetrics(ctx, client, region, accountID, level); s.ecsErr != nil {
-		rc.warn("account %s region %s: failed to collect ECS metrics: %v", accountID, region, s.ecsErr)
-	}
-	if s.autoScaling, s.autoScalingErr = rc.collectAutoScalingMetrics(ctx, client, region, accountID, level); s.autoScalingErr != nil {
-		rc.warn("account %s region %s: failed to collect auto scaling metrics: %v", accountID, region, s.autoScalingErr)
-	}
-	if s.kms, s.kmsErr = rc.collectKMSMetrics(ctx, client, region, accountID, level); s.kmsErr != nil {
-		rc.warn("account %s region %s: failed to collect KMS metrics: %v", accountID, region, s.kmsErr)
-	}
-	if s.secrets, s.secretsErr = rc.collectSecretsManagerMetrics(ctx, client, region, accountID, level); s.secretsErr != nil {
-		rc.warn("account %s region %s: failed to collect Secrets Manager metrics: %v", accountID, region, s.secretsErr)
-	}
-	if s.ssm, s.ssmErr = rc.collectSSMParameters(ctx, client, region, accountID, level); s.ssmErr != nil {
-		rc.warn("account %s region %s: failed to collect SSM parameters: %v", accountID, region, s.ssmErr)
-	}
-	if s.waf, s.wafErr = rc.collectWAFRegion(ctx, client, region); s.wafErr != nil {
-		rc.warn("account %s region %s: failed to collect WAF metrics: %v", accountID, region, s.wafErr)
-	}
+	step("rds", "RDS databases", func(ctx context.Context) {
+		if s.rds, s.rdsErr = rc.collectRDSMetrics(ctx, client, region, level); s.rdsErr != nil {
+			rc.warn("account %s region %s: failed to collect RDS metrics: %v", accountID, region, s.rdsErr)
+		}
+	})
+	step("network", "VPCs and security groups", func(ctx context.Context) {
+		if s.network, s.networkErr = rc.collectNetworkMetrics(ctx, client, region, accountID, level); s.networkErr != nil {
+			rc.warn("account %s region %s: failed to collect network metrics: %v", accountID, region, s.networkErr)
+		}
+	})
+	step("lambda", "Lambda functions", func(ctx context.Context) {
+		if s.lambda, s.lambdaErr = rc.collectLambdaMetrics(ctx, client, region, accountID, level); s.lambdaErr != nil {
+			rc.warn("account %s region %s: failed to collect Lambda metrics: %v", accountID, region, s.lambdaErr)
+		}
+	})
+	step("ec2", "EC2 instances and volumes", func(ctx context.Context) {
+		if s.ec2, s.ec2Err = rc.collectEC2Metrics(ctx, client, region, accountID, level); s.ec2Err != nil {
+			rc.warn("account %s region %s: failed to collect EC2 metrics: %v", accountID, region, s.ec2Err)
+		}
+	})
+	step("cloudwatch_logs", "CloudWatch log groups", func(ctx context.Context) {
+		if s.cwLogs, s.cwLogsErr = rc.collectCloudWatchLogsMetrics(ctx, client, region, accountID, level); s.cwLogsErr != nil {
+			rc.warn("account %s region %s: failed to collect CloudWatch Logs metrics: %v", accountID, region, s.cwLogsErr)
+		}
+	})
+	step("monitoring", "CloudWatch alarms", func(ctx context.Context) {
+		if s.monitoring, s.monitoringErr = rc.collectMonitoringMetrics(ctx, client, region, accountID, level); s.monitoringErr != nil {
+			rc.warn("account %s region %s: failed to collect monitoring metrics: %v", accountID, region, s.monitoringErr)
+		}
+	})
+	step("stored_images", "EBS snapshots and AMIs", func(ctx context.Context) {
+		if s.storedImages, s.storedImagesErr = rc.collectStoredImageMetrics(ctx, client, region, accountID, level); s.storedImagesErr != nil {
+			rc.warn("account %s region %s: failed to collect snapshot and AMI metrics: %v", accountID, region, s.storedImagesErr)
+		}
+	})
+	step("load_balancers", "Load balancers", func(ctx context.Context) {
+		if s.loadBalancers, s.loadBalancersErr = rc.collectLoadBalancerMetrics(ctx, client, region, accountID, level); s.loadBalancersErr != nil {
+			rc.warn("account %s region %s: failed to collect load balancer metrics: %v", accountID, region, s.loadBalancersErr)
+		}
+	})
+	step("ses", "SES configuration sets and identities", func(ctx context.Context) {
+		if s.ses, s.sesErr = rc.collectSESMetrics(ctx, client, region, accountID, level); s.sesErr != nil {
+			rc.warn("account %s region %s: failed to collect SES metrics: %v", accountID, region, s.sesErr)
+		}
+	})
+	step("ecs", "ECS services", func(ctx context.Context) {
+		if s.ecs, s.ecsErr = rc.collectECSMetrics(ctx, client, region, accountID, level); s.ecsErr != nil {
+			rc.warn("account %s region %s: failed to collect ECS metrics: %v", accountID, region, s.ecsErr)
+		}
+	})
+	step("auto_scaling", "Auto Scaling groups", func(ctx context.Context) {
+		if s.autoScaling, s.autoScalingErr = rc.collectAutoScalingMetrics(ctx, client, region, accountID, level); s.autoScalingErr != nil {
+			rc.warn("account %s region %s: failed to collect auto scaling metrics: %v", accountID, region, s.autoScalingErr)
+		}
+	})
+	step("kms", "KMS keys", func(ctx context.Context) {
+		if s.kms, s.kmsErr = rc.collectKMSMetrics(ctx, client, region, accountID, level); s.kmsErr != nil {
+			rc.warn("account %s region %s: failed to collect KMS metrics: %v", accountID, region, s.kmsErr)
+		}
+	})
+	step("secrets_manager", "Secrets Manager secrets", func(ctx context.Context) {
+		if s.secrets, s.secretsErr = rc.collectSecretsManagerMetrics(ctx, client, region, accountID, level); s.secretsErr != nil {
+			rc.warn("account %s region %s: failed to collect Secrets Manager metrics: %v", accountID, region, s.secretsErr)
+		}
+	})
+	step("ssm_parameters", "SSM parameters", func(ctx context.Context) {
+		if s.ssm, s.ssmErr = rc.collectSSMParameters(ctx, client, region, accountID, level); s.ssmErr != nil {
+			rc.warn("account %s region %s: failed to collect SSM parameters: %v", accountID, region, s.ssmErr)
+		}
+	})
+	step("waf", wafStepTitle, func(ctx context.Context) {
+		if s.waf, s.wafErr = rc.collectWAFRegion(ctx, client, region); s.wafErr != nil {
+			rc.warn("account %s region %s: failed to collect WAF metrics: %v", accountID, region, s.wafErr)
+		}
+	})
 
 	s.warnings = rc.warnings
 	return s
 }
 
+// wafStepTitle is the WAF step's title, which the regions and the
+// account-wide pass over the CloudFront scope share.
+const wafStepTitle = "WAF web ACLs"
+
 // collectRegionalMetrics scans every region concurrently and populates the
 // posture's regional surfaces, including the WAF posture, which joins the
 // regional scans with the global CLOUDFRONT scope. level is passed through
-// to per-surface collectors that gate audit / internal fields.
-func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSClient, regions []string, accountID string, posture *AccountPosture, level componentsdk.Level) {
-	var rdsMetrics rdsMetricsWithCounts
+// to per-surface collectors that gate audit / internal fields. A surface that
+// failed in any region is left out whole; a value a narrower read left
+// unknown is left out on its own.
+func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSClient, regions []string, accountID string, at at, posture *AccountPosture, level componentsdk.Level) {
+	rdsMetrics := rdsMetricsWithCounts{minRetention: -1}
 	var networkMetrics networkMetricsWithCounts
 	var wafScan wafScanWithCounts
+	var wafErr error
 
 	var rdsRegionsFailed, networkRegionsFailed []string
 
 	total := int64(len(regions))
 	var scanned int64
 	var progressMu sync.Mutex
+	steps := newRegionalSteps(ctx, len(regions), "waf")
 	scans := mapConcurrent(regions, regionConcurrency, func(region string) regionScan {
 		progressMu.Lock()
 		scanned++
 		c.progress(scanned, total, fmt.Sprintf("Scanning region %s", region))
 		progressMu.Unlock()
-		return c.scanRegion(ctx, client, region, accountID, level)
+		return c.scanRegion(steps, client, region, accountID, level)
 	})
+
+	// failed records a surface as left out because of the first region it
+	// failed in.
+	failed := func(surface string, err error) bool {
+		c.gaps.rec.Helper()
+		if err == nil {
+			return false
+		}
+		c.gaps.leaveOut(err, at.p(surface))
+		return true
+	}
 
 	for i, region := range regions {
 		s := scans[i]
 		c.warnings = append(c.warnings, s.warnings...)
 
-		if s.rdsErr == nil {
+		if !failed("rds", s.rdsErr) {
 			rdsMetrics = mergeRDSMetrics(rdsMetrics, *s.rds)
 			rdsMetrics.RegionsEvaluatedCount++
 		} else {
 			rdsRegionsFailed = append(rdsRegionsFailed, region)
 		}
 
-		if s.networkErr == nil {
+		if !failed("network", s.networkErr) {
 			networkMetrics = mergeNetworkMetrics(networkMetrics, *s.network)
 			networkMetrics.RegionsEvaluatedCount++
 		} else {
 			networkRegionsFailed = append(networkRegionsFailed, region)
 		}
 
-		if s.lambdaErr == nil {
+		if !failed("lambda", s.lambdaErr) {
 			posture.Lambda = mergeLambdaMetrics(posture.Lambda, *s.lambda)
 		}
-		if s.ec2Err == nil {
+		if !failed("ec2", s.ec2Err) {
 			posture.EC2 = mergeEC2Metrics(posture.EC2, *s.ec2)
 		}
-		if s.cwLogsErr == nil {
+		if !failed("cloudwatch_logs", s.cwLogsErr) {
 			posture.CloudWatchLogs = mergeCloudWatchLogsMetrics(posture.CloudWatchLogs, *s.cwLogs)
 		}
-		if s.monitoringErr == nil {
+		if !failed("monitoring", s.monitoringErr) {
 			posture.Monitoring = mergeMonitoringMetrics(posture.Monitoring, *s.monitoring)
 		}
-		if s.storedImagesErr == nil {
+		if !failed("stored_images", s.storedImagesErr) {
 			posture.StoredImages = mergeStoredImageMetrics(posture.StoredImages, *s.storedImages)
 		}
-		if s.loadBalancersErr == nil {
+		if !failed("load_balancers", s.loadBalancersErr) {
 			posture.LoadBalancers = mergeLoadBalancerMetrics(posture.LoadBalancers, *s.loadBalancers)
 		}
-		if s.sesErr == nil {
+		if !failed("ses", s.sesErr) {
 			posture.SES = mergeSESMetrics(posture.SES, *s.ses)
 		}
-		if s.ecsErr == nil {
+		if !failed("ecs", s.ecsErr) {
 			posture.ECS = mergeECSMetrics(posture.ECS, *s.ecs)
 		}
-		if s.autoScalingErr == nil {
+		if !failed("auto_scaling", s.autoScalingErr) {
 			posture.AutoScaling = mergeAutoScalingMetrics(posture.AutoScaling, *s.autoScaling)
 		}
-		if s.kmsErr == nil {
+		if !failed("kms", s.kmsErr) {
 			posture.KMS = mergeKMSMetrics(posture.KMS, *s.kms)
 		}
-		if s.secretsErr == nil {
+		if !failed("secrets_manager", s.secretsErr) {
 			posture.SecretsManager = mergeSecretsManagerMetrics(posture.SecretsManager, *s.secrets)
 		}
-		if s.ssmErr == nil {
+		if !failed("ssm_parameters", s.ssmErr) {
 			posture.SSMParameters = mergeSSMParametersMetrics(posture.SSMParameters, *s.ssm)
 		}
 		if s.wafErr == nil {
 			wafScan.wafRegionScan = mergeWAFScans(wafScan.wafRegionScan, *s.waf)
 			wafScan.RegionsEvaluatedCount++
+		} else if wafErr == nil {
+			wafErr = s.wafErr
 		}
 	}
 
 	rdsMetrics.RegionsFailed = rdsRegionsFailed
-	rdsMetrics.DatabaseCount = rdsMetrics.instanceCount + rdsMetrics.clusterCount
+	rdsMetrics.finalize()
 	networkMetrics.RegionsFailed = networkRegionsFailed
+	networkMetrics.finalize()
 	posture.RDS = rdsMetrics.RDSMetrics
 	posture.Network = networkMetrics.NetworkMetrics
 
@@ -490,22 +647,58 @@ func (c *Collector) collectRegionalMetrics(ctx context.Context, client *aws.AWSC
 		}
 	}
 
-	posture.WAF = *c.collectWAFMetrics(ctx, client, accountID, wafScan, level)
+	posture.WAF = *c.collectWAFMetrics(steps.enter("waf", wafStepTitle), client, accountID, wafScan, level)
+	steps.leave("waf")
+	if wafErr != nil {
+		posture.WAF.missing.add(wafErr, "internet_facing_alb_count", "covered_internet_facing_alb_count", "internet_facing_alb_coverage_pct", "web_acl_count", "rate_limiting_enforced")
+		if level.AtLeast(componentsdk.LevelAudit) {
+			posture.WAF.missing.add(wafErr, "web_acls")
+		}
+	}
+
+	c.recordRegionalUnread(at, posture)
 }
 
-// collectSecurityServices collects account-level security service status.
-// level is passed through to per-surface collectors that gate audit / internal fields.
-func (c *Collector) collectSecurityServices(ctx context.Context, client *aws.AWSClient, regions []string, posture *AccountPosture, level componentsdk.Level) {
+// recordRegionalUnread writes the values narrower reads left unknown, in the
+// regional surfaces and their rows, as gaps.
+func (c *Collector) recordRegionalUnread(at at, p *AccountPosture) {
+	c.recordUnread(at.sub("rds"), p.RDS.missing)
+	recordRowsUnread(c, at.sub("rds", "instances"), p.RDS.Instances, func(r *RDSInstance) unread { return r.missing })
+	c.recordUnread(at.sub("network"), p.Network.missing)
+	recordRowsUnread(c, at.sub("network", "vpcs"), p.Network.VPCs, func(r *VPCSummary) unread { return r.missing })
+	c.recordUnread(at.sub("lambda"), p.Lambda.missing)
+	recordRowsUnread(c, at.sub("lambda", "functions"), p.Lambda.Functions, func(r *LambdaFunctionRow) unread { return r.missing })
+	c.recordUnread(at.sub("ec2"), p.EC2.missing)
+	recordRowsUnread(c, at.sub("ec2", "instances"), p.EC2.Instances, func(r *EC2InstanceRow) unread { return r.missing })
+	c.recordUnread(at.sub("monitoring"), p.Monitoring.missing)
+	recordRowsUnread(c, at.sub("monitoring", "alarms"), p.Monitoring.Alarms, func(r *CloudWatchAlarmRow) unread { return r.missing })
+	c.recordUnread(at.sub("stored_images"), p.StoredImages.missing)
+	c.recordUnread(at.sub("load_balancers"), p.LoadBalancers.missing)
+	recordRowsUnread(c, at.sub("load_balancers", "load_balancers"), p.LoadBalancers.LoadBalancers, func(r *LoadBalancerRow) unread { return r.missing })
+	c.recordUnread(at.sub("ses"), p.SES.missing)
+	recordRowsUnread(c, at.sub("ses", "configuration_sets"), p.SES.ConfigurationSets, func(r *SESConfigurationSetRow) unread { return r.missing })
+	recordRowsUnread(c, at.sub("ses", "identities"), p.SES.Identities, func(r *SESIdentityRow) unread { return r.missing })
+	c.recordUnread(at.sub("ecs"), p.ECS.missing)
+	recordRowsUnread(c, at.sub("ecs", "services"), p.ECS.Services, func(r *ECSServiceRow) unread { return r.missing })
+	c.recordUnread(at.sub("kms"), p.KMS.missing)
+	recordRowsUnread(c, at.sub("kms", "keys"), p.KMS.Keys, func(r *KMSKeyRow) unread { return r.missing })
+	c.recordUnread(at.sub("waf"), p.WAF.missing)
+	recordRowsUnread(c, at.sub("waf", "web_acls"), p.WAF.WebACLs, func(r *WebACLRow) unread { return r.missing })
+}
+
+// collectSecurityServices collects account-level security service status,
+// each service as a step. level is passed through to per-surface collectors
+// that gate audit / internal fields.
+func (c *Collector) collectSecurityServices(steps *stepper, client *aws.AWSClient, regions []string, at at, posture *AccountPosture, level componentsdk.Level) {
 	primaryRegion := DefaultPrimaryRegion
 	if len(regions) > 0 {
 		primaryRegion = regions[0]
 	}
 
 	// collectAccountSecurity handles per-service warnings internally
-	posture.AccountSecurity = *c.collectAccountSecurity(ctx, client, primaryRegion, regions, posture.AccountID, level)
+	posture.AccountSecurity = *c.collectAccountSecurity(steps, client, primaryRegion, regions, posture.AccountID, at, &posture.S3, level)
 
-	c.status("Checking IAM Identity Center...")
-	posture.IdentityCenter = c.collectIdentityCenter(ctx, client, primaryRegion, posture.AccountID, level)
+	posture.IdentityCenter = c.collectIdentityCenter(steps.next("identity_center", "IAM Identity Center"), client, primaryRegion, posture.AccountID, at, level)
 }
 
 // resolveAuthMode determines the effective authentication mode based on config.
@@ -535,8 +728,8 @@ func (c *Collector) resolveAuthMode(accounts []AccountConfig) (string, error) {
 	// Validate auth mode
 	switch authMode {
 	case AuthModeOIDC:
-		if aws.OIDCTokenSource() == nil {
-			return "", fmt.Errorf("auth_mode is 'oidc' but no identity token is available: GitHub Actions did not set ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN, and %s does not name a token file", aws.WebIdentityTokenFileEnv)
+		if !c.config.OIDC.GitHubAvailable() && c.config.OIDC.TokenFile == "" {
+			return "", fmt.Errorf("auth_mode is 'oidc' but no identity token is available: GitHub Actions did not set %s and %s, and %s does not name a token file", aws.GitHubTokenRequestURLEnv, aws.GitHubTokenRequestTokenEnv, aws.WebIdentityTokenFileEnv)
 		}
 	case AuthModeAssumeRole:
 		// Valid, no additional checks needed
@@ -547,8 +740,9 @@ func (c *Collector) resolveAuthMode(accounts []AccountConfig) (string, error) {
 	return authMode, nil
 }
 
-// initializeAuth sets up authentication mode and returns any warnings.
-// For OIDC mode, initializes the token source and checks for incompatible settings.
+// initializeAuth sets up authentication mode and returns any warnings. For
+// OIDC mode, it checks for incompatible settings; each account's sign-in
+// reads its own identity token.
 func (c *Collector) initializeAuth(accounts []AccountConfig) (authMode string, warnings []string, err error) {
 	authMode, err = c.resolveAuthMode(accounts)
 	if err != nil {
@@ -558,8 +752,6 @@ func (c *Collector) initializeAuth(accounts []AccountConfig) (authMode string, w
 	if authMode != AuthModeOIDC {
 		return authMode, nil, nil
 	}
-
-	c.tokenSource = aws.OIDCTokenSource()
 
 	// Check for incompatible settings
 	for _, acct := range accounts {
@@ -593,6 +785,12 @@ func accountIDFromRoleARN(roleARN string) string {
 
 // formatAccountError creates a diagnostic error message for a failed account collection.
 func formatAccountError(acct AccountConfig, err error) string {
+	return fmt.Sprintf("failed to collect account (%s): %v", accountRef(acct), err)
+}
+
+// accountRef names an account by its label and role, or as the default
+// credentials' account.
+func accountRef(acct AccountConfig) string {
 	roleInfo := "default credentials"
 	if acct.RoleARN != "" {
 		roleInfo = acct.RoleARN
@@ -600,5 +798,5 @@ func formatAccountError(acct AccountConfig, err error) string {
 	if acct.Label != "" {
 		roleInfo = acct.Label + ": " + roleInfo
 	}
-	return fmt.Sprintf("failed to collect account (%s): %v", roleInfo, err)
+	return roleInfo
 }

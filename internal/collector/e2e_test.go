@@ -117,8 +117,8 @@ func TestE2E_RealAWSCollection(t *testing.T) {
 		assertPercent(t, "iam.mfa_enabled", acct.IAM.MFAEnabled)
 		assertPercent(t, "iam.hardware_mfa_enabled", acct.IAM.HardwareMFAEnabled)
 		assertPercent(t, "iam.access_keys_rotated", acct.IAM.AccessKeysRotated)
-		if !acct.IAM.IAMUsersPresent && acct.IAM.MFAEnabled != 0 {
-			t.Errorf("iam.mfa_enabled should be 0 when iam_users_present=false, got %d", acct.IAM.MFAEnabled)
+		if acct.IAM.CredentialReportEvaluated && !acct.IAM.IAMUsersPresent && acct.IAM.MFAEnabled != nil {
+			t.Errorf("iam.mfa_enabled should be null when iam_users_present=false, got %d", *acct.IAM.MFAEnabled)
 		}
 
 		assertPercent(t, "s3.public_access_blocked", acct.S3.PublicAccessBlocked)
@@ -216,9 +216,11 @@ func TestE2E_RespectsConfiguredRegions(t *testing.T) {
 	}
 }
 
-func assertPercent(t *testing.T, name string, v int) {
+// assertPercent checks a percentage that was read. Null means its
+// population was empty or its read failed, which the run's result records.
+func assertPercent(t *testing.T, name string, v *int) {
 	t.Helper()
-	if v < 0 || v > 100 {
-		t.Errorf("%s should be in [0,100], got %d", name, v)
+	if v != nil && (*v < 0 || *v > 100) {
+		t.Errorf("%s should be in [0,100], got %d", name, *v)
 	}
 }

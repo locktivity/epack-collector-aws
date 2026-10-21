@@ -103,6 +103,6 @@ func mergeSSMParametersMetrics(a, b SSMParametersMetrics) SSMParametersMetrics {
 		ParameterCount:                       a.ParameterCount + b.ParameterCount,
 		SecureStringCount:                    a.SecureStringCount + b.SecureStringCount,
 		SecureStringsWithoutCustomerKMSCount: a.SecureStringsWithoutCustomerKMSCount + b.SecureStringsWithoutCustomerKMSCount,
-		Parameters:                           append(append([]SSMParameterRow(nil), a.Parameters...), b.Parameters...),
+		Parameters:                           appendRows(a.Parameters, b.Parameters),
 	}
 }

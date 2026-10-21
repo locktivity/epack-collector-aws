@@ -102,7 +102,8 @@ collectors:
 
 ## Sample Output
 
-Metrics use percentages (0-100), booleans, and counts where appropriate.
+Metrics use percentages (0-100, rounded down), booleans, and counts. Each
+percentage has the count it is taken of beside it.
 
 ```json
 {
@@ -116,9 +117,14 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
       "iam": {
         "credential_report_evaluated": true,
         "iam_users_present": true,
+        "iam_user_count": 20,
+        "access_key_user_count": 5,
         "mfa_enabled": 95,
+        "mfa_enabled_user_count": 19,
         "hardware_mfa_enabled": 0,
+        "hardware_mfa_enabled_user_count": 0,
         "access_keys_rotated": 80,
+        "access_keys_rotated_user_count": 4,
         "root_credential_state_evaluated": true,
         "root_mfa_enabled": true,
         "root_credentials_present": true,
@@ -136,28 +142,43 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
         "account_public_access_block_evaluated": true,
         "bucket_count": 20,
         "public_access_blocked": 100,
+        "public_access_blocked_bucket_count": 20,
         "public_access_block_unknown_count": 0,
         "default_encryption_enabled": 95,
+        "default_encryption_enabled_bucket_count": 19,
         "default_encryption_evaluated_count": 20,
         "default_encryption_inferred_count": 0,
         "default_encryption_unknown_count": 0,
         "versioning_enabled": 60,
+        "versioning_enabled_bucket_count": 12,
         "logging_enabled": 40,
+        "logging_enabled_bucket_count": 8,
+        "log_sink_bucket_count": 0,
+        "logging_required_bucket_count": 20,
         "account_public_access_block_enabled": true
       },
       "rds": {
         "regions_evaluated_count": 2,
-        "database_count": 6,
+        "database_count": 10,
+        "instance_count": 8,
         "encrypted_at_rest": 100,
+        "encrypted_at_rest_database_count": 10,
         "publicly_accessible": 0,
+        "publicly_accessible_instance_count": 0,
         "deletion_protection": 90,
+        "deletion_protection_database_count": 9,
         "backup_retention_adequate": 100,
-        "multi_az_enabled": 80
+        "backup_retention_adequate_database_count": 10,
+        "multi_az_enabled": 80,
+        "multi_az_enabled_database_count": 8
       },
       "network": {
         "regions_evaluated_count": 2,
+        "security_group_count": 50,
         "open_to_world_ssh": 2,
-        "open_to_world_rdp": 0
+        "open_to_world_ssh_security_group_count": 1,
+        "open_to_world_rdp": 0,
+        "open_to_world_rdp_security_group_count": 0
       },
       "account_security": {
         "cloudtrail": {
@@ -186,6 +207,7 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
           "enabled": true,
           "cis_aws_foundations_benchmark_level_1": {
             "enabled": true,
+            "scored_controls": 50,
             "compliance_percent": 88,
             "compliance_state": "WARNING",
             "passed_controls": 44,
@@ -195,6 +217,7 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
           },
           "cis_aws_foundations_benchmark_level_2": {
             "enabled": true,
+            "scored_controls": 67,
             "compliance_percent": 82,
             "compliance_state": "FAILED",
             "passed_controls": 55,
@@ -204,6 +227,7 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
           },
           "cis_aws_foundations_benchmark_unknown_level": {
             "enabled": true,
+            "scored_controls": 10,
             "compliance_percent": 90,
             "compliance_state": "FAILED",
             "passed_controls": 9,
@@ -215,7 +239,9 @@ Metrics use percentages (0-100), booleans, and counts where appropriate.
         "inspector": {
           "status_evaluated": true,
           "enabled": true,
-          "unpatched_server_percent": 25
+          "unpatched_server_percent": 25,
+          "total_affected_resources": 8,
+          "unpatched_resources": 2
         }
       }
     }

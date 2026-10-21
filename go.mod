@@ -2,6 +2,8 @@ module github.com/locktivity/epack-collector-aws
 
 go 1.26.0
 
+toolchain go1.26.10
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
@@ -36,7 +38,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.4
 	github.com/aws/aws-sdk-go-v2/service/wafv2 v1.77.6
 	github.com/aws/smithy-go v1.28.5
-	github.com/locktivity/epack v0.1.34
+	github.com/locktivity/epack v0.9.4
 )
 
 require (
@@ -52,4 +54,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/signin v1.10.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.38.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.43.4 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 )

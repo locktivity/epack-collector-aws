@@ -10,6 +10,12 @@ This page lists the surfaces and their trust-level signals. Per-level field
 breakdowns live in [levels.md](levels.md); the machine-readable shape lives
 in [schema/v1.0.0.json](schema/v1.0.0.json).
 
+A value the collector could not read is null, and the run's result artifact
+(`artifacts/aws.collector-result.json` under the default collector name)
+records which values were left out and why. A percentage over an empty
+population, such as `mfa_enabled` in an account with no IAM users, is also
+null; the count beside it (here `iam_user_count`) is 0.
+
 ## What It Collects
 
 ### IAM Security
@@ -19,9 +25,14 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 | `credential_report_evaluated` | Whether the IAM credential report was collected. The user aggregates below are meaningful only when true |
 | `credential_report_error_code` | Error code when the credential report could not be collected (e.g. `CredentialReportTimeout`) |
 | `iam_users_present` | Whether at least one IAM user (excluding root) exists in the account |
+| `iam_user_count` | IAM users in the credential report, excluding root |
+| `access_key_user_count` | IAM users with at least one active access key |
 | `mfa_enabled` | Percentage of IAM users with MFA enabled |
+| `mfa_enabled_user_count` | IAM users with MFA enabled |
 | `hardware_mfa_enabled` | Percentage of IAM users with hardware MFA (physical OTP devices or FIDO/U2F security keys) |
-| `access_keys_rotated` | Percentage of access keys rotated within 90 days |
+| `hardware_mfa_enabled_user_count` | IAM users with hardware MFA |
+| `access_keys_rotated` | Percentage of users with active access keys whose keys were all rotated within 90 days |
+| `access_keys_rotated_user_count` | Users with active access keys whose keys were all rotated within 90 days |
 | `root_credential_state_evaluated` | Whether root credential state was read from the credential report or the account summary. The root credential flags below are meaningful only when true |
 | `root_mfa_enabled` | Whether root MFA is active (false when root has no credentials) |
 | `root_credentials_present` | Whether root has any password, access key, or signing certificate present |
@@ -44,13 +55,18 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 | `account_public_access_block_evaluated` | Whether the account-level public access block settings were read |
 | `bucket_count` | Total S3 buckets returned by `ListBuckets` |
 | `public_access_blocked` | Percentage of buckets whose effective S3 Block Public Access settings block public access |
+| `public_access_blocked_bucket_count` | Buckets whose effective S3 Block Public Access settings block public access |
 | `public_access_block_unknown_count` | Buckets whose effective S3 Block Public Access setting could not be fully evaluated |
-| `default_encryption_enabled` | Percentage of evaluated buckets with default encryption |
+| `default_encryption_enabled` | Percentage of buckets with default encryption. Null while any bucket's setting could not be read |
+| `default_encryption_enabled_bucket_count` | Buckets with default encryption |
 | `default_encryption_evaluated_count` | Buckets whose default encryption setting was evaluated |
 | `default_encryption_inferred_count` | Evaluated buckets counted from the documented AWS SSE-S3 baseline rather than a readable encryption rule |
 | `default_encryption_unknown_count` | Buckets whose default encryption setting could not be evaluated |
 | `versioning_enabled` | Percentage of buckets with versioning enabled |
-| `logging_enabled` | Percentage of buckets with access logging |
+| `versioning_enabled_bucket_count` | Buckets with versioning enabled |
+| `logging_required_bucket_count` | Buckets that are not a server access log destination |
+| `logging_enabled` | Percentage of those buckets with access logging |
+| `logging_enabled_bucket_count` | Those buckets with access logging |
 | `account_public_access_block_enabled` | Whether account-level public access block is enabled |
 
 ### RDS Security
@@ -60,11 +76,13 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 | `regions_evaluated_count` | Regions whose RDS listing succeeded; aggregates cover only these regions |
 | `regions_failed` | Regions whose RDS listing failed. Aggregates are meaningful only when absent |
 | `database_count` | Instances plus clusters across evaluated regions |
+| `instance_count` | Instances across evaluated regions |
 | `encrypted_at_rest` | Percentage of instances/clusters with encryption |
-| `publicly_accessible` | Percentage publicly accessible (should be 0%) |
+| `publicly_accessible` | Percentage of instances publicly accessible (should be 0%) |
 | `deletion_protection` | Percentage with deletion protection enabled |
 | `backup_retention_adequate` | Percentage with backup retention >= 7 days |
 | `multi_az_enabled` | Percentage with Multi-AZ deployment |
+| `*_database_count`, `publicly_accessible_instance_count` | The count each percentage above is taken of |
 
 ### Network Security
 
@@ -72,8 +90,11 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 |--------|-------------|
 | `regions_evaluated_count` | Regions whose network listing succeeded; exposure aggregates cover only these regions |
 | `regions_failed` | Regions whose network listing failed. Exposure aggregates are meaningful only when absent, since partial coverage can only understate exposure |
-| `open_to_world_ssh` | Percentage of security groups allowing SSH from 0.0.0.0/0 |
-| `open_to_world_rdp` | Percentage allowing RDP from 0.0.0.0/0 |
+| `security_group_count` | Security groups across evaluated regions |
+| `open_to_world_ssh` | Percentage of security groups allowing SSH from 0.0.0.0/0 or ::/0 |
+| `open_to_world_ssh_security_group_count` | Security groups allowing SSH from 0.0.0.0/0 or ::/0 |
+| `open_to_world_rdp` | Percentage allowing RDP from 0.0.0.0/0 or ::/0 |
+| `open_to_world_rdp_security_group_count` | Security groups allowing RDP from 0.0.0.0/0 or ::/0 |
 | `vpcs[].flow_logs_enabled` | Internal-level per-VPC flow log status |
 | `vpcs[].flow_logs_evaluated` | Whether internal-level flow log status was evaluated for the VPC |
 | `vpcs[].flow_logs_error_code` | Error code when internal-level flow log status could not be read |
@@ -86,7 +107,7 @@ in [schema/v1.0.0.json](schema/v1.0.0.json).
 | **AWS Config** | Enabled, recorder running |
 | **GuardDuty** | Enabled, unremediated high/critical findings >48h, finding notification routing |
 | **Security Hub** | Enabled, CIS AWS Foundations Benchmark level 1/2/unknown-level compliance |
-| **Inspector** | Status evaluated marker and error code, enabled, unpatched server % |
+| **Inspector** | Status evaluated marker and error code, enabled, unpatched server %, the unpatched resources it is taken of, and the affected resources it is over |
 
 For CIS level splits, the collector uses Security Hub finding `related_requirements` level tags and aggregates to one status per control (FAILED > WARNING > PASSED > NOT_AVAILABLE).
 Findings without explicit level tags are reported in an explicit unknown-level bucket.
@@ -95,6 +116,7 @@ Interpretation guide:
 - `security_hub.enabled=true` means Security Hub is available in the account/region.
 - `level_1` and `level_2` values are only populated when findings include explicit level tags.
 - `unknown_level` captures CIS controls where Security Hub did not provide a level tag.
+- `compliance_percent` is over `scored_controls`, the passed, failed, and warning controls; it is null when there are none.
 
 ### Identity Center (IAM Identity Center / AWS SSO)
 
@@ -137,7 +159,7 @@ Scoped to CUSTOMER-managed keys only; AWS-managed keys offer no posture lever.
 | Metric | Description |
 |--------|-------------|
 | `customer_managed_key_count` | Customer-managed keys across regions |
-| `cmks_with_rotation_disabled_count` | Symmetric CMKs without automatic key rotation |
+| `cmks_with_rotation_disabled_count` | Keys KMS can rotate (symmetric, with key material KMS generated) that have automatic rotation off |
 | `cmks_pending_deletion_count` | Keys scheduled for deletion |
 
 ### Secrets Manager
@@ -200,4 +222,6 @@ Each account's posture is collected independently and included in the output.
 An account that fails entirely is recorded under `failed_accounts` (with the
 account ID parsed from its role ARN and the upstream error code) instead of
 silently disappearing, and the normalized artifact carries a matching stub
-entry plus an `accounts_expected` count.
+entry (with `collection_error_code` and no metric groups) plus an
+`accounts_expected` count. A metric group with no value left in it is left out
+of the normalized artifact.

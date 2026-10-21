@@ -12,7 +12,8 @@ import (
 type idcClient interface {
 	ListIdentityCenterInstances(ctx context.Context, region string) ([]aws.IdentityCenterInstance, error)
 	ListIdentityStoreUsers(ctx context.Context, region, identityStoreID string) ([]aws.IdentityStoreUser, error)
-	ListIdentityStoreGroups(ctx context.Context, region, identityStoreID string, withMembers bool) ([]aws.IdentityStoreGroup, error)
+	ListIdentityStoreGroups(ctx context.Context, region, identityStoreID string) ([]aws.IdentityStoreGroup, error)
+	ListIdentityStoreGroupMembers(ctx context.Context, region, identityStoreID string, groups []aws.IdentityStoreGroup) ([]aws.IdentityStoreGroup, error)
 	ListIdentityCenterPermissionSets(ctx context.Context, region, instanceARN string, withInternalEnrichment bool) ([]aws.IdentityCenterPermissionSet, error)
 	ListIdentityCenterAccountAssignments(ctx context.Context, region, instanceARN, accountID, permissionSetARN string) ([]aws.IdentityCenterAssignment, error)
 }
@@ -20,22 +21,27 @@ type idcClient interface {
 // collectIdentityCenter collects IAM Identity Center status. Probes the primary
 // region only — accounts with IdC deployed elsewhere should configure the
 // collector with that region as primary. Returns an empty (Enabled=false)
-// status when IdC is not enabled in the primary region or when the call is
-// denied (e.g., member accounts that aren't the IdC delegated admin).
+// status when IdC is not enabled in the primary region. When the instance
+// listing fails, including when it is denied (e.g., member accounts that
+// aren't the IdC delegated admin), the whole status is left out; a narrower
+// failure leaves out only what it covers.
 //
 // At audit, the full access model is surfaced: users, groups with member
 // edges, permission sets with their provisioned accounts, and the account
 // assignment edges. Internal adds managed-policy detail on permission sets.
-func (c *Collector) collectIdentityCenter(ctx context.Context, client idcClient, primaryRegion, accountID string, level componentsdk.Level) IdentityCenterStatus {
+func (c *Collector) collectIdentityCenter(ctx context.Context, client idcClient, primaryRegion, accountID string, at at, level componentsdk.Level) IdentityCenterStatus {
 	var status IdentityCenterStatus
+	idcAt := at.sub("identity_center")
+	audit := level.AtLeast(componentsdk.LevelAudit)
 
 	instances, err := client.ListIdentityCenterInstances(ctx, primaryRegion)
 	if err != nil {
 		if isAccessDeniedErr(err) {
 			c.warnAccessDenied(accountID, "identity_center", "sso:ListInstances")
-			return status
+		} else {
+			c.warn("account %s: failed to list identity center instances: %v", accountID, err)
 		}
-		c.warn("account %s: failed to list identity center instances: %v", accountID, err)
+		c.gaps.leaveOut(err, idcAt.base)
 		return status
 	}
 	if len(instances) == 0 {
@@ -51,59 +57,75 @@ func (c *Collector) collectIdentityCenter(ctx context.Context, client idcClient,
 	users, usersErr := client.ListIdentityStoreUsers(ctx, inst.Region, inst.IdentityStoreID)
 	if usersErr != nil {
 		c.warn("account %s: failed to list identity store users: %v", accountID, usersErr)
+		status.missing.add(usersErr, "user_count")
+		if audit {
+			status.missing.add(usersErr, "users")
+		}
 	} else {
 		status.UserCount = len(users)
 	}
 
-	groups, groupsErr := client.ListIdentityStoreGroups(ctx, inst.Region, inst.IdentityStoreID, false)
+	groups, groupsErr := client.ListIdentityStoreGroups(ctx, inst.Region, inst.IdentityStoreID)
 	if groupsErr != nil {
 		c.warn("account %s: failed to list identity store groups: %v", accountID, groupsErr)
+		status.missing.add(groupsErr, "group_count")
+		if audit {
+			status.missing.add(groupsErr, "groups")
+		}
 	} else {
 		status.GroupCount = len(groups)
 	}
 
-	if !level.AtLeast(componentsdk.LevelAudit) {
-		// Trust still wants the count; cheap separate call.
+	if !audit {
 		permSets, err := client.ListIdentityCenterPermissionSets(ctx, inst.Region, inst.InstanceARN, false)
-		if err == nil {
+		if err != nil {
+			c.warn("account %s: failed to list IdC permission sets: %v", accountID, err)
+			status.missing.add(err, "permission_set_count")
+		} else {
 			status.PermissionSetCount = len(permSets)
 		}
+		c.recordUnread(idcAt, status.missing)
 		return status
 	}
 
 	permSets, err := client.ListIdentityCenterPermissionSets(ctx, inst.Region, inst.InstanceARN, level.AtLeast(componentsdk.LevelInternal))
 	if err != nil {
 		c.warn("account %s: failed to list IdC permission sets: %v", accountID, err)
+		status.missing.add(err, "permission_set_count", "permission_sets", "account_assignments")
 	} else {
 		status.PermissionSetCount = len(permSets)
 		status.PermissionSets = permissionSetsToInventory(permSets)
-		status.AccountAssignments, status.AssignmentsEvaluated, status.AssignmentsTruncated, status.AssignmentsDroppedCount =
+		var assignmentsErr error
+		status.AccountAssignments, status.AssignmentsEvaluated, status.AssignmentsTruncated, status.AssignmentsDroppedCount, assignmentsErr =
 			c.collectIdentityCenterAssignments(ctx, client, inst, permSets, accountID)
+		status.missing.add(assignmentsErr, "account_assignments")
 	}
 
 	if usersErr == nil {
 		status.Users = identityStoreUsersToInventory(users)
 	}
 
+	// The rows enrich the listing group_count came from, so the count and the
+	// rows never come from two different answers.
 	if groupsErr == nil {
-		// Re-fetch groups with member edges (we only have summary rows above).
-		groupsWithMembers, err := client.ListIdentityStoreGroups(ctx, inst.Region, inst.IdentityStoreID, true)
+		groupsWithMembers, err := client.ListIdentityStoreGroupMembers(ctx, inst.Region, inst.IdentityStoreID, groups)
 		if err != nil {
 			c.warn("account %s: failed to enrich IdC groups with member edges: %v", accountID, err)
 			status.Groups = identityStoreGroupsToInventory(groups)
+			for i := range status.Groups {
+				status.Groups[i].missing.add(err, "member_count", "member_user_ids")
+			}
 		} else {
 			status.Groups = identityStoreGroupsToInventory(groupsWithMembers)
 		}
 	}
 
+	c.recordUnread(idcAt, status.missing)
+	recordRowsUnread(c, idcAt.sub("groups"), status.Groups, func(r *IdentityCenterGroupRow) unread { return r.missing })
 	return status
 }
 
-// collectIdentityCenterAssignments walks each permission set's provisioned
-// accounts and lists the principal assignments. Any failure discards the
-// partial inventory (a partial assignment list would silently understate
-// access) and reports evaluated=false with a diagnostic.
-func (c *Collector) collectIdentityCenterAssignments(ctx context.Context, client idcClient, inst aws.IdentityCenterInstance, permSets []aws.IdentityCenterPermissionSet, accountID string) (rows []IdentityCenterAssignmentRow, evaluated, truncated bool, dropped int) {
+func (c *Collector) collectIdentityCenterAssignments(ctx context.Context, client idcClient, inst aws.IdentityCenterInstance, permSets []aws.IdentityCenterPermissionSet, accountID string) (rows []IdentityCenterAssignmentRow, evaluated, truncated bool, dropped int, failure error) {
 	rows = []IdentityCenterAssignmentRow{}
 	for _, ps := range permSets {
 		for _, provisionedAccountID := range ps.ProvisionedAccountIDs {
@@ -114,7 +136,7 @@ func (c *Collector) collectIdentityCenterAssignments(ctx context.Context, client
 				} else {
 					c.warn("account %s: failed to list IdC account assignments: %v", accountID, err)
 				}
-				return []IdentityCenterAssignmentRow{}, false, false, 0
+				return []IdentityCenterAssignmentRow{}, false, false, 0, err
 			}
 			for _, a := range assignments {
 				rows = append(rows, IdentityCenterAssignmentRow{
@@ -139,7 +161,7 @@ func (c *Collector) collectIdentityCenterAssignments(ctx context.Context, client
 	if wasTruncated {
 		c.warn("account %s: IdC account assignment inventory truncated to %d (dropped %d)", accountID, IdentityCenterAssignmentsCap, droppedCount)
 	}
-	return kept, true, wasTruncated, droppedCount
+	return kept, true, wasTruncated, droppedCount, nil
 }
 
 func permissionSetsToInventory(in []aws.IdentityCenterPermissionSet) []IdentityCenterPermissionSetRow {

@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
@@ -115,32 +116,38 @@ func TestTrailObjectPrefix(t *testing.T) {
 	}
 }
 
-// Either side blocking decides blocked even when the other is unreadable, but
-// not-blocked needs both sides known: the unreadable side could be the one
-// that blocks.
-func TestEffectivePublicAccess(t *testing.T) {
-	yes, no := true, false
+// Each flag is on when either side sets it. Every flag on decides blocked
+// even when one side is unreadable, but not-blocked needs both sides read:
+// the unreadable side could set the flags the other lacks.
+func TestTrailBucketPublicAccess(t *testing.T) {
+	full := aws.PublicAccessBlockSettings{BlockPublicACLs: true, IgnorePublicACLs: true, BlockPublicPolicy: true, RestrictPublicBuckets: true, Evaluated: true}
+	acls := aws.PublicAccessBlockSettings{BlockPublicACLs: true, IgnorePublicACLs: true, Evaluated: true}
+	policies := aws.PublicAccessBlockSettings{BlockPublicPolicy: true, RestrictPublicBuckets: true, Evaluated: true}
+	none := aws.PublicAccessBlockSettings{Evaluated: true}
+	unread := aws.PublicAccessBlockSettings{ErrorCode: "AccessDenied", Err: errors.New("getting public access block: AccessDenied")}
 
 	tests := []struct {
 		name    string
-		account *bool
-		bucket  *bool
+		account aws.PublicAccessBlockSettings
+		bucket  aws.PublicAccessBlockSettings
 		want    string
 	}{
-		{name: "account block alone suffices", account: &yes, bucket: &no, want: trailBucketAccessBlocked},
-		{name: "bucket block alone suffices", account: &no, bucket: &yes, want: trailBucketAccessBlocked},
-		{name: "account blocks even when the bucket is unreadable", account: &yes, bucket: nil, want: trailBucketAccessBlocked},
-		{name: "bucket blocks even when the account is unreadable", account: nil, bucket: &yes, want: trailBucketAccessBlocked},
-		{name: "both known open is the finding", account: &no, bucket: &no, want: trailBucketAccessNotBlocked},
-		{name: "open bucket with unreadable account stays unknown", account: nil, bucket: &no, want: trailRetentionUnknown},
-		{name: "open account with unreadable bucket stays unknown", account: &no, bucket: nil, want: trailRetentionUnknown},
-		{name: "nothing readable is unknown", account: nil, bucket: nil, want: trailRetentionUnknown},
+		{name: "account block alone suffices", account: full, bucket: none, want: trailBucketAccessBlocked},
+		{name: "bucket block alone suffices", account: none, bucket: full, want: trailBucketAccessBlocked},
+		{name: "flags split across the two sides block together", account: acls, bucket: policies, want: trailBucketAccessBlocked},
+		{name: "account blocks even when the bucket is unreadable", account: full, bucket: unread, want: trailBucketAccessBlocked},
+		{name: "bucket blocks even when the account is unreadable", account: unread, bucket: full, want: trailBucketAccessBlocked},
+		{name: "a flag neither side sets is the finding", account: acls, bucket: acls, want: trailBucketAccessNotBlocked},
+		{name: "both known open is the finding", account: none, bucket: none, want: trailBucketAccessNotBlocked},
+		{name: "open bucket with unreadable account stays unknown", account: unread, bucket: none, want: trailRetentionUnknown},
+		{name: "partial account with unreadable bucket stays unknown", account: acls, bucket: unread, want: trailRetentionUnknown},
+		{name: "nothing readable is unknown", account: unread, bucket: unread, want: trailRetentionUnknown},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := effectivePublicAccess(tt.account, tt.bucket); got != tt.want {
-				t.Fatalf("effectivePublicAccess() = %q, want %q", got, tt.want)
+			if got := trailBucketPublicAccess(tt.account, tt.bucket); got != tt.want {
+				t.Fatalf("trailBucketPublicAccess() = %q, want %q", got, tt.want)
 			}
 		})
 	}

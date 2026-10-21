@@ -27,6 +27,7 @@ func (c *Collector) collectLoadBalancerMetrics(ctx context.Context, client *aws.
 	if tgErr != nil {
 		c.warn("account %s region %s: failed to list target groups: %v", accountID, region, tgErr)
 		out.TargetGroupListingFailedRegionCount = 1
+		out.missing.add(tgErr, "target_group_count", "target_groups_without_health_check_count")
 	} else {
 		out.TargetGroupCount = len(groups)
 		for _, tg := range groups {
@@ -37,8 +38,14 @@ func (c *Collector) collectLoadBalancerMetrics(ctx context.Context, client *aws.
 	}
 
 	if level.AtLeast(componentsdk.LevelAudit) {
+		out.LoadBalancers = make([]LoadBalancerRow, 0, len(lbs))
 		for _, lb := range lbs {
 			out.LoadBalancers = append(out.LoadBalancers, loadBalancerToRow(lb, region))
+		}
+		if tgErr != nil {
+			out.missing.add(tgErr, "target_groups")
+		} else {
+			out.TargetGroups = make([]TargetGroupRow, 0, len(groups))
 		}
 		for _, tg := range groups {
 			out.TargetGroups = append(out.TargetGroups, TargetGroupRow{
@@ -57,15 +64,22 @@ func (c *Collector) collectLoadBalancerMetrics(ctx context.Context, client *aws.
 	return out, nil
 }
 
-// aggregateLoadBalancers reduces a region's load balancers to the transport
-// findings. An unresolved load balancer contributes to no finding in either
-// direction: it is neither plaintext nor proven clean.
 func aggregateLoadBalancers(lbs []aws.LoadBalancer) *LoadBalancerMetrics {
 	out := &LoadBalancerMetrics{LoadBalancerCount: len(lbs)}
 
 	for _, lb := range lbs {
 		if lb.ListenersUnresolved {
 			out.ListenersUnresolvedCount++
+			// The listeners decide every transport count for the load
+			// balancer's type, so those counts cover the others only.
+			fields := []string{"tls_listeners_by_policy"}
+			switch lb.Type {
+			case "application":
+				fields = append(fields, "albs_serving_plaintext_count", "internet_facing_albs_serving_plaintext_count", "albs_without_https_listener_count")
+			case "network":
+				fields = append(fields, "nlb_tls_listener_count", "nlb_tcp_passthrough_listener_count")
+			}
+			out.missing.addPartial(lb.ListenersErr, 1, fields...)
 		}
 		if lb.AvailabilityZoneCount == 1 {
 			out.SingleZoneLoadBalancerCount++
@@ -138,6 +152,7 @@ func loadBalancerToRow(lb aws.LoadBalancer, region string) LoadBalancerRow {
 		AvailabilityZoneCount: lb.AvailabilityZoneCount,
 		ListenersUnresolved:   lb.ListenersUnresolved,
 	}
+	row.missing.add(lb.ListenersErr, "listeners")
 	for _, l := range lb.Listeners {
 		row.Listeners = append(row.Listeners, ListenerRow{
 			Port:             l.Port,
@@ -153,6 +168,7 @@ func loadBalancerToRow(lb aws.LoadBalancer, region string) LoadBalancerRow {
 // rows concatenate.
 func mergeLoadBalancerMetrics(a, b LoadBalancerMetrics) LoadBalancerMetrics {
 	merged := LoadBalancerMetrics{
+		missing:                                 a.missing,
 		LoadBalancerCount:                       a.LoadBalancerCount + b.LoadBalancerCount,
 		ALBCount:                                a.ALBCount + b.ALBCount,
 		ALBsServingPlaintextCount:               a.ALBsServingPlaintextCount + b.ALBsServingPlaintextCount,
@@ -166,9 +182,10 @@ func mergeLoadBalancerMetrics(a, b LoadBalancerMetrics) LoadBalancerMetrics {
 		TargetGroupCount:                        a.TargetGroupCount + b.TargetGroupCount,
 		TargetGroupsWithoutHealthCheckCount:     a.TargetGroupsWithoutHealthCheckCount + b.TargetGroupsWithoutHealthCheckCount,
 		TargetGroupListingFailedRegionCount:     a.TargetGroupListingFailedRegionCount + b.TargetGroupListingFailedRegionCount,
-		TargetGroups:                            append(append([]TargetGroupRow(nil), a.TargetGroups...), b.TargetGroups...),
-		LoadBalancers:                           append(append([]LoadBalancerRow(nil), a.LoadBalancers...), b.LoadBalancers...),
+		TargetGroups:                            appendRows(a.TargetGroups, b.TargetGroups),
+		LoadBalancers:                           appendRows(a.LoadBalancers, b.LoadBalancers),
 	}
+	merged.missing.merge(b.missing)
 	for _, src := range []map[string]int{a.TLSListenersByPolicy, b.TLSListenersByPolicy} {
 		for policy, count := range src {
 			if merged.TLSListenersByPolicy == nil {

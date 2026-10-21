@@ -28,69 +28,95 @@ type trailBucketVerdict struct {
 	expirationDays int32
 	objectLockMode string
 	publicAccess   string
+
+	// missing holds the trail rows' bucket fields a failed read left
+	// unknown.
+	missing unread
 }
+
+// trailBucketCounts are the CloudTrail counts over trail buckets.
+var (
+	trailRetentionCounts    = []string{"trail_buckets_retained_indefinitely_count", "trail_buckets_expiring_count", "trail_bucket_min_expiration_days", "trail_buckets_not_in_account_count"}
+	trailObjectLockCounts   = []string{"trail_buckets_object_locked_count"}
+	trailPublicAccessCounts = []string{"trail_buckets_public_access_blocked_count", "trail_buckets_public_access_not_blocked_count"}
+)
 
 // resolveTrailBucketRetention resolves, per trail delivery bucket, how long
 // the audit log objects survive: the covering lifecycle expiration if any, and
 // whether object lock pins retention against deletion.
 //
-// A bucket outside this account, the normal shape for organization trails
-// delivering to a log archive account, classifies not_in_account rather than
-// anything about its rules: enrolling that account is what makes it readable.
-func (c *Collector) resolveTrailBucketRetention(ctx context.Context, client *aws.AWSClient, accountID string, trails []aws.Trail, status *CloudTrailStatus) {
-	verdicts := map[string]trailBucketVerdict{}
-
-	// The account-level block overrides every bucket, so it is read once. A
-	// failed read leaves the account side unknown rather than open.
-	var accountBlocks *bool
-	if accountPAB, err := client.GetAccountPublicAccessBlock(ctx, accountID); err == nil {
-		blocks := accountPAB.BlocksPublicAccess()
-		accountBlocks = &blocks
-	}
+// A bucket missing from the account's own bucket list, the normal shape for
+// organization trails delivering to a log archive account, classifies
+// not_in_account rather than anything about its rules: enrolling that account
+// is what makes it readable. A read that fails leaves its values unknown.
+func (c *Collector) resolveTrailBucketRetention(ctx context.Context, client *aws.AWSClient, accountID string, at at, trails []aws.Trail, s3 *S3Metrics, status *CloudTrailStatus) {
+	verdicts := map[string]*trailBucketVerdict{}
+	var order []string
 
 	for _, trail := range trails {
-		if trail.S3BucketName == "" {
+		name := trail.S3BucketName
+		if name == "" || verdicts[name] != nil {
 			continue
 		}
-		if _, seen := verdicts[trail.S3BucketName]; seen {
+		v := &trailBucketVerdict{}
+		verdicts[name] = v
+		order = append(order, name)
+
+		if s3.bucketNames != nil && !s3.bucketNames[name] {
+			v.state = trailRetentionNotInAccount
+			v.publicAccess = trailRetentionNotInAccount
 			continue
 		}
 
-		region, err := client.GetBucketRegion(ctx, trail.S3BucketName)
+		region, err := client.GetBucketRegion(ctx, name)
 		if err != nil {
-			verdicts[trail.S3BucketName] = trailBucketVerdict{state: trailRetentionNotInAccount, publicAccess: trailRetentionNotInAccount}
+			c.warn("account %s: failed to locate trail bucket %s; its retention is unknown: %v", accountID, name, err)
+			v.state, v.publicAccess = trailRetentionUnknown, trailRetentionUnknown
+			v.missing.add(err, "bucket_retention", "bucket_expiration_days", "bucket_object_lock_mode", "bucket_public_access")
+			status.missing.addPartial(err, 1, trailRetentionCounts...)
+			status.missing.addPartial(err, 1, trailObjectLockCounts...)
+			status.missing.addPartial(err, 1, trailPublicAccessCounts...)
 			continue
 		}
 
-		verdict := trailBucketVerdict{}
-		lifecycle, err := client.GetBucketLifecycle(ctx, region, trail.S3BucketName)
+		lifecycle, err := client.GetBucketLifecycle(ctx, region, name)
+		if err != nil {
+			c.warn("account %s: failed to read lifecycle for trail bucket %s; its retention is unknown, not indefinite", accountID, name)
+			v.state = trailRetentionUnknown
+			v.missing.add(err, "bucket_retention", "bucket_expiration_days")
+			status.missing.addPartial(err, 1, trailRetentionCounts...)
+		} else {
+			v.state, v.expirationDays = classifyTrailRetention(lifecycle, trailObjectPrefix(trail))
+		}
+
+		lock, err := client.GetBucketObjectLock(ctx, region, name)
 		switch {
 		case err != nil:
-			c.warn("account %s: failed to read lifecycle for trail bucket %s; its retention is unknown, not indefinite", accountID, trail.S3BucketName)
-			verdict.state = trailRetentionUnknown
-		default:
-			verdict.state, verdict.expirationDays = classifyTrailRetention(lifecycle, trailObjectPrefix(trail))
+			c.warn("account %s: failed to read object lock for trail bucket %s: %v", accountID, name, err)
+			v.missing.add(err, "bucket_object_lock_mode")
+			status.missing.addPartial(err, 1, trailObjectLockCounts...)
+		case lock != nil:
+			v.objectLockMode = lock.Mode
 		}
 
-		if lock, err := client.GetBucketObjectLock(ctx, region, trail.S3BucketName); err == nil && lock != nil {
-			verdict.objectLockMode = lock.Mode
+		bucketPAB := client.GetBucketPublicAccessBlock(ctx, region, name)
+		v.publicAccess = trailBucketPublicAccess(s3.accountPAB, bucketPAB)
+		switch v.publicAccess {
+		case trailBucketAccessNotBlocked:
+			c.warn("account %s: trail delivery bucket %s has no effective public access block; audit logs have no legitimate public readership", accountID, name)
+		case trailRetentionUnknown:
+			why := bucketPAB.Err
+			if why == nil {
+				why = s3.accountPABErr
+			}
+			v.missing.add(why, "bucket_public_access")
+			status.missing.addPartial(why, 1, trailPublicAccessCounts...)
 		}
-
-		bucketPAB := client.GetBucketPublicAccessBlock(ctx, region, trail.S3BucketName)
-		var bucketBlocks *bool
-		if bucketPAB.Evaluated {
-			blocks := bucketPAB.BlocksPublicAccess()
-			bucketBlocks = &blocks
-		}
-		verdict.publicAccess = effectivePublicAccess(accountBlocks, bucketBlocks)
-		if verdict.publicAccess == trailBucketAccessNotBlocked {
-			c.warn("account %s: trail delivery bucket %s has no effective public access block; audit logs have no legitimate public readership", accountID, trail.S3BucketName)
-		}
-		verdicts[trail.S3BucketName] = verdict
 	}
 
 	minExpiration := int32(0)
-	for _, v := range verdicts {
+	for _, name := range order {
+		v := verdicts[name]
 		switch v.state {
 		case trailRetentionIndefinite:
 			status.TrailBucketsRetainedIndefinitelyCount++
@@ -124,23 +150,22 @@ func (c *Collector) resolveTrailBucketRetention(ctx context.Context, client *aws
 			status.Trails[i].BucketExpirationDays = v.expirationDays
 			status.Trails[i].BucketObjectLockMode = v.objectLockMode
 			status.Trails[i].BucketPublicAccess = v.publicAccess
+			status.Trails[i].missing.merge(v.missing)
 		}
 	}
 }
 
-// effectivePublicAccess resolves the block state the way S3 enforces it: the
-// account-level block or the bucket-level block suffices alone. Either side
-// blocking decides blocked even when the other is unreadable; not-blocked
-// needs both sides known, because an unreadable side could be the one that
-// blocks.
-func effectivePublicAccess(accountBlocks, bucketBlocks *bool) string {
-	if (accountBlocks != nil && *accountBlocks) || (bucketBlocks != nil && *bucketBlocks) {
+// trailBucketPublicAccess resolves a delivery bucket's block from the account
+// block the S3 surface read and the bucket's own, by the rule the bucket
+// inventory uses, so a trail's row and its bucket's row never disagree.
+func trailBucketPublicAccess(account, bucket aws.PublicAccessBlockSettings) string {
+	switch block := effectivePublicAccessBlock(account, bucket); {
+	case block.blocked:
 		return trailBucketAccessBlocked
+	case block.unknown:
+		return trailRetentionUnknown
 	}
-	if accountBlocks != nil && bucketBlocks != nil {
-		return trailBucketAccessNotBlocked
-	}
-	return trailRetentionUnknown
+	return trailBucketAccessNotBlocked
 }
 
 // trailObjectPrefix is where the trail writes its objects, which is what a

@@ -1,7 +1,6 @@
 package collector
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -30,28 +29,21 @@ const (
 // classifyBucketTransport fetches each bucket's policy and classifies its TLS
 // enforcement. The policy document itself is discarded here; internal-level
 // enrichment refetches it for the inventory rows.
-func (c *Collector) classifyBucketTransport(ctx context.Context, client s3BucketEnricher, buckets []aws.Bucket) map[string]string {
+func classifyBucketTransport(buckets []aws.Bucket) map[string]string {
 	out := make(map[string]string, len(buckets))
 	for _, b := range buckets {
-		region := b.Region
-		if region == "" {
-			region = "us-east-1"
-		}
-		policy, err := client.GetBucketPolicy(ctx, region, b.Name)
 		switch {
-		case err != nil:
+		case b.PolicyErr != nil:
 			out[b.Name] = tlsEnforcementUnknown
-		case policy == nil:
+		case b.Policy == nil:
 			out[b.Name] = tlsEnforcementNone
 		default:
-			out[b.Name] = classifyTransportEnforcement(policy.Document, b.Name)
+			out[b.Name] = classifyTransportEnforcement(b.Policy.Document, b.Name)
 		}
 	}
 	return out
 }
 
-// flexibleStrings accepts the scalar-or-array shapes policy JSON uses freely,
-// plus bare booleans in condition values.
 type flexibleStrings []string
 
 func (f *flexibleStrings) UnmarshalJSON(b []byte) error {

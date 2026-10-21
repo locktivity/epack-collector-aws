@@ -40,7 +40,7 @@ func TestS3BucketsToInventory_PreservesAllFlags(t *testing.T) {
 		},
 	}
 
-	out := s3BucketsToInventory(in)
+	out := s3BucketsToInventory(in, aws.PublicAccessBlockSettings{})
 	if len(out) != 3 {
 		t.Fatalf("expected 3 buckets, got %d", len(out))
 	}
@@ -68,13 +68,13 @@ func TestS3BucketsToInventory_PreservesAllFlags(t *testing.T) {
 }
 
 func TestS3BucketsToInventory_EmptyInputReturnsEmpty(t *testing.T) {
-	out := s3BucketsToInventory(nil)
+	out := s3BucketsToInventory(nil, aws.PublicAccessBlockSettings{})
 	if len(out) != 0 {
 		t.Errorf("expected empty inventory for nil input, got %d rows", len(out))
 	}
 }
 
-func TestSummarizeS3Buckets_DefaultEncryptionUsesEvaluatedDenominator(t *testing.T) {
+func TestSummarizeS3Buckets_DefaultEncryptionMarksUnknownBuckets(t *testing.T) {
 	buckets := []aws.Bucket{
 		{
 			Name:                       "encrypted",
@@ -92,7 +92,8 @@ func TestSummarizeS3Buckets_DefaultEncryptionUsesEvaluatedDenominator(t *testing
 			DefaultEncryptionEvaluated: true,
 		},
 		{
-			Name: "unknown",
+			Name:                 "unknown",
+			DefaultEncryptionErr: errors.New("getting default encryption: AccessDenied"),
 		},
 	}
 
@@ -102,8 +103,13 @@ func TestSummarizeS3Buckets_DefaultEncryptionUsesEvaluatedDenominator(t *testing
 	if metrics.BucketCount != 4 {
 		t.Errorf("BucketCount = %d, want 4", metrics.BucketCount)
 	}
-	if metrics.DefaultEncryptionEnabled != 66 {
-		t.Errorf("DefaultEncryptionEnabled = %d, want 66", metrics.DefaultEncryptionEnabled)
+	// The percentage is over every bucket, and the one bucket that could not
+	// be read leaves it out of the artifact with a partial gap.
+	if !pctIs(metrics.DefaultEncryptionEnabled, 50) {
+		t.Errorf("DefaultEncryptionEnabled = %s, want 50", showPct(metrics.DefaultEncryptionEnabled))
+	}
+	if !hasUnread(metrics.missing, "default_encryption_enabled", 1) {
+		t.Errorf("default_encryption_enabled is not marked unread for 1 bucket: %+v", metrics.missing)
 	}
 	if metrics.DefaultEncryptionEvaluatedCount != 3 {
 		t.Errorf("DefaultEncryptionEvaluatedCount = %d, want 3", metrics.DefaultEncryptionEvaluatedCount)
@@ -123,17 +129,16 @@ func TestSummarizeS3Buckets_NoBuckets(t *testing.T) {
 	if metrics.BucketCount != 0 {
 		t.Errorf("BucketCount = %d, want 0", metrics.BucketCount)
 	}
-	if metrics.PublicAccessBlocked != 100 {
-		t.Errorf("PublicAccessBlocked = %d, want 100", metrics.PublicAccessBlocked)
-	}
-	if metrics.DefaultEncryptionEnabled != 100 {
-		t.Errorf("DefaultEncryptionEnabled = %d, want 100", metrics.DefaultEncryptionEnabled)
-	}
-	if metrics.VersioningEnabled != 100 {
-		t.Errorf("VersioningEnabled = %d, want 100", metrics.VersioningEnabled)
-	}
-	if metrics.LoggingEnabled != 100 {
-		t.Errorf("LoggingEnabled = %d, want 100", metrics.LoggingEnabled)
+	// No buckets is no population: every percentage is null, not 100.
+	for name, got := range map[string]*int{
+		"PublicAccessBlocked":      metrics.PublicAccessBlocked,
+		"DefaultEncryptionEnabled": metrics.DefaultEncryptionEnabled,
+		"VersioningEnabled":        metrics.VersioningEnabled,
+		"LoggingEnabled":           metrics.LoggingEnabled,
+	} {
+		if got != nil {
+			t.Errorf("%s = %s, want null", name, showPct(got))
+		}
 	}
 }
 
@@ -175,8 +180,8 @@ func TestApplyEffectivePublicAccessBlock_UsesAccountAndBucketSettings(t *testing
 	unknown := applyEffectivePublicAccessBlock(buckets, accountPublicAccessBlock)
 	summarizeS3Buckets(metrics, buckets)
 
-	if metrics.PublicAccessBlocked != 66 {
-		t.Errorf("PublicAccessBlocked = %d, want 66", metrics.PublicAccessBlocked)
+	if !pctIs(metrics.PublicAccessBlocked, 66) {
+		t.Errorf("PublicAccessBlocked = %s, want 66", showPct(metrics.PublicAccessBlocked))
 	}
 	if unknown != 0 {
 		t.Errorf("unknown public access block count = %d, want 0", unknown)
@@ -202,16 +207,17 @@ func TestApplyEffectivePublicAccessBlock_AccountSettingsCoverUnreadableBuckets(t
 			Name: "bucket-without-readable-pab",
 			PublicAccessBlock: aws.PublicAccessBlockSettings{
 				ErrorCode: "AccessDenied",
+				Err:       errors.New("getting bucket public access block: AccessDenied"),
 			},
 		},
 	}
 
-	metrics := &S3Metrics{}
+	metrics := &S3Metrics{accountPAB: accountPublicAccessBlock}
 	unknown := applyEffectivePublicAccessBlock(buckets, accountPublicAccessBlock)
 	summarizeS3Buckets(metrics, buckets)
 
-	if metrics.PublicAccessBlocked != 100 {
-		t.Errorf("PublicAccessBlocked = %d, want 100", metrics.PublicAccessBlocked)
+	if !pctIs(metrics.PublicAccessBlocked, 100) {
+		t.Errorf("PublicAccessBlocked = %s, want 100", showPct(metrics.PublicAccessBlocked))
 	}
 	if unknown != 0 {
 		t.Errorf("unknown public access block count = %d, want 0", unknown)
@@ -219,10 +225,53 @@ func TestApplyEffectivePublicAccessBlock_AccountSettingsCoverUnreadableBuckets(t
 	if !buckets[0].EffectivePublicAccessBlocked {
 		t.Errorf("bucket should be effectively blocked by account-level settings: %+v", buckets[0])
 	}
+	if len(metrics.missing.fields) != 0 {
+		t.Errorf("the account block decides the value, so nothing is left out: %+v", metrics.missing)
+	}
+	rows := s3BucketsToInventory(buckets, accountPublicAccessBlock)
+	if !rows[0].PublicAccessBlocked || len(rows[0].missing.fields) != 0 {
+		t.Errorf("the bucket row should read as blocked with nothing left out: %+v", rows[0])
+	}
+}
+
+func TestApplyEffectivePublicAccessBlock_UnreadableBucketIsUnknownUnderPartialAccountBlock(t *testing.T) {
+	accountPublicAccessBlock := aws.PublicAccessBlockSettings{
+		BlockPublicACLs:  true,
+		IgnorePublicACLs: true,
+		Evaluated:        true,
+	}
+	buckets := []aws.Bucket{
+		{
+			Name: "bucket-without-readable-pab",
+			PublicAccessBlock: aws.PublicAccessBlockSettings{
+				ErrorCode: "AccessDenied",
+				Err:       errors.New("getting bucket public access block: AccessDenied"),
+			},
+		},
+	}
+
+	metrics := &S3Metrics{accountPAB: accountPublicAccessBlock}
+	unknown := applyEffectivePublicAccessBlock(buckets, accountPublicAccessBlock)
+	summarizeS3Buckets(metrics, buckets)
+
+	if !hasUnread(metrics.missing, "public_access_blocked", 1) {
+		t.Errorf("public_access_blocked is not marked unread for the bucket: %+v", metrics.missing)
+	}
+	if unknown != 1 {
+		t.Errorf("unknown public access block count = %d, want 1", unknown)
+	}
+	if buckets[0].EffectivePublicAccessBlocked {
+		t.Errorf("the bucket's own block could set the flags the account leaves off, so it is unknown: %+v", buckets[0])
+	}
+	rows := s3BucketsToInventory(buckets, accountPublicAccessBlock)
+	if !hasUnread(rows[0].missing, "public_access_blocked", 0) {
+		t.Errorf("the bucket row's public_access_blocked is not marked unread: %+v", rows[0].missing)
+	}
 }
 
 func TestApplyEffectivePublicAccessBlock_UnknownWhenNeededSettingUnreadable(t *testing.T) {
-	accountPublicAccessBlock := aws.PublicAccessBlockSettings{ErrorCode: "AccessDenied"}
+	accountErr := errors.New("getting account public access block: AccessDenied")
+	accountPublicAccessBlock := aws.PublicAccessBlockSettings{ErrorCode: "AccessDenied", Err: accountErr}
 	buckets := []aws.Bucket{
 		{
 			Name: "partial-bucket-config",
@@ -233,12 +282,12 @@ func TestApplyEffectivePublicAccessBlock_UnknownWhenNeededSettingUnreadable(t *t
 		},
 	}
 
-	metrics := &S3Metrics{}
+	metrics := &S3Metrics{accountPAB: accountPublicAccessBlock, accountPABErr: accountErr}
 	unknown := applyEffectivePublicAccessBlock(buckets, accountPublicAccessBlock)
 	summarizeS3Buckets(metrics, buckets)
 
-	if metrics.PublicAccessBlocked != 0 {
-		t.Errorf("PublicAccessBlocked = %d, want 0", metrics.PublicAccessBlocked)
+	if !hasUnread(metrics.missing, "public_access_blocked", 1) {
+		t.Errorf("public_access_blocked is not marked unread for the bucket: %+v", metrics.missing)
 	}
 	if unknown != 1 {
 		t.Errorf("unknown public access block count = %d, want 1", unknown)
@@ -250,17 +299,9 @@ func TestApplyEffectivePublicAccessBlock_UnknownWhenNeededSettingUnreadable(t *t
 
 // fakeS3Enricher is a focused mock for the s3BucketEnricher interface.
 type fakeS3Enricher struct {
-	policies   map[string]*aws.BucketPolicy
 	acls       map[string]*aws.BucketACL
 	lifecycles map[string]*aws.BucketLifecycle
-	errs       map[string]error // keyed by "bucket:op" (e.g., "alpha:policy")
-}
-
-func (f fakeS3Enricher) GetBucketPolicy(_ context.Context, _, bucket string) (*aws.BucketPolicy, error) {
-	if err, ok := f.errs[bucket+":policy"]; ok {
-		return nil, err
-	}
-	return f.policies[bucket], nil
+	errs       map[string]error // keyed by "bucket:op" (e.g., "alpha:acl")
 }
 
 func (f fakeS3Enricher) GetBucketACL(_ context.Context, _, bucket string) (*aws.BucketACL, error) {
@@ -282,9 +323,6 @@ func TestEnrichS3BucketsForInternal_PopulatesAllFields(t *testing.T) {
 		{Name: "alpha", Region: "us-east-1"},
 	}
 	enricher := fakeS3Enricher{
-		policies: map[string]*aws.BucketPolicy{
-			"alpha": {Document: `{"Version":"2012-10-17","Statement":[]}`},
-		},
 		acls: map[string]*aws.BucketACL{
 			"alpha": {
 				OwnerID: "owner123",
@@ -301,8 +339,10 @@ func TestEnrichS3BucketsForInternal_PopulatesAllFields(t *testing.T) {
 		},
 	}
 
-	c := &Collector{}
-	c.enrichS3BucketsForInternal(context.Background(), enricher, "111111111111", buckets)
+	c := newTestCollector(Config{})
+	c.enrichS3BucketsForInternal(context.Background(), enricher, "111111111111", buckets, map[string]aws.Bucket{
+		"alpha": {Name: "alpha", Policy: &aws.BucketPolicy{Document: `{"Version":"2012-10-17","Statement":[]}`}},
+	})
 
 	if buckets[0].Policy == nil || !strings.Contains(buckets[0].Policy.Document, "2012-10-17") {
 		t.Errorf("Policy not populated correctly: %+v", buckets[0].Policy)
@@ -326,11 +366,13 @@ func TestEnrichS3BucketsForInternal_AbsentPolicyAndLifecycle(t *testing.T) {
 		acls: map[string]*aws.BucketACL{
 			"no-extras": {OwnerID: "owner"},
 		},
-		// no policies, no lifecycles
+		// no lifecycles
 	}
 
-	c := &Collector{}
-	c.enrichS3BucketsForInternal(context.Background(), enricher, "111111111111", buckets)
+	c := newTestCollector(Config{})
+	c.enrichS3BucketsForInternal(context.Background(), enricher, "111111111111", buckets, map[string]aws.Bucket{
+		"no-extras": {Name: "no-extras"},
+	})
 
 	if buckets[0].Policy != nil {
 		t.Errorf("expected nil Policy for absent-policy bucket, got %+v", buckets[0].Policy)
@@ -348,17 +390,18 @@ func TestEnrichS3BucketsForInternal_AbsentPolicyAndLifecycle(t *testing.T) {
 
 func TestEnrichS3BucketsForInternal_AccessDeniedDiagnostic(t *testing.T) {
 	buckets := []S3Bucket{{Name: "denied-bucket", Region: "us-east-1"}}
-	enricher := fakeS3Enricher{
-		errs: map[string]error{
-			"denied-bucket:policy": errors.New("AccessDenied: caller has no s3:GetBucketPolicy permission on this bucket"),
-		},
-	}
+	denied := errors.New("AccessDenied: caller has no s3:GetBucketPolicy permission on this bucket")
 
-	c := &Collector{}
-	c.enrichS3BucketsForInternal(context.Background(), enricher, "111111111111", buckets)
+	c := newTestCollector(Config{})
+	c.enrichS3BucketsForInternal(context.Background(), fakeS3Enricher{}, "111111111111", buckets, map[string]aws.Bucket{
+		"denied-bucket": {Name: "denied-bucket", PolicyErr: denied},
+	})
 
 	if buckets[0].Policy != nil {
 		t.Errorf("expected nil Policy on AccessDenied, got %+v", buckets[0].Policy)
+	}
+	if !hasUnread(buckets[0].missing, "policy", 0) {
+		t.Errorf("the policy is not marked unread: %+v", buckets[0].missing)
 	}
 	if len(c.warnings) != 1 {
 		t.Fatalf("expected 1 warning for AccessDenied, got %d: %v", len(c.warnings), c.warnings)
@@ -376,11 +419,16 @@ func TestEnrichS3BucketsForInternal_NonAccessDeniedErrorEmitsGenericWarning(t *t
 		},
 	}
 
-	c := &Collector{}
-	c.enrichS3BucketsForInternal(context.Background(), enricher, "111111111111", buckets)
+	c := newTestCollector(Config{})
+	c.enrichS3BucketsForInternal(context.Background(), enricher, "111111111111", buckets, map[string]aws.Bucket{
+		"transient": {Name: "transient"},
+	})
 
 	if len(c.warnings) != 1 {
 		t.Fatalf("expected 1 warning for transient error, got %d: %v", len(c.warnings), c.warnings)
+	}
+	if !hasUnread(buckets[0].missing, "acl", 0) {
+		t.Errorf("the ACL is not marked unread: %+v", buckets[0].missing)
 	}
 	if strings.Contains(c.warnings[0], "access denied") {
 		t.Errorf("non-AccessDenied error should not produce access-denied warning text: %q", c.warnings[0])
@@ -405,8 +453,8 @@ func TestSummarizeS3Buckets_LogSinkExcludedFromLoggingDenominator(t *testing.T) 
 	}
 	// Only app-bucket and data-bucket require logging (2 buckets).
 	// app-bucket has logging → 1/2 = 50%.
-	if metrics.LoggingEnabled != 50 {
-		t.Errorf("LoggingEnabled = %d, want 50 (log sink excluded from denominator)", metrics.LoggingEnabled)
+	if !pctIs(metrics.LoggingEnabled, 50) || metrics.LoggingRequiredBucketCount != 2 {
+		t.Errorf("LoggingEnabled = %s over %d buckets, want 50 over 2 (log sink excluded from denominator)", showPct(metrics.LoggingEnabled), metrics.LoggingRequiredBucketCount)
 	}
 }
 
@@ -424,13 +472,14 @@ func TestSummarizeS3Buckets_AllBucketsAreLogSinks(t *testing.T) {
 	if metrics.LogSinkBucketCount != 1 {
 		t.Errorf("LogSinkBucketCount = %d, want 1", metrics.LogSinkBucketCount)
 	}
-	if metrics.LoggingEnabled != 100 {
-		t.Errorf("LoggingEnabled = %d, want 100", metrics.LoggingEnabled)
+	if !pctIs(metrics.LoggingEnabled, 100) {
+		t.Errorf("LoggingEnabled = %s, want 100", showPct(metrics.LoggingEnabled))
 	}
 }
 
-func TestSummarizeS3Buckets_OnlyLogSinkBucketsIsVacuouslyCompliant(t *testing.T) {
-	// Every bucket is a log sink for some other bucket → no bucket requires logging → 100%.
+func TestSummarizeS3Buckets_OnlyLogSinkBucketsHasNoLoggingPopulation(t *testing.T) {
+	// Every bucket is a log sink for some other bucket, so no bucket requires
+	// logging and the percentage has no population.
 	buckets := []aws.Bucket{
 		{Name: "a", LoggingEnabled: true, LoggingTargetBucket: "b"},
 		{Name: "b", LoggingEnabled: true, LoggingTargetBucket: "a"},
@@ -442,8 +491,8 @@ func TestSummarizeS3Buckets_OnlyLogSinkBucketsIsVacuouslyCompliant(t *testing.T)
 	if metrics.LogSinkBucketCount != 2 {
 		t.Errorf("LogSinkBucketCount = %d, want 2", metrics.LogSinkBucketCount)
 	}
-	if metrics.LoggingEnabled != 100 {
-		t.Errorf("LoggingEnabled = %d, want 100 (vacuously compliant)", metrics.LoggingEnabled)
+	if metrics.LoggingEnabled != nil || metrics.LoggingRequiredBucketCount != 0 {
+		t.Errorf("LoggingEnabled = %s over %d buckets, want null over none", showPct(metrics.LoggingEnabled), metrics.LoggingRequiredBucketCount)
 	}
 }
 
@@ -453,7 +502,7 @@ func TestS3BucketsToInventory_SetsIsLogSink(t *testing.T) {
 		{Name: "logs", LoggingEnabled: false},
 	}
 
-	out := s3BucketsToInventory(in)
+	out := s3BucketsToInventory(in, aws.PublicAccessBlockSettings{})
 	if len(out) != 2 {
 		t.Fatalf("expected 2 buckets, got %d", len(out))
 	}
@@ -489,10 +538,10 @@ func (f fakeS3Client) ListBuckets(_ context.Context) ([]aws.Bucket, error) {
 }
 
 func TestCollectS3Metrics_ListBucketsFailureSetsSentinels(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	client := fakeS3Client{listErr: errors.New("Throttling: rate exceeded")}
 
-	metrics := c.collectS3Metrics(context.Background(), client, "111111111111", componentsdk.LevelTrust)
+	metrics := c.collectS3Metrics(context.Background(), client, "111111111111", accountAt(0), componentsdk.LevelTrust)
 
 	if metrics.BucketListingEvaluated {
 		t.Error("expected BucketListingEvaluated false on listing failure")
@@ -500,16 +549,18 @@ func TestCollectS3Metrics_ListBucketsFailureSetsSentinels(t *testing.T) {
 	if metrics.BucketListingErrorCode == "" {
 		t.Error("expected BucketListingErrorCode set on listing failure")
 	}
-	if metrics.PublicAccessBlocked != 0 || metrics.DefaultEncryptionEnabled != 0 {
-		t.Errorf("expected zero aggregates on listing failure, got %+v", metrics)
+	if metrics.PublicAccessBlocked != nil || metrics.DefaultEncryptionEnabled != nil {
+		t.Errorf("expected unset aggregates on listing failure, got %+v", metrics)
 	}
+	requireGap(t, c, "/accounts/0/s3/bucket_count", "/accounts/0/s3/public_access_blocked", "/accounts/0/s3/default_encryption_enabled",
+		"/accounts/0/s3/versioning_enabled", "/accounts/0/s3/logging_enabled")
 	if len(c.warnings) != 1 || !strings.Contains(c.warnings[0], "failed to collect S3 metrics") {
 		t.Errorf("expected S3 failure warning, got %v", c.warnings)
 	}
 }
 
 func TestCollectS3Metrics_SuccessSetsEvaluated(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	client := fakeS3Client{
 		pab: aws.PublicAccessBlockSettings{
 			Evaluated:             true,
@@ -520,7 +571,7 @@ func TestCollectS3Metrics_SuccessSetsEvaluated(t *testing.T) {
 		},
 	}
 
-	metrics := c.collectS3Metrics(context.Background(), client, "111111111111", componentsdk.LevelTrust)
+	metrics := c.collectS3Metrics(context.Background(), client, "111111111111", accountAt(0), componentsdk.LevelTrust)
 
 	if !metrics.BucketListingEvaluated {
 		t.Error("expected BucketListingEvaluated true on success")
@@ -531,16 +582,17 @@ func TestCollectS3Metrics_SuccessSetsEvaluated(t *testing.T) {
 	if metrics.BucketListingErrorCode != "" {
 		t.Errorf("expected empty BucketListingErrorCode, got %q", metrics.BucketListingErrorCode)
 	}
-	if metrics.PublicAccessBlocked != MaxPercentage {
-		t.Errorf("expected vacuous %d%% with zero buckets, got %d", MaxPercentage, metrics.PublicAccessBlocked)
+	if metrics.PublicAccessBlocked != nil {
+		t.Errorf("expected null with zero buckets, got %s", showPct(metrics.PublicAccessBlocked))
 	}
+	requireNoGaps(t, c)
 }
 
 func TestCollectS3Metrics_AccountPABFailureLeavesEvaluatedFalse(t *testing.T) {
-	c := &Collector{}
+	c := newTestCollector(Config{})
 	client := fakeS3Client{pabErr: errors.New("AccessDenied")}
 
-	metrics := c.collectS3Metrics(context.Background(), client, "111111111111", componentsdk.LevelTrust)
+	metrics := c.collectS3Metrics(context.Background(), client, "111111111111", accountAt(0), componentsdk.LevelTrust)
 
 	if metrics.AccountPublicAccessBlockEvaluated {
 		t.Error("expected AccountPublicAccessBlockEvaluated false on PAB failure")
@@ -548,7 +600,5 @@ func TestCollectS3Metrics_AccountPABFailureLeavesEvaluatedFalse(t *testing.T) {
 	if !metrics.BucketListingEvaluated {
 		t.Error("expected BucketListingEvaluated true when only PAB failed")
 	}
-	if metrics.AccountPublicAccessBlockEnabled {
-		t.Error("expected AccountPublicAccessBlockEnabled false on PAB failure")
-	}
+	requireGap(t, c, "/accounts/0/s3/account_public_access_block_enabled")
 }

@@ -56,11 +56,11 @@ func TestAssembleWAFMetricsCoverageJoins(t *testing.T) {
 	if out.InternetFacingALBCount != 2 {
 		t.Errorf("internet-facing ALB count = %d, want 2 (internal ALBs and NLBs excluded)", out.InternetFacingALBCount)
 	}
-	if out.InternetFacingALBCoveragePct != 50 {
-		t.Errorf("ALB coverage = %d%%, want 50%% (one of two internet-facing ALBs protected)", out.InternetFacingALBCoveragePct)
+	if !pctIs(out.InternetFacingALBCoveragePct, 50) {
+		t.Errorf("ALB coverage = %s%%, want 50%% (one of two internet-facing ALBs protected)", showPct(out.InternetFacingALBCoveragePct))
 	}
-	if out.EnabledDistributionCount != 2 || out.DistributionCoveragePct != 50 {
-		t.Errorf("distribution coverage = %d%% of %d, want 50%% of 2", out.DistributionCoveragePct, out.EnabledDistributionCount)
+	if out.EnabledDistributionCount != 2 || !pctIs(out.DistributionCoveragePct, 50) {
+		t.Errorf("distribution coverage = %s%% of %d, want 50%% of 2", showPct(out.DistributionCoveragePct), out.EnabledDistributionCount)
 	}
 	if out.WebACLCount != 2 || out.RegionsEvaluatedCount != 2 || !out.CloudFrontScopeEvaluated {
 		t.Errorf("acl count %d regions %d cfEvaluated %v, want 2, 2, true", out.WebACLCount, out.RegionsEvaluatedCount, out.CloudFrontScopeEvaluated)
@@ -157,8 +157,8 @@ func TestAssembleWAFMetricsUnevaluatedCloudFrontScope(t *testing.T) {
 	if out.CloudFrontScopeEvaluated {
 		t.Error("cloudfront_scope_evaluated must be false when the scope was not readable")
 	}
-	if out.EnabledDistributionCount != 0 || out.DistributionCoveragePct != 0 {
-		t.Errorf("unevaluated scope must report zero distribution metrics, got %+v", out)
+	if out.EnabledDistributionCount != 0 || out.DistributionCoveragePct != nil {
+		t.Errorf("unevaluated scope must leave the distribution metrics unset, got %+v", out)
 	}
 }
 

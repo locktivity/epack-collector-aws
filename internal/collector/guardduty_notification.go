@@ -16,6 +16,12 @@ type guardDutyNotificationScan struct {
 	reach            map[string]*aws.SNSTopicSubscribers
 	topicsUnresolved int
 	adminAccountID   string
+
+	// adminErr, rulesErr, and unresolved are why the administrator, the
+	// rules, and each topic's subscribers could not be read.
+	adminErr   error
+	rulesErr   error
+	unresolved map[string]error
 }
 
 // scanGuardDutyNotificationRegion resolves how findings leave one region.
@@ -27,27 +33,34 @@ func (c *Collector) scanGuardDutyNotificationRegion(ctx context.Context, client 
 	adminID, err := client.GetGuardDutyAdministratorAccount(ctx, region, detectorID)
 	if err != nil {
 		c.warn("account %s region %s: failed to read GuardDuty administrator account: %v", accountID, region, err)
+		s.adminErr = err
 	}
 	s.adminAccountID = adminID
 
 	s.rules, err = client.ListGuardDutyNotificationRules(ctx, region)
 	if err != nil {
 		c.warn("account %s region %s: failed to list GuardDuty notification rules: %v", accountID, region, err)
+		s.rulesErr = err
 		return s
 	}
 	s.evaluated = true
 
 	// One lookup per distinct topic, not per rule: rules commonly share one.
 	s.reach = map[string]*aws.SNSTopicSubscribers{}
+	s.unresolved = map[string]error{}
 	for _, rule := range s.rules {
 		for _, topic := range rule.TopicARNs {
 			if _, seen := s.reach[topic]; seen {
+				continue
+			}
+			if _, failed := s.unresolved[topic]; failed {
 				continue
 			}
 			subs, subErr := client.GetSNSTopicSubscribers(ctx, region, topic)
 			if subErr != nil {
 				c.warn("account %s region %s: failed to read SNS subscribers: %v", accountID, region, subErr)
 				s.topicsUnresolved++
+				s.unresolved[topic] = subErr
 				continue
 			}
 			s.reach[topic] = subs
@@ -57,14 +70,23 @@ func (c *Collector) scanGuardDutyNotificationRegion(ctx context.Context, client 
 }
 
 // applyGuardDutyNotificationScan folds one detector region's scan into the
-// account summary, appending audit rows when includeRows is set.
-func applyGuardDutyNotificationScan(fn *GuardDutyFindingNotification, s guardDutyNotificationScan, region string, includeRows bool) {
+// account summary, appending audit rows when includeRows is set. What a
+// failed read leaves unknown goes into missing, by field under the GuardDuty
+// status.
+func applyGuardDutyNotificationScan(fn *GuardDutyFindingNotification, missing *unread, s guardDutyNotificationScan, region string, includeRows bool) {
 	fn.DetectorRegionsCount++
 	if fn.AdministratorAccountID == "" {
 		fn.AdministratorAccountID = s.adminAccountID
+		missing.add(s.adminErr, "finding_notification/administrator_account_id")
 	}
 	if !s.evaluated {
 		fn.DetectorRegionsUnresolvedCount++
+		missing.addPartial(s.rulesErr, 1, "finding_notification/rule_count", "finding_notification/detector_regions_routed_count",
+			"finding_notification/detector_regions_reaching_subscriber_count", "finding_notification/subscriptions_by_protocol",
+			"finding_notification/subscriptions_pending_confirmation_count")
+		if includeRows {
+			missing.add(s.rulesErr, "finding_notification/rules")
+		}
 		return
 	}
 	fn.DetectorRegionsEvaluatedCount++
@@ -86,6 +108,12 @@ func applyGuardDutyNotificationScan(fn *GuardDutyFindingNotification, s guardDut
 	if regionReaches {
 		fn.DetectorRegionsReachingSubscriberCount++
 	}
+	if firstErr := firstTopicError(s); firstErr != nil {
+		missing.addPartial(firstErr, len(s.unresolved), "finding_notification/subscriptions_by_protocol", "finding_notification/subscriptions_pending_confirmation_count")
+		if !regionReaches {
+			missing.addPartial(firstErr, len(s.unresolved), "finding_notification/detector_regions_reaching_subscriber_count")
+		}
+	}
 
 	for _, subs := range s.reach {
 		fn.SubscriptionsPendingConfirmationCount += subs.PendingConfirmation
@@ -99,13 +127,34 @@ func applyGuardDutyNotificationScan(fn *GuardDutyFindingNotification, s guardDut
 
 	if includeRows {
 		for _, rule := range s.rules {
-			fn.Rules = append(fn.Rules, guardDutyNotificationRuleToRow(rule, region, s.reach))
+			row := guardDutyNotificationRuleToRow(rule, region, s.reach)
+			for _, topic := range rule.TopicARNs {
+				if err, failed := s.unresolved[topic]; failed {
+					row.missing.add(err, "topics")
+					if !row.ReachesSubscriber && rule.Enabled {
+						row.missing.add(err, "reaches_subscriber")
+					}
+					break
+				}
+			}
+			fn.Rules = append(fn.Rules, row)
 		}
 	}
 }
 
-// ruleRouted reports whether the rule sends findings anywhere at all:
-// enabled, with at least one target of any kind.
+// firstTopicError is the failure for the first topic, in rule order, whose
+// subscribers could not be read.
+func firstTopicError(s guardDutyNotificationScan) error {
+	for _, rule := range s.rules {
+		for _, topic := range rule.TopicARNs {
+			if err, failed := s.unresolved[topic]; failed {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func ruleRouted(rule aws.GuardDutyNotificationRule) bool {
 	if !rule.Enabled {
 		return false

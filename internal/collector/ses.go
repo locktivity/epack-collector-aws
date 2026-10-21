@@ -32,17 +32,22 @@ func (c *Collector) collectSESMetrics(ctx context.Context, client *aws.AWSClient
 
 	out := aggregateSES(sets, identities)
 	if level.AtLeast(componentsdk.LevelAudit) {
+		unresolvedSets := unresolvedSetErrors(sets)
+		out.ConfigurationSets = make([]SESConfigurationSetRow, 0, len(sets))
 		for _, s := range sets {
-			out.ConfigurationSets = append(out.ConfigurationSets, SESConfigurationSetRow{
+			row := SESConfigurationSetRow{
 				Name:       s.Name,
 				Region:     region,
 				TLSPolicy:  s.TLSPolicy,
 				Unresolved: s.Unresolved,
-			})
+			}
+			row.missing.add(s.Err, "tls_policy")
+			out.ConfigurationSets = append(out.ConfigurationSets, row)
 		}
 		requiring := requiringSetNames(sets)
+		out.Identities = make([]SESIdentityRow, 0, len(identities))
 		for _, i := range identities {
-			out.Identities = append(out.Identities, SESIdentityRow{
+			row := SESIdentityRow{
 				Name:                    i.Name,
 				Region:                  region,
 				Type:                    i.Type,
@@ -50,15 +55,27 @@ func (c *Collector) collectSESMetrics(ctx context.Context, client *aws.AWSClient
 				DefaultConfigurationSet: i.DefaultConfigurationSet,
 				DefaultRequiresTLS:      identityRequiresTLS(i, requiring),
 				Unresolved:              i.Unresolved,
-			})
+			}
+			row.missing.add(i.Err, "default_configuration_set", "default_requires_tls")
+			row.missing.add(unresolvedSets[i.DefaultConfigurationSet], "default_requires_tls")
+			out.Identities = append(out.Identities, row)
 		}
 	}
 	return out, nil
 }
 
-// aggregateSES reduces a region's configuration sets and identities to the
-// transport findings. Only REQUIRE enforces: OPTIONAL and an absent delivery
-// options block both mean SES attempts TLS and falls back to plaintext.
+// unresolvedSetErrors maps each configuration set whose detail could not be
+// read to why.
+func unresolvedSetErrors(sets []aws.SESConfigurationSet) map[string]error {
+	out := map[string]error{}
+	for _, s := range sets {
+		if s.Unresolved {
+			out[s.Name] = s.Err
+		}
+	}
+	return out
+}
+
 func aggregateSES(sets []aws.SESConfigurationSet, identities []aws.SESIdentity) *SESMetrics {
 	out := &SESMetrics{ConfigurationSetCount: len(sets)}
 
@@ -66,6 +83,7 @@ func aggregateSES(sets []aws.SESConfigurationSet, identities []aws.SESIdentity) 
 		switch {
 		case s.Unresolved:
 			out.ConfigurationSetsUnresolvedCount++
+			out.missing.addPartial(s.Err, 1, "configuration_sets_requiring_tls_count", "configuration_sets_opportunistic_tls_count")
 		case s.TLSPolicy == "REQUIRE":
 			out.ConfigurationSetsRequiringTLSCount++
 		default:
@@ -74,6 +92,7 @@ func aggregateSES(sets []aws.SESConfigurationSet, identities []aws.SESIdentity) 
 	}
 
 	requiring := requiringSetNames(sets)
+	unresolvedSets := unresolvedSetErrors(sets)
 	for _, i := range identities {
 		out.IdentityCount++
 		if !i.SendingEnabled {
@@ -82,6 +101,11 @@ func aggregateSES(sets []aws.SESConfigurationSet, identities []aws.SESIdentity) 
 		}
 		if i.Unresolved {
 			out.IdentitiesUnresolvedCount++
+			out.missing.addPartial(i.Err, 1, "identities_requiring_tls_count")
+			continue
+		}
+		if err, unknown := unresolvedSets[i.DefaultConfigurationSet]; unknown {
+			out.missing.addPartial(err, 1, "identities_requiring_tls_count")
 			continue
 		}
 		if identityRequiresTLS(i, requiring) {
@@ -112,7 +136,8 @@ func identityRequiresTLS(identity aws.SESIdentity, requiring map[string]bool) bo
 // mergeSESMetrics combines per-region results. Aggregates sum; audit rows
 // concatenate.
 func mergeSESMetrics(a, b SESMetrics) SESMetrics {
-	return SESMetrics{
+	merged := SESMetrics{
+		missing:                                a.missing,
 		ConfigurationSetCount:                  a.ConfigurationSetCount + b.ConfigurationSetCount,
 		ConfigurationSetsRequiringTLSCount:     a.ConfigurationSetsRequiringTLSCount + b.ConfigurationSetsRequiringTLSCount,
 		ConfigurationSetsOpportunisticTLSCount: a.ConfigurationSetsOpportunisticTLSCount + b.ConfigurationSetsOpportunisticTLSCount,
@@ -121,7 +146,9 @@ func mergeSESMetrics(a, b SESMetrics) SESMetrics {
 		IdentitiesRequiringTLSCount:            a.IdentitiesRequiringTLSCount + b.IdentitiesRequiringTLSCount,
 		SendingDisabledIdentityCount:           a.SendingDisabledIdentityCount + b.SendingDisabledIdentityCount,
 		IdentitiesUnresolvedCount:              a.IdentitiesUnresolvedCount + b.IdentitiesUnresolvedCount,
-		ConfigurationSets:                      append(append([]SESConfigurationSetRow(nil), a.ConfigurationSets...), b.ConfigurationSets...),
-		Identities:                             append(append([]SESIdentityRow(nil), a.Identities...), b.Identities...),
+		ConfigurationSets:                      appendRows(a.ConfigurationSets, b.ConfigurationSets),
+		Identities:                             appendRows(a.Identities, b.Identities),
 	}
+	merged.missing.merge(b.missing)
+	return merged
 }

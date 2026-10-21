@@ -20,6 +20,9 @@ type SESConfigurationSet struct {
 	// Unresolved marks a set whose details could not be read; its policy is
 	// unproven rather than opportunistic.
 	Unresolved bool
+
+	// Err is why the detail call failed.
+	Err error
 }
 
 // SESIdentity is one sending identity and the configuration set its mail uses
@@ -34,6 +37,9 @@ type SESIdentity struct {
 	DefaultConfigurationSet string
 
 	Unresolved bool
+
+	// Err is why the detail call failed.
+	Err error
 }
 
 // ListSESConfigurationSets returns the region's configuration sets with their
@@ -56,8 +62,12 @@ func (c *AWSClient) ListSESConfigurationSets(ctx context.Context, region string)
 			detail, err := client.GetConfigurationSet(ctx, &sesv2.GetConfigurationSetInput{
 				ConfigurationSetName: aws.String(name),
 			})
+			if err == nil && detail.ConfigurationSetName == nil {
+				err = errMissing(detail.ResultMetadata, "getting SES configuration set "+name, "ConfigurationSetName")
+			}
 			if err != nil {
 				set.Unresolved = true
+				set.Err = fmt.Errorf("getting SES configuration set %s: %w", name, err)
 			} else if detail.DeliveryOptions != nil {
 				set.TLSPolicy = string(detail.DeliveryOptions.TlsPolicy)
 			}
@@ -90,8 +100,12 @@ func (c *AWSClient) ListSESIdentities(ctx context.Context, region string) ([]SES
 			detail, err := client.GetEmailIdentity(ctx, &sesv2.GetEmailIdentityInput{
 				EmailIdentity: info.IdentityName,
 			})
+			if err == nil && detail.IdentityType == "" {
+				err = errMissing(detail.ResultMetadata, "getting SES identity "+identity.Name, "IdentityType")
+			}
 			if err != nil {
 				identity.Unresolved = true
+				identity.Err = fmt.Errorf("getting SES identity %s: %w", identity.Name, err)
 			} else {
 				identity.DefaultConfigurationSet = aws.ToString(detail.ConfigurationSetName)
 			}

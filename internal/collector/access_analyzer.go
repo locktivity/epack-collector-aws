@@ -26,26 +26,44 @@ func (c *Collector) collectAccessAnalyzerStatus(ctx context.Context, client *aws
 	})
 
 	byRegion := map[string][]aws.AccessAnalyzer{}
+	var firstErr error
 	for i, region := range regions {
 		if scans[i].err != nil {
 			status.RegionsUnresolvedCount++
 			c.warn("account %s region %s: failed to list access analyzers; coverage there is unproven: %v", accountID, region, scans[i].err)
+			if firstErr == nil {
+				firstErr = scans[i].err
+			}
 			continue
 		}
 		status.RegionsEvaluatedCount++
 		byRegion[region] = scans[i].analyzers
 	}
 
-	aggregateAccessAnalyzers(byRegion, status)
+	aggregateAccessAnalyzers(regions, byRegion, status)
+	if unresolved := status.RegionsUnresolvedCount; unresolved > 0 {
+		status.missing.addPartial(firstErr, unresolved, "analyzer_count", "regions_with_active_analyzer_count", "inactive_analyzer_count",
+			"active_findings_count", "archived_findings_count")
+		if !status.Enabled {
+			status.missing.addPartial(firstErr, unresolved, "enabled")
+		}
+		if !status.OrganizationAnalyzerPresent {
+			status.missing.addPartial(firstErr, unresolved, "organization_analyzer_present")
+		}
+		if level.AtLeast(componentsdk.LevelAudit) {
+			status.missing.add(firstErr, "analyzers")
+		}
+	}
 
 	for _, analyzer := range status.analyzersUnresolved(regions, byRegion) {
 		c.warn("account %s: failed to list findings for access analyzer %s; its findings are unknown, not zero", accountID, analyzer)
 	}
 
 	if level.AtLeast(componentsdk.LevelAudit) {
+		status.Analyzers = []AccessAnalyzerRow{}
 		for _, region := range regions {
 			for _, a := range byRegion[region] {
-				status.Analyzers = append(status.Analyzers, AccessAnalyzerRow{
+				row := AccessAnalyzerRow{
 					Name:                  a.Name,
 					Region:                region,
 					Type:                  a.Type,
@@ -53,15 +71,18 @@ func (c *Collector) collectAccessAnalyzerStatus(ctx context.Context, client *aws
 					ActiveFindingsCount:   a.ActiveFindingsCount,
 					ArchivedFindingsCount: a.ArchivedFindingsCount,
 					FindingsUnresolved:    a.FindingsUnresolved,
-				})
+				}
+				row.missing.add(a.FindingsErr, "active_findings_count", "archived_findings_count")
+				status.Analyzers = append(status.Analyzers, row)
 			}
 		}
 	}
 }
 
 // aggregateAccessAnalyzers reduces per-region analyzers to coverage findings.
-func aggregateAccessAnalyzers(byRegion map[string][]aws.AccessAnalyzer, status *AccessAnalyzerStatus) {
-	for _, analyzers := range byRegion {
+func aggregateAccessAnalyzers(regions []string, byRegion map[string][]aws.AccessAnalyzer, status *AccessAnalyzerStatus) {
+	for _, region := range regions {
+		analyzers := byRegion[region]
 		regionActive := false
 		for _, a := range analyzers {
 			status.AnalyzerCount++
@@ -75,6 +96,7 @@ func aggregateAccessAnalyzers(byRegion map[string][]aws.AccessAnalyzer, status *
 			regionActive = true
 			if a.FindingsUnresolved {
 				status.AnalyzersWithUnresolvedFindingsCount++
+				status.missing.addPartial(a.FindingsErr, 1, "active_findings_count", "archived_findings_count")
 				continue
 			}
 			status.ActiveFindingsCount += a.ActiveFindingsCount

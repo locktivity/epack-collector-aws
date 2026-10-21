@@ -40,6 +40,9 @@ type WebACL struct {
 	LoggingEvaluated      bool
 	LoggingEnabled        bool
 	LoggingDestinationArn string
+
+	// LoggingErr is why the logging configuration could not be read.
+	LoggingErr error
 }
 
 // WebACLRule is one rule's enforcement posture.
@@ -127,11 +130,12 @@ func buildWebACL(ctx context.Context, client *wafv2.Client, summary wafv2types.W
 	if err != nil {
 		return WebACL{}, fmt.Errorf("reading web ACL %s: %w", acl.Name, err)
 	}
-	if detail.WebACL != nil {
-		acl.DefaultAction = defaultActionName(detail.WebACL.DefaultAction)
-		for _, rule := range detail.WebACL.Rules {
-			acl.Rules = append(acl.Rules, webACLRule(rule))
-		}
+	if detail.WebACL == nil {
+		return WebACL{}, errMissing(detail.ResultMetadata, "reading web ACL "+acl.Name, "WebACL")
+	}
+	acl.DefaultAction = defaultActionName(detail.WebACL.DefaultAction)
+	for _, rule := range detail.WebACL.Rules {
+		acl.Rules = append(acl.Rules, webACLRule(rule))
 	}
 
 	if scope == WAFScopeRegional {
@@ -140,7 +144,7 @@ func buildWebACL(ctx context.Context, client *wafv2.Client, summary wafv2types.W
 		}
 	}
 
-	acl.LoggingEvaluated, acl.LoggingEnabled, acl.LoggingDestinationArn = loggingState(ctx, client, summary.ARN)
+	acl.LoggingEvaluated, acl.LoggingEnabled, acl.LoggingDestinationArn, acl.LoggingErr = loggingState(ctx, client, summary.ARN)
 	return acl, nil
 }
 
@@ -170,18 +174,20 @@ func associatedALBArns(ctx context.Context, client *wafv2.Client, arn *string) (
 // loggingState reads best effort: a missing configuration means logging is
 // off, and any other failure leaves the state unevaluated rather than
 // failing the caller.
-func loggingState(ctx context.Context, client *wafv2.Client, arn *string) (evaluated, enabled bool, destination string) {
+func loggingState(ctx context.Context, client *wafv2.Client, arn *string) (evaluated, enabled bool, destination string, failure error) {
 	logging, err := client.GetLoggingConfiguration(ctx, &wafv2.GetLoggingConfigurationInput{ResourceArn: arn})
 	switch {
+	case err == nil && logging.LoggingConfiguration == nil:
+		return false, false, "", errMissing(logging.ResultMetadata, "getting web ACL logging", "LoggingConfiguration")
 	case err == nil:
-		if logging.LoggingConfiguration != nil && len(logging.LoggingConfiguration.LogDestinationConfigs) > 0 {
-			return true, true, logging.LoggingConfiguration.LogDestinationConfigs[0]
+		if len(logging.LoggingConfiguration.LogDestinationConfigs) > 0 {
+			return true, true, logging.LoggingConfiguration.LogDestinationConfigs[0], nil
 		}
-		return true, false, ""
+		return true, false, "", nil
 	case isWAFNonexistent(err):
-		return true, false, ""
+		return true, false, "", nil
 	}
-	return false, false, ""
+	return false, false, "", fmt.Errorf("getting web ACL logging: %w", err)
 }
 
 func webACLRule(rule wafv2types.Rule) WebACLRule {

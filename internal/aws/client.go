@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -37,12 +36,15 @@ import (
 	securityhubtypes "github.com/aws/aws-sdk-go-v2/service/securityhub/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/middleware"
+	"github.com/locktivity/epack/componentsdk"
 )
 
 // Client provides access to AWS APIs.
 type Client interface {
-	// GetCallerIdentity returns the account ID of the current credentials.
-	GetCallerIdentity(ctx context.Context) (string, error)
+	// GetCallerIdentity returns the account and principal of the current
+	// credentials.
+	GetCallerIdentity(ctx context.Context) (CallerIdentity, error)
 
 	// GetAccountAlias returns the account alias if set.
 	GetAccountAlias(ctx context.Context) (*string, error)
@@ -91,7 +93,8 @@ type Client interface {
 	ListIdentityCenterInstances(ctx context.Context, region string) ([]IdentityCenterInstance, error)
 	ListIdentityCenterPermissionSets(ctx context.Context, region, instanceARN string, withInternalEnrichment bool) ([]IdentityCenterPermissionSet, error)
 	ListIdentityStoreUsers(ctx context.Context, region, identityStoreID string) ([]IdentityStoreUser, error)
-	ListIdentityStoreGroups(ctx context.Context, region, identityStoreID string, withMemberCounts bool) ([]IdentityStoreGroup, error)
+	ListIdentityStoreGroups(ctx context.Context, region, identityStoreID string) ([]IdentityStoreGroup, error)
+	ListIdentityStoreGroupMembers(ctx context.Context, region, identityStoreID string, groups []IdentityStoreGroup) ([]IdentityStoreGroup, error)
 
 	// Lambda (regional). Base list returns posture metadata for every function;
 	// per-function follow-up calls supply resource-policy presence and function-URL
@@ -128,7 +131,71 @@ type Client interface {
 
 // AWSClient implements the Client interface using AWS SDK v2.
 type AWSClient struct {
-	cfg aws.Config
+	cfg        aws.Config
+	authMethod string
+	now        func() time.Time
+	sleep      func(context.Context, time.Duration) error
+}
+
+// Options configures a client.
+type Options struct {
+	// HTTPClient sends every call the client makes. Nil keeps the SDK's own
+	// HTTP client and retries.
+	HTTPClient *http.Client
+
+	// Now is the run's clock, which ages are measured against. It defaults
+	// to time.Now.
+	Now func() time.Time
+
+	// Wait pauses between polls of a report AWS builds in the background. It
+	// defaults to sleeping until d passes or ctx is done.
+	Wait func(ctx context.Context, d time.Duration) error
+}
+
+func newAWSClient(cfg aws.Config, authMethod string, opts Options) *AWSClient {
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+	wait := opts.Wait
+	if wait == nil {
+		wait = sleepContext
+	}
+	return &AWSClient{cfg: cfg, authMethod: authMethod, now: now, sleep: wait}
+}
+
+// AuthMethod returns how the client's credentials prove who the collector
+// is, as a componentsdk sign-in method: AuthWorkloadIdentity for a role
+// assumed with a web identity token, AuthAccessKey for static access keys,
+// or "" for any other source, such as IAM Identity Center or an instance
+// role.
+func (c *AWSClient) AuthMethod() string {
+	return c.authMethod
+}
+
+// authMethodOf reads how credentials from the SDK's default chain sign in
+// from the sources the SDK records for them, which needs no call to AWS. A
+// role assumed with static keys signs in with the keys, and one assumed
+// with a web identity token in the environment signs in with the token.
+func authMethodOf(creds aws.CredentialsProvider) string {
+	provider, ok := creds.(aws.CredentialProviderSource)
+	if !ok {
+		return ""
+	}
+	sources := provider.ProviderSources()
+	for _, s := range sources {
+		switch s {
+		case aws.CredentialSourceSTSAssumeRoleWebID, aws.CredentialSourceEnvVarsSTSWebIDToken, aws.CredentialSourceProfileSTSWebIDToken:
+			return componentsdk.AuthWorkloadIdentity
+		}
+	}
+	for _, s := range sources {
+		switch s {
+		case aws.CredentialSourceEnvVars, aws.CredentialSourceProfile, aws.CredentialSourceCode:
+			return componentsdk.AuthAccessKey
+		}
+	}
+	return ""
 }
 
 // Default regions per partition for STS and global services.
@@ -177,7 +244,7 @@ func (c *AWSClient) s3ConfigForRegion(region string) aws.Config {
 // NewClient creates a new AWS client using the default credential chain.
 // Falls back to us-east-1 if no region is configured. GovCloud/China users
 // must configure AWS_REGION when using ambient credentials (no role ARN).
-func NewClient(ctx context.Context) (*AWSClient, error) {
+func NewClient(ctx context.Context, opts Options) (*AWSClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
@@ -185,11 +252,12 @@ func NewClient(ctx context.Context) (*AWSClient, error) {
 	if cfg.Region == "" {
 		cfg.Region = DefaultRegionAWS
 	}
-	return &AWSClient{cfg: cfg}, nil
+	useTransport(&cfg, opts.HTTPClient)
+	return newAWSClient(cfg, authMethodOf(cfg.Credentials), opts), nil
 }
 
 // NewClientWithRole creates a new AWS client that assumes the specified role.
-func NewClientWithRole(ctx context.Context, roleARN, externalID string) (*AWSClient, error) {
+func NewClientWithRole(ctx context.Context, roleARN, externalID string, opts Options) (*AWSClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
@@ -197,6 +265,8 @@ func NewClientWithRole(ctx context.Context, roleARN, externalID string) (*AWSCli
 	if cfg.Region == "" {
 		cfg.Region = regionForRoleARN(roleARN)
 	}
+	useTransport(&cfg, opts.HTTPClient)
+	authMethod := authMethodOf(cfg.Credentials)
 
 	stsClient := sts.NewFromConfig(cfg)
 	creds := stscreds.NewAssumeRoleProvider(stsClient, roleARN, func(o *stscreds.AssumeRoleOptions) {
@@ -208,12 +278,12 @@ func NewClientWithRole(ctx context.Context, roleARN, externalID string) (*AWSCli
 
 	cfg.Credentials = aws.NewCredentialsCache(creds)
 
-	return &AWSClient{cfg: cfg}, nil
+	return newAWSClient(cfg, authMethod, opts), nil
 }
 
 // NewClientWithWebIdentity creates a new AWS client using web identity federation.
 // The tokenSource must implement stscreds.IdentityTokenRetriever.
-func NewClientWithWebIdentity(ctx context.Context, roleARN string, tokenSource stscreds.IdentityTokenRetriever) (*AWSClient, error) {
+func NewClientWithWebIdentity(ctx context.Context, roleARN string, tokenSource stscreds.IdentityTokenRetriever, opts Options) (*AWSClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
@@ -221,6 +291,7 @@ func NewClientWithWebIdentity(ctx context.Context, roleARN string, tokenSource s
 	if cfg.Region == "" {
 		cfg.Region = regionForRoleARN(roleARN)
 	}
+	useTransport(&cfg, opts.HTTPClient)
 
 	stsClient := sts.NewFromConfig(cfg)
 	creds := stscreds.NewWebIdentityRoleProvider(stsClient, roleARN, tokenSource, func(o *stscreds.WebIdentityRoleOptions) {
@@ -229,7 +300,7 @@ func NewClientWithWebIdentity(ctx context.Context, roleARN string, tokenSource s
 
 	cfg.Credentials = aws.NewCredentialsCache(creds)
 
-	return &AWSClient{cfg: cfg}, nil
+	return newAWSClient(cfg, componentsdk.AuthWorkloadIdentity, opts), nil
 }
 
 // tokenCacheTTL is how long to cache OIDC tokens before refetching.
@@ -237,18 +308,78 @@ func NewClientWithWebIdentity(ctx context.Context, roleARN string, tokenSource s
 // We use a shorter TTL to ensure tokens are fresh for multi-account runs.
 const tokenCacheTTL = 5 * time.Minute
 
+// Environment variables OIDC mode reads its identity token from.
+const (
+	GitHubTokenRequestURLEnv   = "ACTIONS_ID_TOKEN_REQUEST_URL"
+	GitHubTokenRequestTokenEnv = "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+
+	// WebIdentityTokenFileEnv names the file a CI job or a workload identity
+	// writes the run's identity token to. It is the variable the SDK's own
+	// default chain reads for the same purpose.
+	WebIdentityTokenFileEnv = "AWS_WEB_IDENTITY_TOKEN_FILE"
+)
+
+// OIDCEnv holds the values of the variables OIDC mode reads.
+type OIDCEnv struct {
+	RequestURL   string
+	RequestToken string
+	TokenFile    string
+}
+
+// GitHubAvailable reports whether the run is a GitHub Actions job with
+// identity tokens enabled.
+func (e OIDCEnv) GitHubAvailable() bool {
+	return e.RequestURL != "" && e.RequestToken != ""
+}
+
+// CredentialHost returns the host of GitHub's token endpoint, which receives
+// the request token, or "" when the run does not use it.
+func (e OIDCEnv) CredentialHost() string {
+	if !e.GitHubAvailable() {
+		return ""
+	}
+	u, err := url.Parse(e.RequestURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// TokenSource returns the identity token source for OIDC mode: GitHub
+// Actions' token endpoint when the workflow exposes one, otherwise the token
+// file. Nil when neither is available. GitHub's endpoint is called through
+// client with ctx.
+func (e OIDCEnv) TokenSource(ctx context.Context, client *http.Client) stscreds.IdentityTokenRetriever {
+	if e.GitHubAvailable() {
+		return NewGitHubOIDCTokenSource(ctx, client, e.RequestURL, e.RequestToken)
+	}
+	if e.TokenFile != "" {
+		return NewFileTokenSource(e.TokenFile)
+	}
+	return nil
+}
+
 // GitHubOIDCTokenSource fetches OIDC tokens from GitHub Actions.
 // It implements stscreds.IdentityTokenRetriever.
 type GitHubOIDCTokenSource struct {
+	ctx          context.Context
+	client       *http.Client
+	requestURL   string
+	requestToken string
+
 	// cachedToken holds a previously fetched token to avoid redundant requests.
 	cachedToken string
 	// cachedAt tracks when the token was cached for TTL-based refresh.
 	cachedAt time.Time
 }
 
-// NewGitHubOIDCTokenSource creates a new token source for GitHub Actions OIDC.
-func NewGitHubOIDCTokenSource() *GitHubOIDCTokenSource {
-	return &GitHubOIDCTokenSource{}
+// NewGitHubOIDCTokenSource creates a token source that asks GitHub's token
+// endpoint through client. A nil client uses http.DefaultClient.
+func NewGitHubOIDCTokenSource(ctx context.Context, client *http.Client, requestURL, requestToken string) *GitHubOIDCTokenSource {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return &GitHubOIDCTokenSource{ctx: ctx, client: client, requestURL: requestURL, requestToken: requestToken}
 }
 
 // GetIdentityToken fetches an OIDC token from GitHub Actions with audience "sts.amazonaws.com".
@@ -259,7 +390,7 @@ func (g *GitHubOIDCTokenSource) GetIdentityToken() ([]byte, error) {
 		return []byte(g.cachedToken), nil
 	}
 
-	token, err := fetchGitHubOIDCToken()
+	token, err := g.fetch()
 	if err != nil {
 		return nil, err
 	}
@@ -268,41 +399,46 @@ func (g *GitHubOIDCTokenSource) GetIdentityToken() ([]byte, error) {
 	return []byte(token), nil
 }
 
-// fetchGitHubOIDCToken requests an OIDC token from GitHub Actions.
-// Requires ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN env vars.
-func fetchGitHubOIDCToken() (string, error) {
-	requestURL := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
-	requestToken := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
-
-	if requestURL == "" || requestToken == "" {
-		return "", fmt.Errorf("GitHub Actions OIDC not available: ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN not set")
+// fetch requests an OIDC token from GitHub Actions.
+func (g *GitHubOIDCTokenSource) fetch() (string, error) {
+	if g.requestURL == "" || g.requestToken == "" {
+		return "", componentsdk.CodeError(componentsdk.CodeConfigInvalid, fmt.Errorf("GitHub Actions OIDC not available: %s or %s not set", GitHubTokenRequestURLEnv, GitHubTokenRequestTokenEnv))
 	}
 
 	// Add audience parameter for AWS STS using proper URL parsing
-	parsedURL, err := url.Parse(requestURL)
+	parsedURL, err := url.Parse(g.requestURL)
 	if err != nil {
-		return "", fmt.Errorf("parsing OIDC token request URL: %w", err)
+		return "", componentsdk.CodeError(componentsdk.CodeConfigInvalid, fmt.Errorf("parsing OIDC token request URL: %w", err))
 	}
 	query := parsedURL.Query()
 	query.Set("audience", "sts.amazonaws.com")
 	parsedURL.RawQuery = query.Encode()
 
-	req, err := http.NewRequest("GET", parsedURL.String(), nil)
+	ctx := g.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = componentsdk.WithOperation(ctx, componentsdk.Operation{Name: GitHubTokenOperation})
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsedURL.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("creating OIDC token request: %w", err)
 	}
-	req.Header.Set("Authorization", "bearer "+requestToken)
+	req.Header.Set("Authorization", "bearer "+g.requestToken)
 	req.Header.Set("Accept", "application/json; api-version=2.0")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := g.client.Do(req)
 	if err != nil {
+		// The request URL is a secret of the CI job, and url.Error prints it.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
 		return "", fmt.Errorf("requesting OIDC token: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("OIDC token request failed with status %d: %s", resp.StatusCode, string(body))
+		return "", componentsdk.CodeError(componentsdk.ClassifyResponse(resp), fmt.Errorf("OIDC token request failed with status %d", resp.StatusCode))
 	}
 
 	var result struct {
@@ -313,22 +449,14 @@ func fetchGitHubOIDCToken() (string, error) {
 	}
 
 	if result.Value == "" {
-		return "", fmt.Errorf("OIDC token response missing 'value' field")
+		return "", componentsdk.CodeError(componentsdk.CodeInvalidResponse, fmt.Errorf("OIDC token response missing 'value' field"))
 	}
 
 	return result.Value, nil
 }
 
-// WebIdentityTokenFileEnv names the file a CI job or a workload identity
-// writes the run's identity token to. It is the variable the SDK's own
-// default chain reads for the same purpose.
-const WebIdentityTokenFileEnv = "AWS_WEB_IDENTITY_TOKEN_FILE"
-
-// WebIdentityTokenFile returns the configured token file path, or "" when
-// the environment names none.
-func WebIdentityTokenFile() string {
-	return os.Getenv(WebIdentityTokenFileEnv)
-}
+// GitHubTokenOperation names the call to GitHub's identity token endpoint.
+const GitHubTokenOperation = "github.id_token.get"
 
 // FileTokenSource reads an identity token from a file on every call, so a
 // job that refreshes the file during a long run is picked up.
@@ -358,32 +486,25 @@ func (f *FileTokenSource) GetIdentityToken() ([]byte, error) {
 	return token, nil
 }
 
-// IsGitHubActionsOIDCAvailable returns true if running in GitHub Actions with OIDC enabled.
-func IsGitHubActionsOIDCAvailable() bool {
-	return os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "" && os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN") != ""
+// CallerIdentity is the account and principal a client's credentials belong
+// to.
+type CallerIdentity struct {
+	Account string
+	ARN     string
 }
 
-// OIDCTokenSource returns the identity token source for OIDC mode: GitHub
-// Actions' token endpoint when the workflow exposes one, otherwise the file
-// AWS_WEB_IDENTITY_TOKEN_FILE names. Nil when neither is available.
-func OIDCTokenSource() stscreds.IdentityTokenRetriever {
-	if IsGitHubActionsOIDCAvailable() {
-		return NewGitHubOIDCTokenSource()
-	}
-	if path := WebIdentityTokenFile(); path != "" {
-		return NewFileTokenSource(path)
-	}
-	return nil
-}
-
-// GetCallerIdentity returns the account ID of the current credentials.
-func (c *AWSClient) GetCallerIdentity(ctx context.Context) (string, error) {
+// GetCallerIdentity returns the account and principal of the current
+// credentials.
+func (c *AWSClient) GetCallerIdentity(ctx context.Context) (CallerIdentity, error) {
 	stsClient := sts.NewFromConfig(c.cfg)
 	output, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		return "", fmt.Errorf("getting caller identity: %w", err)
+		return CallerIdentity{}, fmt.Errorf("getting caller identity: %w", err)
 	}
-	return *output.Account, nil
+	if output.Account == nil || *output.Account == "" {
+		return CallerIdentity{}, errMissing(output.ResultMetadata, "getting caller identity", "Account")
+	}
+	return CallerIdentity{Account: *output.Account, ARN: aws.ToString(output.Arn)}, nil
 }
 
 // GetAccountAlias returns the account alias if set.
@@ -405,6 +526,9 @@ func (c *AWSClient) GetAccountSummary(ctx context.Context) (*AccountSummary, err
 	output, err := iamClient.GetAccountSummary(ctx, &iam.GetAccountSummaryInput{})
 	if err != nil {
 		return nil, fmt.Errorf("getting IAM account summary: %w", err)
+	}
+	if output.SummaryMap == nil {
+		return nil, errMissing(output.ResultMetadata, "getting IAM account summary", "SummaryMap")
 	}
 	return accountSummaryFromMap(output.SummaryMap), nil
 }
@@ -455,9 +579,17 @@ func (c *AWSClient) GetEnabledRegions(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("describing regions: %w", err)
 	}
+	// An account always has enabled regions, so an empty list is not an
+	// answer. Read as one, it would leave every regional surface empty.
+	if len(output.Regions) == 0 {
+		return nil, errMissing(output.ResultMetadata, "describing regions", "Regions")
+	}
 
 	regions := make([]string, 0, len(output.Regions))
 	for _, r := range output.Regions {
+		if aws.ToString(r.RegionName) == "" {
+			return nil, errMissing(output.ResultMetadata, "describing regions", "RegionName")
+		}
 		regions = append(regions, *r.RegionName)
 	}
 	return regions, nil
@@ -466,10 +598,10 @@ func (c *AWSClient) GetEnabledRegions(ctx context.Context) ([]string, error) {
 // ErrCredentialReportTimeout is returned when the IAM credential report is
 // still not ready after the full polling budget. Callers use errors.Is to
 // distinguish this transient condition from a real API failure.
-var ErrCredentialReportTimeout = errors.New("credential report generation timed out")
+var ErrCredentialReportTimeout = componentsdk.CodeError(componentsdk.CodeTimeout, errors.New("credential report generation timed out"))
 
-// credentialReportBudget bounds per-account polling wall-clock time. Accounts
-// are collected sequentially under the SDK's global run timeout, so the budget
+// credentialReportBudget bounds the waiting per account. Accounts are
+// collected sequentially under the SDK's global run timeout, so the budget
 // must leave room for every configured account plus the rest of collection.
 const (
 	credentialReportBaseDelay = 2 * time.Second
@@ -486,31 +618,46 @@ type credentialReportAPI interface {
 
 // GetCredentialReport generates and retrieves the IAM credential report.
 func (c *AWSClient) GetCredentialReport(ctx context.Context) (*CredentialReport, error) {
-	return getCredentialReport(ctx, iam.NewFromConfig(c.cfg), credentialReportBaseDelay, credentialReportBudget)
+	return getCredentialReport(ctx, iam.NewFromConfig(c.cfg), credentialReportWaits(credentialReportBaseDelay, credentialReportBudget), c.sleep)
 }
 
-// getCredentialReport polls until the report is ready, backing off between
-// attempts, for at most budget of wall-clock waiting. Report generation is
+// credentialReportWaits returns the waits between polls, doubling from base
+// up to credentialReportMaxDelay until they add up to budget.
+func credentialReportWaits(base, budget time.Duration) []time.Duration {
+	var waits []time.Duration
+	var total time.Duration
+	for delay := base; total < budget; delay = min(delay*2, credentialReportMaxDelay) {
+		wait := min(delay, budget-total)
+		waits = append(waits, wait)
+		total += wait
+	}
+	return waits
+}
+
+// getCredentialReport polls until the report is ready. Report generation is
 // asynchronous on the AWS side; regenerating while a report is in progress is
 // a no-op, and ReportNotPresent / ReportExpired require a fresh
 // GenerateCredentialReport call, so the generate call stays inside the loop.
-func getCredentialReport(ctx context.Context, api credentialReportAPI, baseDelay, budget time.Duration) (*CredentialReport, error) {
-	deadline := time.Now().Add(budget)
-	delay := baseDelay
-	for {
-		_, err := api.GenerateCredentialReport(ctx, &iam.GenerateCredentialReportInput{})
+// The first read follows at once when AWS reports a recent report complete;
+// every other read follows the next of waits, and polling stops when waits
+// run out.
+func getCredentialReport(ctx context.Context, api credentialReportAPI, waits []time.Duration, sleep func(context.Context, time.Duration) error) (*CredentialReport, error) {
+	waited := 0
+	for first := true; ; first = false {
+		generated, err := api.GenerateCredentialReport(ctx, &iam.GenerateCredentialReportInput{})
 		if err != nil {
 			return nil, fmt.Errorf("generating credential report: %w", err)
 		}
 
-		wait := min(delay, time.Until(deadline))
-		if wait <= 0 {
-			return nil, ErrCredentialReportTimeout
+		if !first || generated == nil || generated.State != iamtypes.ReportStateTypeComplete {
+			if waited == len(waits) {
+				return nil, ErrCredentialReportTimeout
+			}
+			if err := sleep(ctx, waits[waited]); err != nil {
+				return nil, fmt.Errorf("waiting for credential report: %w", err)
+			}
+			waited++
 		}
-		if err := sleepContext(ctx, wait); err != nil {
-			return nil, fmt.Errorf("waiting for credential report: %w", err)
-		}
-		delay = min(delay*2, credentialReportMaxDelay)
 
 		output, err := api.GetCredentialReport(ctx, &iam.GetCredentialReportInput{})
 		if err != nil {
@@ -519,8 +666,18 @@ func getCredentialReport(ctx context.Context, api credentialReportAPI, baseDelay
 			}
 			return nil, fmt.Errorf("getting credential report: %w", err)
 		}
+		if output == nil {
+			return nil, errMissing(middleware.Metadata{}, "getting credential report", "Content")
+		}
+		if output.Content == nil {
+			return nil, errMissing(output.ResultMetadata, "getting credential report", "Content")
+		}
 
-		return parseCredentialReport(output.Content)
+		report, err := parseCredentialReport(output.Content)
+		if err != nil {
+			return nil, inResponse(output.ResultMetadata, err)
+		}
+		return report, nil
 	}
 }
 
@@ -666,10 +823,13 @@ func (c *AWSClient) GetPasswordPolicy(ctx context.Context) (*PasswordPolicy, err
 	output, err := iamClient.GetAccountPasswordPolicy(ctx, &iam.GetAccountPasswordPolicyInput{})
 	if err != nil {
 		// NoSuchEntity means no policy is set
-		if strings.Contains(err.Error(), "NoSuchEntity") {
+		if isAPIErrorCode(err, "NoSuchEntity") {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("getting password policy: %w", err)
+	}
+	if output.PasswordPolicy == nil {
+		return nil, errMissing(output.ResultMetadata, "getting password policy", "PasswordPolicy")
 	}
 
 	policy := output.PasswordPolicy
@@ -728,7 +888,9 @@ func (c *AWSClient) ListRoles(ctx context.Context, callback func([]Role) error) 
 	return nil
 }
 
-// ListBuckets lists all S3 buckets with their security settings.
+// ListBuckets lists all S3 buckets with their security settings. Each
+// per-bucket read keeps its error on the bucket, so a setting that could not
+// be read leaves only that setting out.
 func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 	s3Client := s3.NewFromConfig(c.cfg)
 	output, err := s3Client.ListBuckets(ctx, &s3.ListBucketsInput{})
@@ -738,30 +900,18 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 
 	buckets := make([]Bucket, 0, len(output.Buckets))
 	for _, b := range output.Buckets {
-		bucket := Bucket{
-			Name: aws.ToString(b.Name),
-		}
+		name := aws.ToString(b.Name)
+		bucket := Bucket{Name: name}
 
-		// Get bucket location
-		locOutput, err := s3Client.GetBucketLocation(ctx, &s3.GetBucketLocationInput{
-			Bucket: b.Name,
-		})
-		if err == nil {
-			bucket.Region = string(locOutput.LocationConstraint)
-			if bucket.Region == "" {
-				bucket.Region = "us-east-1"
-			}
-		}
+		bucket.Region, bucket.RegionErr = bucketRegion(ctx, s3Client, name)
 
 		bucketClient := s3.NewFromConfig(c.s3ConfigForRegion(bucket.Region))
 
-		// Get public access block
 		pabOutput, err := bucketClient.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{
 			Bucket: b.Name,
 		})
 		bucket.PublicAccessBlock = s3BucketPublicAccessBlockEvaluation(pabOutput, err)
 
-		// Get encryption
 		encOutput, err := bucketClient.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{
 			Bucket: b.Name,
 		})
@@ -769,36 +919,30 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 		bucket.DefaultEncryptionEnabled = encryption.Enabled
 		bucket.DefaultEncryptionEvaluated = encryption.Evaluated
 		bucket.DefaultEncryptionErrorCode = encryption.ErrorCode
+		bucket.DefaultEncryptionErr = encryption.Err
 
-		// Get versioning
 		verOutput, err := bucketClient.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{
 			Bucket: b.Name,
 		})
-		if err == nil {
+		if err != nil {
+			bucket.VersioningErr = fmt.Errorf("getting versioning for %s: %w", name, err)
+		} else {
 			bucket.VersioningEnabled = verOutput.Status == "Enabled"
 			bucket.MFADeleteEnabled = verOutput.MFADelete == "Enabled"
 		}
 
-		// Get logging
 		logOutput, err := bucketClient.GetBucketLogging(ctx, &s3.GetBucketLoggingInput{
 			Bucket: b.Name,
 		})
-		if err == nil && logOutput.LoggingEnabled != nil {
+		switch {
+		case err != nil:
+			bucket.LoggingErr = fmt.Errorf("getting logging for %s: %w", name, err)
+		case logOutput.LoggingEnabled != nil:
 			bucket.LoggingEnabled = true
-			if logOutput.LoggingEnabled.TargetBucket != nil {
-				bucket.LoggingTargetBucket = *logOutput.LoggingEnabled.TargetBucket
-			}
+			bucket.LoggingTargetBucket = aws.ToString(logOutput.LoggingEnabled.TargetBucket)
 		}
 
-		// Get bucket policy and check for SSL requirement
-		polOutput, err := bucketClient.GetBucketPolicy(ctx, &s3.GetBucketPolicyInput{
-			Bucket: b.Name,
-		})
-		if err == nil && polOutput.Policy != nil {
-			// Simple check for SSL enforcement
-			bucket.SSLOnlyPolicy = strings.Contains(*polOutput.Policy, "aws:SecureTransport") &&
-				strings.Contains(*polOutput.Policy, "\"false\"")
-		}
+		bucket.Policy, bucket.PolicyErr = getBucketPolicy(ctx, bucketClient, name)
 
 		buckets = append(buckets, bucket)
 	}
@@ -806,10 +950,25 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 	return buckets, nil
 }
 
+// bucketRegion resolves a bucket's region from its location constraint,
+// which is empty for us-east-1.
+func bucketRegion(ctx context.Context, client *s3.Client, bucket string) (string, error) {
+	out, err := client.GetBucketLocation(ctx, &s3.GetBucketLocationInput{Bucket: aws.String(bucket)})
+	if err != nil {
+		return "", fmt.Errorf("locating bucket %s: %w", bucket, err)
+	}
+	region := string(out.LocationConstraint)
+	if region == "" {
+		region = DefaultRegionAWS
+	}
+	return region, nil
+}
+
 type s3DefaultEncryptionResult struct {
 	Enabled   bool
 	Evaluated bool
 	ErrorCode string
+	Err       error
 }
 
 func s3DefaultEncryptionEvaluation(output *s3.GetBucketEncryptionOutput, err error) s3DefaultEncryptionResult {
@@ -823,16 +982,16 @@ func s3DefaultEncryptionEvaluation(output *s3.GetBucketEncryptionOutput, err err
 				ErrorCode: "ServerSideEncryptionConfigurationNotFoundError",
 			}
 		}
-		return s3DefaultEncryptionResult{ErrorCode: apiErrorCode(err)}
+		return s3DefaultEncryptionResult{ErrorCode: apiErrorCode(err), Err: fmt.Errorf("getting default encryption: %w", err)}
 	}
 	if output == nil {
-		return s3DefaultEncryptionResult{ErrorCode: "MissingGetBucketEncryptionOutput"}
+		return s3DefaultEncryptionResult{ErrorCode: "MissingGetBucketEncryptionOutput", Err: errMissing(middleware.Metadata{}, "getting default encryption", "output")}
 	}
 	if output.ServerSideEncryptionConfiguration == nil {
-		return s3DefaultEncryptionResult{ErrorCode: "MissingServerSideEncryptionConfiguration"}
+		return s3DefaultEncryptionResult{ErrorCode: "MissingServerSideEncryptionConfiguration", Err: errMissing(output.ResultMetadata, "getting default encryption", "ServerSideEncryptionConfiguration")}
 	}
 	if len(output.ServerSideEncryptionConfiguration.Rules) == 0 {
-		return s3DefaultEncryptionResult{ErrorCode: "EmptyServerSideEncryptionRules"}
+		return s3DefaultEncryptionResult{ErrorCode: "EmptyServerSideEncryptionRules", Err: errMissing(output.ResultMetadata, "getting default encryption", "Rules")}
 	}
 	return s3DefaultEncryptionResult{
 		Enabled:   true,
@@ -840,11 +999,11 @@ func s3DefaultEncryptionEvaluation(output *s3.GetBucketEncryptionOutput, err err
 	}
 }
 
-// GetBucketPolicy returns the bucket's policy document. Returns nil with no
-// error when no policy is attached (NoSuchBucketPolicy).
-func (c *AWSClient) GetBucketPolicy(ctx context.Context, region, bucket string) (*BucketPolicy, error) {
-	s3Client := s3.NewFromConfig(c.s3ConfigForRegion(region))
-	out, err := s3Client.GetBucketPolicy(ctx, &s3.GetBucketPolicyInput{Bucket: aws.String(bucket)})
+// getBucketPolicy returns the bucket's policy document, or nil with no error
+// when no policy is attached (NoSuchBucketPolicy). A document that is not a
+// policy is an invalid response, never an empty policy.
+func getBucketPolicy(ctx context.Context, client *s3.Client, bucket string) (*BucketPolicy, error) {
+	out, err := client.GetBucketPolicy(ctx, &s3.GetBucketPolicyInput{Bucket: aws.String(bucket)})
 	if err != nil {
 		if isAPIErrorCode(err, "NoSuchBucketPolicy") {
 			return nil, nil
@@ -852,9 +1011,24 @@ func (c *AWSClient) GetBucketPolicy(ctx context.Context, region, bucket string) 
 		return nil, fmt.Errorf("getting bucket policy for %s: %w", bucket, err)
 	}
 	if out.Policy == nil {
-		return nil, nil
+		return nil, errMissing(out.ResultMetadata, "getting bucket policy for "+bucket, "Policy")
+	}
+	var doc struct {
+		Statement json.RawMessage `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(*out.Policy), &doc); err != nil {
+		return nil, inResponse(out.ResultMetadata, componentsdk.CodeError(componentsdk.CodeInvalidResponse, fmt.Errorf("reading bucket policy for %s: %w", bucket, err)))
+	}
+	if len(doc.Statement) == 0 {
+		return nil, errMissing(out.ResultMetadata, "getting bucket policy for "+bucket, "Statement")
 	}
 	return &BucketPolicy{Document: *out.Policy}, nil
+}
+
+// GetBucketPolicy returns the bucket's policy document. Returns nil with no
+// error when no policy is attached (NoSuchBucketPolicy).
+func (c *AWSClient) GetBucketPolicy(ctx context.Context, region, bucket string) (*BucketPolicy, error) {
+	return getBucketPolicy(ctx, s3.NewFromConfig(c.s3ConfigForRegion(region)), bucket)
 }
 
 // GetBucketACL returns the bucket's ACL. HasPublicGrant is computed from the
@@ -864,6 +1038,9 @@ func (c *AWSClient) GetBucketACL(ctx context.Context, region, bucket string) (*B
 	out, err := s3Client.GetBucketAcl(ctx, &s3.GetBucketAclInput{Bucket: aws.String(bucket)})
 	if err != nil {
 		return nil, fmt.Errorf("getting bucket ACL for %s: %w", bucket, err)
+	}
+	if out.Owner == nil {
+		return nil, errMissing(out.ResultMetadata, "getting bucket ACL for "+bucket, "Owner")
 	}
 
 	acl := &BucketACL{}
@@ -941,16 +1118,7 @@ func toLifecycleRule(r s3types.LifecycleRule) BucketLifecycleRule {
 // account, which is how a cross-account trail delivery bucket announces
 // itself.
 func (c *AWSClient) GetBucketRegion(ctx context.Context, bucket string) (string, error) {
-	s3Client := s3.NewFromConfig(c.cfg)
-	out, err := s3Client.GetBucketLocation(ctx, &s3.GetBucketLocationInput{Bucket: aws.String(bucket)})
-	if err != nil {
-		return "", fmt.Errorf("locating bucket %s: %w", bucket, err)
-	}
-	region := string(out.LocationConstraint)
-	if region == "" {
-		region = "us-east-1"
-	}
-	return region, nil
+	return bucketRegion(ctx, s3.NewFromConfig(c.cfg), bucket)
 }
 
 // GetBucketObjectLock returns the bucket's object lock default retention, or
@@ -964,7 +1132,10 @@ func (c *AWSClient) GetBucketObjectLock(ctx context.Context, region, bucket stri
 		}
 		return nil, fmt.Errorf("getting object lock for %s: %w", bucket, err)
 	}
-	if out.ObjectLockConfiguration == nil || out.ObjectLockConfiguration.Rule == nil || out.ObjectLockConfiguration.Rule.DefaultRetention == nil {
+	if out.ObjectLockConfiguration == nil {
+		return nil, errMissing(out.ResultMetadata, "getting object lock for "+bucket, "ObjectLockConfiguration")
+	}
+	if out.ObjectLockConfiguration.Rule == nil || out.ObjectLockConfiguration.Rule.DefaultRetention == nil {
 		return nil, nil
 	}
 	retention := out.ObjectLockConfiguration.Rule.DefaultRetention
@@ -1016,14 +1187,7 @@ func (c *AWSClient) GetAccountPublicAccessBlock(ctx context.Context, accountID s
 		AccountId: aws.String(accountID),
 	})
 	pab := s3AccountPublicAccessBlockEvaluation(output, err)
-	if pab.ErrorCode != "" {
-		if err != nil {
-			return pab, fmt.Errorf("getting account public access block: %w", err)
-		}
-		return pab, fmt.Errorf("getting account public access block: %s", pab.ErrorCode)
-	}
-
-	return pab, nil
+	return pab, pab.Err
 }
 
 // GetBucketPublicAccessBlock returns one bucket's public access block, for
@@ -1039,13 +1203,13 @@ func s3BucketPublicAccessBlockEvaluation(output *s3.GetPublicAccessBlockOutput, 
 		if isAPIErrorCode(err, "NoSuchPublicAccessBlockConfiguration") {
 			return PublicAccessBlockSettings{Evaluated: true}
 		}
-		return PublicAccessBlockSettings{ErrorCode: apiErrorCode(err)}
+		return PublicAccessBlockSettings{ErrorCode: apiErrorCode(err), Err: fmt.Errorf("getting bucket public access block: %w", err)}
 	}
 	if output == nil {
-		return PublicAccessBlockSettings{ErrorCode: "MissingGetPublicAccessBlockOutput"}
+		return PublicAccessBlockSettings{ErrorCode: "MissingGetPublicAccessBlockOutput", Err: errMissing(middleware.Metadata{}, "getting bucket public access block", "output")}
 	}
 	if output.PublicAccessBlockConfiguration == nil {
-		return PublicAccessBlockSettings{ErrorCode: "MissingPublicAccessBlockConfiguration"}
+		return PublicAccessBlockSettings{ErrorCode: "MissingPublicAccessBlockConfiguration", Err: errMissing(output.ResultMetadata, "getting bucket public access block", "PublicAccessBlockConfiguration")}
 	}
 
 	return publicAccessBlockFromS3(output.PublicAccessBlockConfiguration)
@@ -1056,13 +1220,13 @@ func s3AccountPublicAccessBlockEvaluation(output *s3control.GetPublicAccessBlock
 		if isAPIErrorCode(err, "NoSuchPublicAccessBlockConfiguration") {
 			return PublicAccessBlockSettings{Evaluated: true}
 		}
-		return PublicAccessBlockSettings{ErrorCode: apiErrorCode(err)}
+		return PublicAccessBlockSettings{ErrorCode: apiErrorCode(err), Err: fmt.Errorf("getting account public access block: %w", err)}
 	}
 	if output == nil {
-		return PublicAccessBlockSettings{ErrorCode: "MissingGetPublicAccessBlockOutput"}
+		return PublicAccessBlockSettings{ErrorCode: "MissingGetPublicAccessBlockOutput", Err: errMissing(middleware.Metadata{}, "getting account public access block", "output")}
 	}
 	if output.PublicAccessBlockConfiguration == nil {
-		return PublicAccessBlockSettings{ErrorCode: "MissingPublicAccessBlockConfiguration"}
+		return PublicAccessBlockSettings{ErrorCode: "MissingPublicAccessBlockConfiguration", Err: errMissing(output.ResultMetadata, "getting account public access block", "PublicAccessBlockConfiguration")}
 	}
 
 	return publicAccessBlockFromS3Control(output.PublicAccessBlockConfiguration)
@@ -1272,6 +1436,7 @@ func (c *AWSClient) ListSecurityGroupsByID(ctx context.Context, region string, g
 	ec2Client := ec2.NewFromConfig(cfg)
 
 	var securityGroups []SecurityGroup
+	var last middleware.Metadata
 	paginator := ec2.NewDescribeSecurityGroupsPaginator(ec2Client, &ec2.DescribeSecurityGroupsInput{GroupIds: groupIDs})
 
 	for paginator.HasMorePages() {
@@ -1282,6 +1447,19 @@ func (c *AWSClient) ListSecurityGroupsByID(ctx context.Context, region string, g
 
 		for _, sg := range output.SecurityGroups {
 			securityGroups = append(securityGroups, securityGroupFromSDK(sg))
+		}
+		last = output.ResultMetadata
+	}
+
+	// EC2 fails a request that names a group it does not have, so an answer
+	// that leaves one out is incomplete, not a group without rules.
+	answered := make(map[string]bool, len(securityGroups))
+	for _, sg := range securityGroups {
+		answered[sg.GroupID] = true
+	}
+	for _, id := range groupIDs {
+		if !answered[id] {
+			return nil, errIncomplete(last, "describing security groups by id", "security groups", len(answered), len(groupIDs))
 		}
 	}
 
@@ -1350,16 +1528,22 @@ func (c *AWSClient) DescribeTrails(ctx context.Context) ([]Trail, error) {
 		status, err := ctClient.GetTrailStatus(ctx, &cloudtrail.GetTrailStatusInput{
 			Name: trailStatusIdentifier(t),
 		})
+		if err == nil && status.IsLogging == nil {
+			err = errMissing(status.ResultMetadata, "getting trail status for "+trail.Name, "IsLogging")
+		}
 		if err != nil {
 			trail.TrailStatusErrorCode = apiErrorCode(err)
 			if shouldInferOrganizationTrailLogging(t, err) {
 				trail.IsLogging = true
 				trail.TrailStatusInferred = true
-			} else if statusErr == nil {
-				statusErr = &TrailStatusUnavailableError{
+			} else {
+				trail.StatusErr = &TrailStatusUnavailableError{
 					TrailName: trail.Name,
 					Code:      apiErrorCode(err),
 					Err:       err,
+				}
+				if statusErr == nil {
+					statusErr = trail.StatusErr
 				}
 			}
 			trails = append(trails, trail)
@@ -1388,8 +1572,14 @@ func (e *TrailStatusUnavailableError) Unwrap() error {
 	return e.Err
 }
 
+// shouldInferOrganizationTrailLogging reports whether a failed status read is
+// a member account being blocked from its organization's shadow trail, which
+// counts as coverage. Any other failure leaves the status unknown.
 func shouldInferOrganizationTrailLogging(t cloudtrailtypes.Trail, err error) bool {
-	return err != nil && aws.ToBool(t.IsOrganizationTrail)
+	if err == nil || !aws.ToBool(t.IsOrganizationTrail) {
+		return false
+	}
+	return componentsdk.Classify(err) == componentsdk.CodePermissionDenied || isAPIErrorCode(err, "TrailNotFoundException")
 }
 
 func dedupeCloudTrailSDKTrails(trails []cloudtrailtypes.Trail) []cloudtrailtypes.Trail {
@@ -1575,6 +1765,8 @@ func describeLastEvaluationByConfigRule(ctx context.Context, client *configservi
 }
 
 // ListGuardDutyDetectors returns GuardDuty detectors in the specified region.
+// A region where GuardDuty is off answers with no detectors. A finding count
+// that could not be read keeps its error on the detector.
 func (c *AWSClient) ListGuardDutyDetectors(ctx context.Context, region string) ([]GuardDutyDetector, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
@@ -1582,8 +1774,7 @@ func (c *AWSClient) ListGuardDutyDetectors(ctx context.Context, region string) (
 
 	listOutput, err := gdClient.ListDetectors(ctx, &guardduty.ListDetectorsInput{})
 	if err != nil {
-		// GuardDuty might not be enabled
-		return nil, nil
+		return nil, fmt.Errorf("listing GuardDuty detectors in %s: %w", region, err)
 	}
 
 	detectors := make([]GuardDutyDetector, 0, len(listOutput.DetectorIds))
@@ -1592,7 +1783,10 @@ func (c *AWSClient) ListGuardDutyDetectors(ctx context.Context, region string) (
 			DetectorId: aws.String(id),
 		})
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("getting GuardDuty detector %s in %s: %w", id, region, err)
+		}
+		if getOutput.Status == "" {
+			return nil, errMissing(getOutput.ResultMetadata, "getting GuardDuty detector "+id, "Status")
 		}
 
 		detector := GuardDutyDetector{
@@ -1620,9 +1814,9 @@ func (c *AWSClient) ListGuardDutyDetectors(ctx context.Context, region string) (
 				Equals: []string{"false"},
 			},
 		}
-		detector.HighOrCriticalFindings, _ = c.countGuardDutyFindings(ctx, gdClient, id, unarchivedHighSeverityCriteria)
+		detector.HighOrCriticalFindings, detector.FindingsErr = c.countGuardDutyFindings(ctx, gdClient, id, unarchivedHighSeverityCriteria)
 
-		cutoffMillis := time.Now().Add(-48 * time.Hour).UnixMilli()
+		cutoffMillis := c.now().Add(-48 * time.Hour).UnixMilli()
 		staleHighSeverityCriteria := map[string]guarddutytypes.Condition{
 			"severity": {
 				GreaterThanOrEqual: aws.Int64(7),
@@ -1634,7 +1828,7 @@ func (c *AWSClient) ListGuardDutyDetectors(ctx context.Context, region string) (
 				LessThanOrEqual: aws.Int64(cutoffMillis),
 			},
 		}
-		detector.HighOrCriticalFindingsOlderThan48Hours, _ = c.countGuardDutyFindings(ctx, gdClient, id, staleHighSeverityCriteria)
+		detector.HighOrCriticalFindingsOlderThan48Hours, detector.StaleFindingsErr = c.countGuardDutyFindings(ctx, gdClient, id, staleHighSeverityCriteria)
 
 		detectors = append(detectors, detector)
 	}
@@ -1679,7 +1873,7 @@ func (c *AWSClient) countGuardDutyFindings(ctx context.Context, gdClient *guardd
 			NextToken:  nextToken,
 		})
 		if err != nil {
-			return count, err
+			return 0, fmt.Errorf("counting GuardDuty findings for detector %s: %w", detectorID, err)
 		}
 
 		count += len(output.FindingIds)
@@ -1739,7 +1933,7 @@ func listGuardDutyFindingIDs(ctx context.Context, gdClient *guardduty.Client, de
 			NextToken:  nextToken,
 		})
 		if err != nil {
-			return nil, false, err
+			return nil, false, fmt.Errorf("listing GuardDuty findings for detector %s: %w", detectorID, err)
 		}
 		ids = append(ids, output.FindingIds...)
 		if len(ids) >= max {
@@ -1766,6 +1960,9 @@ func getGuardDutyFindings(ctx context.Context, gdClient *guardduty.Client, detec
 		})
 		if err != nil {
 			return nil, fmt.Errorf("getting GuardDuty findings: %w", err)
+		}
+		if len(resp.Findings) < end-start {
+			return nil, errIncomplete(resp.ResultMetadata, "getting GuardDuty findings", "findings", len(resp.Findings), end-start)
 		}
 		for _, f := range resp.Findings {
 			out = append(out, projectGuardDutyFinding(f, detectorID))
@@ -1844,10 +2041,13 @@ func (c *AWSClient) GetSecurityHubConfig(ctx context.Context, region string) (*S
 
 	hubOutput, err := shClient.DescribeHub(ctx, &securityhub.DescribeHubInput{})
 	if err != nil {
-		if isAPIErrorCode(err, "ResourceNotFoundException") {
+		if isAPIErrorCode(err, "ResourceNotFoundException") || securityHubNotEnabled(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("describing Security Hub: %w", err)
+	}
+	if hubOutput.HubArn == nil {
+		return nil, errMissing(hubOutput.ResultMetadata, "describing Security Hub", "HubArn")
 	}
 
 	config := &SecurityHubConfig{
@@ -1860,17 +2060,20 @@ func (c *AWSClient) GetSecurityHubConfig(ctx context.Context, region string) (*S
 	if err != nil {
 		return nil, fmt.Errorf("getting enabled Security Hub standards: %w", err)
 	}
+	config.StandardsARNs = []string{}
 	for _, s := range standardsOutput.StandardsSubscriptions {
 		config.StandardsARNs = append(config.StandardsARNs, aws.ToString(s.StandardsArn))
 	}
 
 	// Get integrations
 	integrationsOutput, err := shClient.ListEnabledProductsForImport(ctx, &securityhub.ListEnabledProductsForImportInput{})
-	if err == nil {
-		config.IntegrationCount = len(integrationsOutput.ProductSubscriptions)
-		config.ProductSubscriptions = make([]string, 0, len(integrationsOutput.ProductSubscriptions))
-		config.ProductSubscriptions = append(config.ProductSubscriptions, integrationsOutput.ProductSubscriptions...)
+	if err != nil {
+		config.IntegrationsErr = fmt.Errorf("listing Security Hub integrations: %w", err)
+		return config, nil
 	}
+	config.IntegrationCount = len(integrationsOutput.ProductSubscriptions)
+	config.ProductSubscriptions = make([]string, 0, len(integrationsOutput.ProductSubscriptions))
+	config.ProductSubscriptions = append(config.ProductSubscriptions, integrationsOutput.ProductSubscriptions...)
 
 	return config, nil
 }
@@ -2055,6 +2258,9 @@ func (c *AWSClient) GetInspectorSummaryFromSecurityHub(ctx context.Context, regi
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
+			if securityHubNotEnabled(err) {
+				return nil, componentsdk.CodeError(componentsdk.CodeNotLicensed, fmt.Errorf("reading Inspector findings needs Security Hub, which is not enabled in %s: %w", region, err))
+			}
 			return nil, fmt.Errorf("getting Inspector findings from Security Hub: %w", err)
 		}
 
@@ -2151,6 +2357,7 @@ func (c *AWSClient) countAnalyzerFindings(ctx context.Context, client *accessana
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
 			analyzer.FindingsUnresolved = true
+			analyzer.FindingsErr = fmt.Errorf("listing findings for analyzer %s: %w", analyzer.Name, err)
 			analyzer.ActiveFindingsCount = 0
 			analyzer.ArchivedFindingsCount = 0
 			return
@@ -2164,6 +2371,12 @@ func (c *AWSClient) countAnalyzerFindings(ctx context.Context, client *accessana
 			}
 		}
 	}
+}
+
+// securityHubNotEnabled reports the error Security Hub answers with in a
+// region where the account has not enabled it.
+func securityHubNotEnabled(err error) bool {
+	return isAPIErrorCode(err, "InvalidAccessException") && strings.Contains(err.Error(), "not subscribed")
 }
 
 func isAPIErrorCode(err error, code string) bool {

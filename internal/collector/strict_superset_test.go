@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/locktivity/epack/componentsdk"
 )
 
 // auditGatedJSONPaths enumerates every level-gated field that MUST be present
 // (as a JSON array or object, never as `null`) when the collector runs at
-// audit level. Paths use the JSON-tag form so they map directly to the
+// audit level, and absent below it. Paths use the JSON-tag form so they map directly to the
 // emitted artifact shape that consumers will read.
 //
 // When adding a new surface, append the audit-level array's path here AND
@@ -52,9 +53,9 @@ var internalGatedJSONPaths = []string{
 // TestStrictSuperset_ContractAcrossLevels marshals an empty AccountPosture
 // at each level and verifies the gated-field contract for every registered
 // path:
-//   - trust: every gated path emits as `null` (not collected at this level).
+//   - trust: every gated path is absent (not collected at this level).
 //   - audit: every audit-gated path emits as a JSON array/object (collected);
-//     every internal-gated path emits as `null`.
+//     every internal-gated path is absent.
 //   - internal: every gated path emits as a JSON array/object.
 //
 // This is the cross-cutting regression guard: a future surface that adds a
@@ -66,18 +67,18 @@ func TestStrictSuperset_ContractAcrossLevels(t *testing.T) {
 		name        string
 		level       componentsdk.Level
 		wantNonNull []string
-		wantNullToo []string
+		wantAbsent  []string
 	}{
 		{
-			name:        "trust",
-			level:       componentsdk.LevelTrust,
-			wantNullToo: append([]string{}, append(auditGatedJSONPaths, internalGatedJSONPaths...)...),
+			name:       "trust",
+			level:      componentsdk.LevelTrust,
+			wantAbsent: append([]string{}, append(auditGatedJSONPaths, internalGatedJSONPaths...)...),
 		},
 		{
 			name:        "audit",
 			level:       componentsdk.LevelAudit,
 			wantNonNull: auditGatedJSONPaths,
-			wantNullToo: internalGatedJSONPaths,
+			wantAbsent:  internalGatedJSONPaths,
 		},
 		{
 			name:        "internal",
@@ -110,14 +111,9 @@ func TestStrictSuperset_ContractAcrossLevels(t *testing.T) {
 					t.Errorf("%s level: %q expected non-null, got null", tc.name, path)
 				}
 			}
-			for _, path := range tc.wantNullToo {
-				value, found := lookupJSONPath(asMap, path)
-				if !found {
-					t.Errorf("%s level: path %q missing from artifact", tc.name, path)
-					continue
-				}
-				if value != nil {
-					t.Errorf("%s level: %q expected null, got %v", tc.name, path, value)
+			for _, path := range tc.wantAbsent {
+				if value, found := lookupJSONPath(asMap, path); found {
+					t.Errorf("%s level: %q expected absent, got %v", tc.name, path, value)
 				}
 			}
 		})
@@ -149,7 +145,7 @@ func TestStrictSuperset_PathsAreUnique(t *testing.T) {
 // per-resource nullable rather than per-level gated).
 func TestOutput_CollectedAtLevelMarshalsCorrectly(t *testing.T) {
 	for _, level := range []componentsdk.Level{componentsdk.LevelTrust, componentsdk.LevelAudit, componentsdk.LevelInternal} {
-		out := NewOutput()
+		out := NewOutput(time.Now())
 		out.CollectedAtLevel = string(level)
 		b, err := json.Marshal(out)
 		if err != nil {
