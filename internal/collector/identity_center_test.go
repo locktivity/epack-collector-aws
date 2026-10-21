@@ -3,11 +3,13 @@ package collector
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 	"github.com/locktivity/epack/componentsdk"
+	"github.com/locktivity/epack/componentsdk/collectortest"
 )
 
 func TestPermissionSetsToInventory_CopiesARNsDefensively(t *testing.T) {
@@ -225,4 +227,32 @@ func TestCollectIdentityCenter_UserListingFailureLeavesRosterNull(t *testing.T) 
 		t.Errorf("expected nil users on listing failure, got %+v", status.Users)
 	}
 	requireGap(t, c, "/accounts/0/identity_center/user_count", "/accounts/0/identity_center/users")
+}
+
+// AWS refuses an account instance's ARN on the permission set calls, and an
+// account instance has no permission sets, so what those calls read is left
+// out as not licensed.
+func TestAccountInstancePermissionSetsAreNotLicensed(t *testing.T) {
+	isolateAWSEnvironment(t)
+	res := runKit(t, kitConfig(), kitSecrets(), replaceResponses(kitResponses(), collectortest.Response{
+		Operation: "aws.ssoadmin.ListPermissionSets", Method: http.MethodPost, URL: regional("sso"), Status: http.StatusBadRequest,
+		Header: jsonHeader("application/x-amz-json-1.1"),
+		Body:   `{"__type":"ValidationException","Message":"Value of input 'instanceArn' failed to satisfy constraint: Member must satisfy regular expression pattern: arn:aws(-[a-z]{1,5}){0,3}:sso:::instance/(sso)?ins-[a-zA-Z0-9-.]{16}"}`,
+	}))
+	if res.ExitCode != 0 || res.Result == nil {
+		t.Fatalf("run failed with exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	for _, pointer := range []string{
+		"/accounts/0/identity_center/permission_set_count",
+		"/accounts/0/identity_center/permission_sets",
+		"/accounts/0/identity_center/account_assignments",
+	} {
+		g := gapAt(res, awsPath, pointer)
+		switch {
+		case g == nil:
+			t.Errorf("%s: no gap", pointer)
+		case g.Code != componentsdk.CodeNotLicensed || g.Operation != "aws.ssoadmin.ListPermissionSets" || g.Call == 0:
+			t.Errorf("%s: code %s, operation %q, call %d; want not_licensed naming a ListPermissionSets call", pointer, g.Code, g.Operation, g.Call)
+		}
+	}
 }

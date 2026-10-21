@@ -79,8 +79,7 @@ func (c *Collector) collectIdentityCenter(ctx context.Context, client idcClient,
 	if !audit {
 		permSets, err := client.ListIdentityCenterPermissionSets(ctx, inst.Region, inst.InstanceARN, false)
 		if err != nil {
-			c.warn("account %s: failed to list IdC permission sets: %v", accountID, err)
-			status.missing.add(err, "permission_set_count")
+			status.missing.add(c.permissionSetsUnread(accountID, err), "permission_set_count")
 		} else {
 			status.PermissionSetCount = len(permSets)
 		}
@@ -90,8 +89,7 @@ func (c *Collector) collectIdentityCenter(ctx context.Context, client idcClient,
 
 	permSets, err := client.ListIdentityCenterPermissionSets(ctx, inst.Region, inst.InstanceARN, level.AtLeast(componentsdk.LevelInternal))
 	if err != nil {
-		c.warn("account %s: failed to list IdC permission sets: %v", accountID, err)
-		status.missing.add(err, "permission_set_count", "permission_sets", "account_assignments")
+		status.missing.add(c.permissionSetsUnread(accountID, err), "permission_set_count", "permission_sets", "account_assignments")
 	} else {
 		status.PermissionSetCount = len(permSets)
 		status.PermissionSets = permissionSetsToInventory(permSets)
@@ -123,6 +121,19 @@ func (c *Collector) collectIdentityCenter(ctx context.Context, client idcClient,
 	c.recordUnread(idcAt, status.missing)
 	recordRowsUnread(c, idcAt.sub("groups"), status.Groups, func(r *IdentityCenterGroupRow) unread { return r.missing })
 	return status
+}
+
+// permissionSetsUnread codes a failed permission set listing. An account
+// instance has no permission sets, and AWS refuses its instance ARN with a
+// ValidationException, since the ID is longer than the permission set calls
+// accept.
+func (c *Collector) permissionSetsUnread(accountID string, err error) error {
+	if apiErrorCode(err) == "ValidationException" {
+		c.warn("account %s: Identity Center is an account instance, which has no permission sets", accountID)
+		return componentsdk.CodeError(componentsdk.CodeNotLicensed, err)
+	}
+	c.warn("account %s: failed to list IdC permission sets: %v", accountID, err)
+	return err
 }
 
 func (c *Collector) collectIdentityCenterAssignments(ctx context.Context, client idcClient, inst aws.IdentityCenterInstance, permSets []aws.IdentityCenterPermissionSet, accountID string) (rows []IdentityCenterAssignmentRow, evaluated, truncated bool, dropped int, failure error) {

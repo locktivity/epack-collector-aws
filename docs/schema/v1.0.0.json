@@ -372,7 +372,7 @@
         "identity_store_id": { "type": ["string", "null"], "description": "The ID of the instance's identity store." },
         "user_count": { "type": ["integer", "null"], "minimum": 0, "description": "Users in the identity store.", "x-epack-rollup": { "rows": "users", "as": "count" } },
         "group_count": { "type": ["integer", "null"], "minimum": 0, "description": "Groups in the identity store.", "x-epack-rollup": { "rows": "groups", "as": "count" } },
-        "permission_set_count": { "type": ["integer", "null"], "minimum": 0, "description": "Permission sets in the instance.", "x-epack-rollup": { "rows": "permission_sets", "as": "count" } },
+        "permission_set_count": { "type": ["integer", "null"], "minimum": 0, "description": "Permission sets in the instance. An account instance has none, so the count is left out as not licensed.", "x-epack-rollup": { "rows": "permission_sets", "as": "count" } },
         "permission_sets": { "type": ["array", "null"], "items": { "$ref": "#/definitions/IdentityCenterPermissionSetRow" }, "description": "Audit level and above: one row per permission set.", "x-epack-level": "audit" },
         "users": { "type": ["array", "null"], "items": { "$ref": "#/definitions/IdentityCenterUserRow" }, "description": "Audit level and above: one row per identity store user. No personal data beyond the primary email is collected.", "x-epack-level": "audit" },
         "groups": { "type": ["array", "null"], "items": { "$ref": "#/definitions/IdentityCenterGroupRow" }, "description": "Audit level and above: one row per identity store group, with its direct members.", "x-epack-level": "audit" },
