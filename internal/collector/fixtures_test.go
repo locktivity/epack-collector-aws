@@ -1014,27 +1014,42 @@ func secondRegionInstanceResponses() []collectortest.Response {
 	return append(responses, inRegion("us-west-2", kitIdentityCenterResponses()[1:]...)...)
 }
 
-// The external IDs an identity provider's user provisioning set on the
-// identity store users in externalIDUsersResponses. No output may carry them.
+// The issuers of the external IDs on the identity store users in
+// externalIDUsersResponses: the SCIM provisioning tenant IAM Identity Center
+// records when an identity provider provisions a user, and a directory a
+// sync might name instead. No output may carry an issuer or an ID.
 const (
-	kitExternalIDIssuer = "https://scim.northwind-idp.example/scim/v2/kit"
-	kitDanaExternalID   = "00ukitdana0000000001"
-	kitEliExternalID    = "00ukiteli00000000002"
+	kitSCIMIssuer      = "arn:aws:identitystore::111122223333:identitystore/d-9067111111/provisioningtenant/a1b2c3d4-5678-90ab-cdef-111111111111"
+	kitDirectoryIssuer = "arn:aws:ds:us-east-1:111122223333:directory/d-9067222222"
+	kitDanaExternalID  = "00ukitdana0000000001"
+	kitEliExternalID   = "00ukiteli00000000002"
 )
 
-// externalIDUsersResponses answer as kitResponsesWithReport does, with the
-// Identity Center users provisioned from an external identity provider, so
-// each has an external ID.
-func externalIDUsersResponses(report string) []collectortest.Response {
-	user := func(id, name, display, email, externalID string) map[string]any {
+// externalIDCanaries are the issuers and external IDs in
+// externalIDUsersResponses as scenario secrets, which the kit fails a run
+// for printing or emitting.
+func externalIDCanaries() map[string]string {
+	return map[string]string{
+		"KIT_SCIM_ISSUER":      kitSCIMIssuer,
+		"KIT_DIRECTORY_ISSUER": kitDirectoryIssuer,
+		"KIT_DANA_EXTERNAL_ID": kitDanaExternalID,
+		"KIT_ELI_EXTERNAL_ID":  kitEliExternalID,
+	}
+}
+
+// externalIDUsersResponses answer as kitResponsesWithReport does, with each
+// Identity Center user carrying an external ID: dana's from danaIssuer and
+// eli's from eliIssuer.
+func externalIDUsersResponses(report, danaIssuer, eliIssuer string) []collectortest.Response {
+	user := func(id, name, display, email, issuer, externalID string) map[string]any {
 		return map[string]any{
 			"IdentityStoreId": kitStoreID, "UserId": id, "UserName": name, "DisplayName": display,
 			"Emails":      []any{map[string]any{"Value": email, "Primary": true, "Type": "work"}},
-			"ExternalIds": []any{map[string]any{"Issuer": kitExternalIDIssuer, "Id": externalID}},
+			"ExternalIds": []any{map[string]any{"Issuer": issuer, "Id": externalID}},
 		}
 	}
 	return replaceResponses(kitResponsesWithReport(report), jsonResponse("aws.identitystore.ListUsers", regional("identitystore"), map[string]any{"Users": []any{
-		user("u-1111", "dana@northwind.example", "Dana Ito", "dana@northwind.example", kitDanaExternalID),
-		user("u-2222", "eli@northwind.example", "Eli Park", "eli@northwind.example", kitEliExternalID),
+		user("u-1111", "dana@northwind.example", "Dana Ito", "dana@northwind.example", danaIssuer, kitDanaExternalID),
+		user("u-2222", "eli@northwind.example", "Eli Park", "eli@northwind.example", eliIssuer, kitEliExternalID),
 	}}))
 }

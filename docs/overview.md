@@ -130,8 +130,8 @@ Interpretation guide:
 | `instance_owner_account_id` | The account that owns the instance: the management account for an organization instance |
 | `instance_type` | `organization` or `account`. An account instance cannot sign people in to AWS accounts |
 | `user_count` | Users in the connected identity store |
-| `external_id_user_count` | Users with an external ID, which an external identity provider sets when it provisions users. The IDs are not collected |
-| `mfa_evidence` | Where users' MFA is set: `external_idp` when every user has an external ID, `manual_required` when none does, and `unknown` for a mix or a directory with no users |
+| `external_id_user_count` | Users with an external ID from SCIM provisioning, which IAM Identity Center sets when an external identity provider provisions a user. External IDs from other issuers, such as an Active Directory sync, do not count. The IDs are not collected |
+| `mfa_evidence` | Where users' MFA is set: `external_idp` when every user has an external ID from SCIM provisioning, `manual_required` when none does, and `unknown` for a mix or a directory with no users. Users synced from Active Directory count as Identity Center's own |
 | `group_count` | Groups in the connected identity store |
 | `permission_set_count` | Permission sets provisioned on the instance |
 | `regions_checked` | The scanned regions whose instance listing answered |
@@ -254,13 +254,14 @@ workforce sign-in service, across the accounts:
   found neither. The SAML provider listing is not needed for false.
 - `user_count` is the number of users in the organization instance's
   directory, when an account could read it.
-- `mfa_source` is `external_idp` when every user has an external ID, and
-  `sign_in_service` when none does, in which case Identity Center's own MFA
-  settings apply. It is `unknown` for a mix, a directory with no users, or
-  when no account could see the instance, and left out when `in_use` is
-  false. Each account's `identity_center.mfa_evidence` in the detailed
-  artifact gives the same answer, with `manual_required` for
-  `sign_in_service`.
+- `mfa_source` is `external_idp` when every user has an external ID from
+  SCIM provisioning, and `sign_in_service` when none does, in which case
+  Identity Center's own MFA settings apply. Users synced from Active
+  Directory count as Identity Center's own. It is `unknown` for a mix, a
+  directory with no users, or when no account could see the instance, and
+  left out when `in_use` is false. Each account's
+  `identity_center.mfa_evidence` in the detailed artifact gives the same
+  answer, with `manual_required` for `sign_in_service`.
 
 When the accounts' evidence cannot decide a value, the value is left out, and
 the run's result names the read that failed. For example, `in_use` is left out

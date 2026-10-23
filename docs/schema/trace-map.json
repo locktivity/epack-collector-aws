@@ -105,11 +105,11 @@
           },
           {
             "role": "input",
-            "line": "internal/collector/posture.go:1839"
+            "line": "internal/collector/posture.go:1840"
           },
           {
             "role": "input",
-            "line": "internal/collector/posture.go:1846"
+            "line": "internal/collector/posture.go:1847"
           }
         ]
       },
@@ -1955,7 +1955,7 @@
           },
           {
             "role": "input",
-            "line": "internal/collector/posture.go:1839"
+            "line": "internal/collector/posture.go:1840"
           }
         ]
       },
@@ -1967,7 +1967,7 @@
           },
           {
             "role": "input",
-            "line": "internal/collector/posture.go:1838"
+            "line": "internal/collector/posture.go:1839"
           }
         ]
       },
@@ -2153,7 +2153,7 @@
           },
           {
             "role": "input",
-            "line": "internal/collector/posture.go:1839"
+            "line": "internal/collector/posture.go:1840"
           }
         ],
         "gaps": [
@@ -2172,11 +2172,11 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:32"
+            "line": "internal/aws/identity_center.go:33"
           },
           {
             "role": "condition",
@@ -2232,8 +2232,8 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/identity_center.go:247",
-            "end": 255
+            "line": "internal/collector/identity_center.go:248",
+            "end": 256
           },
           {
             "role": "helper",
@@ -2330,7 +2330,7 @@
           },
           {
             "role": "input",
-            "line": "internal/collector/posture.go:1839"
+            "line": "internal/collector/posture.go:1840"
           }
         ],
         "gaps": [
@@ -2349,19 +2349,19 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:32"
+            "line": "internal/aws/identity_center.go:33"
           },
           {
             "role": "input",
@@ -2505,7 +2505,7 @@
           },
           {
             "role": "input",
-            "line": "internal/collector/posture.go:1839"
+            "line": "internal/collector/posture.go:1840"
           }
         ],
         "gaps": [
@@ -2542,7 +2542,7 @@
         "code": [
           {
             "role": "assign",
-            "line": "internal/collector/posture.go:1846"
+            "line": "internal/collector/posture.go:1847"
           }
         ]
       },
@@ -24998,7 +24998,7 @@
           },
           {
             "role": "input",
-            "line": "internal/collector/posture.go:1846"
+            "line": "internal/collector/posture.go:1847"
           },
           {
             "role": "helper",
@@ -25023,23 +25023,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:31"
+            "line": "internal/aws/identity_center.go:32"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:33"
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "input",
@@ -25091,8 +25091,8 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/identity_center.go:270",
-            "end": 307
+            "line": "internal/collector/identity_center.go:271",
+            "end": 308
           },
           {
             "role": "condition",
@@ -25125,103 +25125,103 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:31"
+            "line": "internal/aws/identity_center.go:32"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:33"
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:60"
+            "line": "internal/aws/identity_center.go:61"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:62"
+            "line": "internal/aws/identity_center.go:63"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:65"
+            "line": "internal/aws/identity_center.go:66"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:67"
+            "line": "internal/aws/identity_center.go:68"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:70"
-          },
-          {
-            "role": "condition",
             "line": "internal/aws/identity_center.go:71"
           },
           {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:75"
-          },
-          {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:119"
-          },
-          {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:123"
+            "line": "internal/aws/identity_center.go:72"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:127"
+            "line": "internal/aws/identity_center.go:76"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:164"
+            "line": "internal/aws/identity_center.go:120"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:171"
-          },
-          {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:174"
+            "line": "internal/aws/identity_center.go:124"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:176"
+            "line": "internal/aws/identity_center.go:128"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:272"
+            "line": "internal/aws/identity_center.go:165"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:172"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:175"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:177"
           },
           {
             "role": "condition",
             "line": "internal/collector/identity_center.go:273"
           },
           {
-            "role": "input",
+            "role": "condition",
             "line": "internal/collector/identity_center.go:274"
           },
           {
-            "role": "condition",
+            "role": "input",
             "line": "internal/collector/identity_center.go:275"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:283"
+            "line": "internal/collector/identity_center.go:276"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:284"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:285"
+            "line": "internal/collector/identity_center.go:286"
           }
         ],
         "gaps": [
@@ -25244,103 +25244,103 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:31"
+            "line": "internal/aws/identity_center.go:32"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:33"
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:60"
+            "line": "internal/aws/identity_center.go:61"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:62"
+            "line": "internal/aws/identity_center.go:63"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:65"
+            "line": "internal/aws/identity_center.go:66"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:67"
+            "line": "internal/aws/identity_center.go:68"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:70"
-          },
-          {
-            "role": "condition",
             "line": "internal/aws/identity_center.go:71"
           },
           {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:75"
-          },
-          {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:119"
-          },
-          {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:123"
+            "line": "internal/aws/identity_center.go:72"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:127"
+            "line": "internal/aws/identity_center.go:76"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:164"
+            "line": "internal/aws/identity_center.go:120"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:171"
-          },
-          {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:174"
+            "line": "internal/aws/identity_center.go:124"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:177"
+            "line": "internal/aws/identity_center.go:128"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:272"
+            "line": "internal/aws/identity_center.go:165"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:172"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:175"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:178"
           },
           {
             "role": "condition",
             "line": "internal/collector/identity_center.go:273"
           },
           {
-            "role": "input",
+            "role": "condition",
             "line": "internal/collector/identity_center.go:274"
           },
           {
-            "role": "condition",
+            "role": "input",
             "line": "internal/collector/identity_center.go:275"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:283"
+            "line": "internal/collector/identity_center.go:276"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:284"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:286"
+            "line": "internal/collector/identity_center.go:287"
           }
         ],
         "gaps": [
@@ -25363,103 +25363,103 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:31"
+            "line": "internal/aws/identity_center.go:32"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:33"
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:60"
+            "line": "internal/aws/identity_center.go:61"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:62"
+            "line": "internal/aws/identity_center.go:63"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:65"
+            "line": "internal/aws/identity_center.go:66"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:67"
+            "line": "internal/aws/identity_center.go:68"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:70"
-          },
-          {
-            "role": "condition",
             "line": "internal/aws/identity_center.go:71"
           },
           {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:75"
-          },
-          {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:119"
-          },
-          {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:123"
+            "line": "internal/aws/identity_center.go:72"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:127"
+            "line": "internal/aws/identity_center.go:76"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:164"
+            "line": "internal/aws/identity_center.go:120"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:171"
-          },
-          {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:174"
+            "line": "internal/aws/identity_center.go:124"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:179"
+            "line": "internal/aws/identity_center.go:128"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:272"
+            "line": "internal/aws/identity_center.go:165"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:172"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:175"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:180"
           },
           {
             "role": "condition",
             "line": "internal/collector/identity_center.go:273"
           },
           {
-            "role": "input",
+            "role": "condition",
             "line": "internal/collector/identity_center.go:274"
           },
           {
-            "role": "condition",
+            "role": "input",
             "line": "internal/collector/identity_center.go:275"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:283"
+            "line": "internal/collector/identity_center.go:276"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:284"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:288"
+            "line": "internal/collector/identity_center.go:289"
           }
         ],
         "gaps": [
@@ -25482,103 +25482,103 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:31"
+            "line": "internal/aws/identity_center.go:32"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:33"
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:60"
+            "line": "internal/aws/identity_center.go:61"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:62"
+            "line": "internal/aws/identity_center.go:63"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:65"
+            "line": "internal/aws/identity_center.go:66"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:67"
+            "line": "internal/aws/identity_center.go:68"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:70"
-          },
-          {
-            "role": "condition",
             "line": "internal/aws/identity_center.go:71"
           },
           {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:75"
-          },
-          {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:119"
-          },
-          {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:123"
+            "line": "internal/aws/identity_center.go:72"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:127"
+            "line": "internal/aws/identity_center.go:76"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:164"
+            "line": "internal/aws/identity_center.go:120"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:171"
-          },
-          {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:174"
+            "line": "internal/aws/identity_center.go:124"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:178"
+            "line": "internal/aws/identity_center.go:128"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:272"
+            "line": "internal/aws/identity_center.go:165"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:172"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:175"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:179"
           },
           {
             "role": "condition",
             "line": "internal/collector/identity_center.go:273"
           },
           {
-            "role": "input",
+            "role": "condition",
             "line": "internal/collector/identity_center.go:274"
           },
           {
-            "role": "condition",
+            "role": "input",
             "line": "internal/collector/identity_center.go:275"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:283"
+            "line": "internal/collector/identity_center.go:276"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:284"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:287"
+            "line": "internal/collector/identity_center.go:288"
           }
         ],
         "gaps": [
@@ -25595,23 +25595,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:31"
+            "line": "internal/aws/identity_center.go:32"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:33"
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "input",
@@ -25663,8 +25663,8 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/identity_center.go:270",
-            "end": 307
+            "line": "internal/collector/identity_center.go:271",
+            "end": 308
           }
         ],
         "gaps": [
@@ -25686,23 +25686,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:31"
+            "line": "internal/aws/identity_center.go:32"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:33"
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "input",
@@ -25754,8 +25754,8 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/identity_center.go:270",
-            "end": 307
+            "line": "internal/collector/identity_center.go:271",
+            "end": 308
           }
         ],
         "gaps": [
@@ -25771,23 +25771,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:31"
+            "line": "internal/aws/identity_center.go:32"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:33"
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "input",
@@ -25839,8 +25839,8 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/identity_center.go:270",
-            "end": 307
+            "line": "internal/collector/identity_center.go:271",
+            "end": 308
           }
         ],
         "gaps": [
@@ -25881,39 +25881,39 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
-          },
-          {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:32"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
             "line": "internal/aws/identity_center.go:33"
           },
           {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:233"
+            "role": "input",
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:238"
+            "line": "internal/aws/identity_center.go:234"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:241"
+            "line": "internal/aws/identity_center.go:239"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:242"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:246"
+            "line": "internal/aws/identity_center.go:247"
           },
           {
             "role": "condition",
@@ -25959,23 +25959,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
-          },
-          {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:32"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
             "line": "internal/aws/identity_center.go:33"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "condition",
@@ -26011,23 +26011,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
-          },
-          {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:32"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
             "line": "internal/aws/identity_center.go:33"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "condition",
@@ -26067,8 +26067,8 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/identity_center.go:344",
-            "end": 359
+            "line": "internal/collector/identity_center.go:345",
+            "end": 360
           },
           {
             "role": "condition",
@@ -26096,27 +26096,27 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:272"
+            "line": "internal/aws/identity_center.go:289"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:277"
+            "line": "internal/aws/identity_center.go:294"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:280"
+            "line": "internal/aws/identity_center.go:297"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:284"
+            "line": "internal/aws/identity_center.go:301"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:346"
+            "line": "internal/collector/identity_center.go:347"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:350"
+            "line": "internal/collector/identity_center.go:351"
           }
         ],
         "gaps": [
@@ -26134,27 +26134,27 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:272"
+            "line": "internal/aws/identity_center.go:289"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:277"
+            "line": "internal/aws/identity_center.go:294"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:280"
+            "line": "internal/aws/identity_center.go:297"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:283"
+            "line": "internal/aws/identity_center.go:300"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:346"
+            "line": "internal/collector/identity_center.go:347"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:349"
+            "line": "internal/collector/identity_center.go:350"
           }
         ],
         "gaps": [
@@ -26172,27 +26172,27 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:272"
+            "line": "internal/aws/identity_center.go:289"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:277"
+            "line": "internal/aws/identity_center.go:294"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:280"
+            "line": "internal/aws/identity_center.go:297"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:282"
+            "line": "internal/aws/identity_center.go:299"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:346"
+            "line": "internal/collector/identity_center.go:347"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:348"
+            "line": "internal/collector/identity_center.go:349"
           }
         ],
         "gaps": [
@@ -26211,19 +26211,15 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:272"
+            "line": "internal/aws/identity_center.go:289"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:277"
+            "line": "internal/aws/identity_center.go:294"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:280"
-          },
-          {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:282"
+            "line": "internal/aws/identity_center.go:297"
           },
           {
             "role": "input",
@@ -26231,35 +26227,39 @@
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:301"
+            "line": "internal/aws/identity_center.go:316"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:303"
-          },
-          {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:304"
+            "line": "internal/aws/identity_center.go:318"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:305"
+            "line": "internal/aws/identity_center.go:320"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:306"
+            "line": "internal/aws/identity_center.go:321"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:310"
+            "line": "internal/aws/identity_center.go:322"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:346"
+            "line": "internal/aws/identity_center.go:323"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:327"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:347"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:351"
+            "line": "internal/collector/identity_center.go:352"
           }
         ],
         "gaps": [
@@ -26276,19 +26276,15 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:272"
+            "line": "internal/aws/identity_center.go:289"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:277"
+            "line": "internal/aws/identity_center.go:294"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:280"
-          },
-          {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:282"
+            "line": "internal/aws/identity_center.go:297"
           },
           {
             "role": "input",
@@ -26296,39 +26292,43 @@
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:301"
+            "line": "internal/aws/identity_center.go:316"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:303"
-          },
-          {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:304"
+            "line": "internal/aws/identity_center.go:318"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:305"
+            "line": "internal/aws/identity_center.go:320"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:306"
+            "line": "internal/aws/identity_center.go:321"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:309"
+            "line": "internal/aws/identity_center.go:322"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:346"
+            "line": "internal/aws/identity_center.go:323"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:326"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:353"
+            "line": "internal/collector/identity_center.go:347"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:354"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:354"
+            "line": "internal/collector/identity_center.go:355"
           }
         ],
         "gaps": [
@@ -26345,19 +26345,15 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:272"
+            "line": "internal/aws/identity_center.go:289"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:277"
+            "line": "internal/aws/identity_center.go:294"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:280"
-          },
-          {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:282"
+            "line": "internal/aws/identity_center.go:297"
           },
           {
             "role": "input",
@@ -26365,39 +26361,43 @@
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:301"
+            "line": "internal/aws/identity_center.go:316"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:303"
-          },
-          {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:304"
+            "line": "internal/aws/identity_center.go:318"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:305"
+            "line": "internal/aws/identity_center.go:320"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:306"
+            "line": "internal/aws/identity_center.go:321"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:309"
+            "line": "internal/aws/identity_center.go:322"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:346"
+            "line": "internal/aws/identity_center.go:323"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:326"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:353"
+            "line": "internal/collector/identity_center.go:347"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:354"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:354"
+            "line": "internal/collector/identity_center.go:355"
           }
         ],
         "gaps": [
@@ -26415,19 +26415,19 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:32"
+            "line": "internal/aws/identity_center.go:33"
           },
           {
             "role": "condition",
@@ -26455,19 +26455,19 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:31"
+            "line": "internal/aws/identity_center.go:32"
           },
           {
             "role": "condition",
@@ -26495,19 +26495,19 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:35"
+            "line": "internal/aws/identity_center.go:36"
           },
           {
             "role": "condition",
@@ -26535,19 +26535,19 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:33"
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "condition",
@@ -26575,19 +26575,19 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:34"
+            "line": "internal/aws/identity_center.go:35"
           },
           {
             "role": "condition",
@@ -26616,23 +26616,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:31"
+            "line": "internal/aws/identity_center.go:32"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:33"
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "input",
@@ -26687,39 +26687,39 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
-          },
-          {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:32"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
             "line": "internal/aws/identity_center.go:33"
           },
           {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:233"
+            "role": "input",
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:238"
+            "line": "internal/aws/identity_center.go:234"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:241"
+            "line": "internal/aws/identity_center.go:239"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:242"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:246"
+            "line": "internal/aws/identity_center.go:247"
           },
           {
             "role": "condition",
@@ -26759,8 +26759,8 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/identity_center.go:247",
-            "end": 255
+            "line": "internal/collector/identity_center.go:248",
+            "end": 256
           }
         ],
         "gaps": [
@@ -26778,23 +26778,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:31"
+            "line": "internal/aws/identity_center.go:32"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:33"
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "condition",
@@ -26838,23 +26838,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:31"
+            "line": "internal/aws/identity_center.go:32"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:33"
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "condition",
@@ -26898,8 +26898,8 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/identity_center.go:309",
-            "end": 328
+            "line": "internal/collector/identity_center.go:310",
+            "end": 329
           },
           {
             "role": "condition",
@@ -26931,39 +26931,39 @@
         "code": [
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:60"
+            "line": "internal/aws/identity_center.go:61"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:62"
+            "line": "internal/aws/identity_center.go:63"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:65"
+            "line": "internal/aws/identity_center.go:66"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:67"
+            "line": "internal/aws/identity_center.go:68"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:70"
-          },
-          {
-            "role": "condition",
             "line": "internal/aws/identity_center.go:71"
           },
           {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:72"
+          },
+          {
             "role": "input",
-            "line": "internal/aws/identity_center.go:74"
+            "line": "internal/aws/identity_center.go:75"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:311"
+            "line": "internal/collector/identity_center.go:312"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:318"
+            "line": "internal/collector/identity_center.go:319"
           }
         ],
         "gaps": [
@@ -26985,23 +26985,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:119"
+            "line": "internal/aws/identity_center.go:120"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:123"
+            "line": "internal/aws/identity_center.go:124"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:127"
+            "line": "internal/aws/identity_center.go:128"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:311"
+            "line": "internal/collector/identity_center.go:312"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:314"
+            "line": "internal/collector/identity_center.go:315"
           }
         ],
         "gaps": [
@@ -27023,23 +27023,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:119"
+            "line": "internal/aws/identity_center.go:120"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:123"
+            "line": "internal/aws/identity_center.go:124"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:129"
+            "line": "internal/aws/identity_center.go:130"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:311"
+            "line": "internal/collector/identity_center.go:312"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:315"
+            "line": "internal/collector/identity_center.go:316"
           }
         ],
         "gaps": [
@@ -27061,51 +27061,51 @@
         "code": [
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:60"
+            "line": "internal/aws/identity_center.go:61"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:62"
+            "line": "internal/aws/identity_center.go:63"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:65"
+            "line": "internal/aws/identity_center.go:66"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:67"
+            "line": "internal/aws/identity_center.go:68"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:71"
+            "line": "internal/aws/identity_center.go:72"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:78"
+            "line": "internal/aws/identity_center.go:79"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:82"
+            "line": "internal/aws/identity_center.go:83"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:84"
-          },
-          {
-            "role": "condition",
             "line": "internal/aws/identity_center.go:85"
           },
           {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:86"
+          },
+          {
             "role": "input",
-            "line": "internal/aws/identity_center.go:88"
+            "line": "internal/aws/identity_center.go:89"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:311"
+            "line": "internal/collector/identity_center.go:312"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:320"
+            "line": "internal/collector/identity_center.go:321"
           }
         ],
         "gaps": [
@@ -27127,43 +27127,43 @@
         "code": [
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:60"
+            "line": "internal/aws/identity_center.go:61"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:62"
+            "line": "internal/aws/identity_center.go:63"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:65"
+            "line": "internal/aws/identity_center.go:66"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:67"
+            "line": "internal/aws/identity_center.go:68"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:71"
+            "line": "internal/aws/identity_center.go:72"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:77"
-          },
-          {
-            "role": "condition",
             "line": "internal/aws/identity_center.go:78"
           },
           {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:79"
+          },
+          {
             "role": "input",
-            "line": "internal/aws/identity_center.go:81"
+            "line": "internal/aws/identity_center.go:82"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:311"
+            "line": "internal/collector/identity_center.go:312"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:317"
+            "line": "internal/collector/identity_center.go:318"
           }
         ],
         "gaps": [
@@ -27185,51 +27185,51 @@
         "code": [
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:60"
+            "line": "internal/aws/identity_center.go:61"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:62"
+            "line": "internal/aws/identity_center.go:63"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:65"
+            "line": "internal/aws/identity_center.go:66"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:67"
+            "line": "internal/aws/identity_center.go:68"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:71"
+            "line": "internal/aws/identity_center.go:72"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:77"
-          },
-          {
-            "role": "condition",
             "line": "internal/aws/identity_center.go:78"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:82"
+            "line": "internal/aws/identity_center.go:79"
           },
           {
-            "role": "input",
+            "role": "condition",
             "line": "internal/aws/identity_center.go:83"
           },
           {
-            "role": "condition",
-            "line": "internal/collector/identity_center.go:311"
+            "role": "input",
+            "line": "internal/aws/identity_center.go:84"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:322"
+            "line": "internal/collector/identity_center.go:312"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:323"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:323"
+            "line": "internal/collector/identity_center.go:324"
           }
         ],
         "gaps": [
@@ -27251,23 +27251,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:119"
+            "line": "internal/aws/identity_center.go:120"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:123"
+            "line": "internal/aws/identity_center.go:124"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:128"
+            "line": "internal/aws/identity_center.go:129"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:311"
+            "line": "internal/collector/identity_center.go:312"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:313"
+            "line": "internal/collector/identity_center.go:314"
           }
         ],
         "gaps": [
@@ -27289,39 +27289,39 @@
         "code": [
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:60"
+            "line": "internal/aws/identity_center.go:61"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:62"
+            "line": "internal/aws/identity_center.go:63"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:65"
+            "line": "internal/aws/identity_center.go:66"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:67"
+            "line": "internal/aws/identity_center.go:68"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:70"
-          },
-          {
-            "role": "condition",
             "line": "internal/aws/identity_center.go:71"
           },
           {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:72"
+          },
+          {
             "role": "input",
-            "line": "internal/aws/identity_center.go:75"
+            "line": "internal/aws/identity_center.go:76"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:311"
+            "line": "internal/collector/identity_center.go:312"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:319"
+            "line": "internal/collector/identity_center.go:320"
           }
         ],
         "gaps": [
@@ -27343,23 +27343,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:119"
+            "line": "internal/aws/identity_center.go:120"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:123"
+            "line": "internal/aws/identity_center.go:124"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:130"
+            "line": "internal/aws/identity_center.go:131"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:311"
+            "line": "internal/collector/identity_center.go:312"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:316"
+            "line": "internal/collector/identity_center.go:317"
           }
         ],
         "gaps": [
@@ -27405,23 +27405,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
-          },
-          {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:32"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
             "line": "internal/aws/identity_center.go:33"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "condition",
@@ -27457,23 +27457,23 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:24"
+            "line": "internal/aws/identity_center.go:25"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:26"
+            "line": "internal/aws/identity_center.go:27"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:29"
-          },
-          {
-            "role": "input",
-            "line": "internal/aws/identity_center.go:32"
+            "line": "internal/aws/identity_center.go:30"
           },
           {
             "role": "input",
             "line": "internal/aws/identity_center.go:33"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:34"
           },
           {
             "role": "condition",
@@ -27501,8 +27501,8 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/identity_center.go:330",
-            "end": 342
+            "line": "internal/collector/identity_center.go:331",
+            "end": 343
           },
           {
             "role": "condition",
@@ -27530,27 +27530,27 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:233"
+            "line": "internal/aws/identity_center.go:234"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:238"
+            "line": "internal/aws/identity_center.go:239"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:241"
+            "line": "internal/aws/identity_center.go:242"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:245"
+            "line": "internal/aws/identity_center.go:246"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:332"
+            "line": "internal/collector/identity_center.go:333"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:336"
+            "line": "internal/collector/identity_center.go:337"
           }
         ],
         "gaps": [
@@ -27568,27 +27568,27 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:233"
+            "line": "internal/aws/identity_center.go:234"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:238"
+            "line": "internal/aws/identity_center.go:239"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:241"
+            "line": "internal/aws/identity_center.go:242"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:246"
+            "line": "internal/aws/identity_center.go:247"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:332"
+            "line": "internal/collector/identity_center.go:333"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:338"
+            "line": "internal/collector/identity_center.go:339"
           }
         ],
         "gaps": [
@@ -27606,35 +27606,35 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:233"
+            "line": "internal/aws/identity_center.go:234"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:238"
+            "line": "internal/aws/identity_center.go:239"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:241"
-          },
-          {
-            "role": "condition",
-            "line": "internal/aws/identity_center.go:248"
+            "line": "internal/aws/identity_center.go:242"
           },
           {
             "role": "condition",
             "line": "internal/aws/identity_center.go:249"
           },
           {
-            "role": "input",
+            "role": "condition",
             "line": "internal/aws/identity_center.go:250"
           },
           {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:251"
+          },
+          {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:332"
+            "line": "internal/collector/identity_center.go:333"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:337"
+            "line": "internal/collector/identity_center.go:338"
           }
         ],
         "gaps": [
@@ -27652,27 +27652,27 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:233"
+            "line": "internal/aws/identity_center.go:234"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:238"
+            "line": "internal/aws/identity_center.go:239"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:241"
+            "line": "internal/aws/identity_center.go:242"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:243"
+            "line": "internal/aws/identity_center.go:244"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:332"
+            "line": "internal/collector/identity_center.go:333"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:334"
+            "line": "internal/collector/identity_center.go:335"
           }
         ],
         "gaps": [
@@ -27690,27 +27690,27 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:233"
+            "line": "internal/aws/identity_center.go:234"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:238"
+            "line": "internal/aws/identity_center.go:239"
           },
           {
             "role": "condition",
-            "line": "internal/aws/identity_center.go:241"
+            "line": "internal/aws/identity_center.go:242"
           },
           {
             "role": "input",
-            "line": "internal/aws/identity_center.go:244"
+            "line": "internal/aws/identity_center.go:245"
           },
           {
             "role": "condition",
-            "line": "internal/collector/identity_center.go:332"
+            "line": "internal/collector/identity_center.go:333"
           },
           {
             "role": "assign",
-            "line": "internal/collector/identity_center.go:335"
+            "line": "internal/collector/identity_center.go:336"
           }
         ],
         "gaps": [
@@ -37577,7 +37577,7 @@
         "code": [
           {
             "role": "assign",
-            "line": "internal/collector/posture.go:1847"
+            "line": "internal/collector/posture.go:1848"
           }
         ],
         "gaps": [
@@ -37591,7 +37591,7 @@
         "code": [
           {
             "role": "assign",
-            "line": "internal/collector/posture.go:1847"
+            "line": "internal/collector/posture.go:1848"
           }
         ],
         "gaps": [
@@ -44876,7 +44876,7 @@
         "code": [
           {
             "role": "assign",
-            "line": "internal/collector/posture.go:1838"
+            "line": "internal/collector/posture.go:1839"
           }
         ]
       },
@@ -45104,7 +45104,7 @@
           },
           {
             "role": "input",
-            "line": "internal/collector/posture.go:1839"
+            "line": "internal/collector/posture.go:1840"
           }
         ]
       },
@@ -45112,7 +45112,7 @@
         "code": [
           {
             "role": "assign",
-            "line": "internal/collector/posture.go:1837"
+            "line": "internal/collector/posture.go:1838"
           }
         ]
       }
@@ -45653,67 +45653,67 @@
     "internal/aws/eventbridge.go:79": "\t\t\trule.TargetsByKind[eventTargetKind(arn)]++",
     "internal/aws/eventbridge.go:80": "\t\t\tif isSNSTopicARN(arn) {",
     "internal/aws/eventbridge.go:81": "\t\t\t\trule.TopicARNs = append(rule.TopicARNs, arn)",
-    "internal/aws/identity_center.go:24": "\tfor {",
-    "internal/aws/identity_center.go:26": "\t\tif err != nil {",
-    "internal/aws/identity_center.go:29": "\t\tfor _, inst := range out.Instances {",
-    "internal/aws/identity_center.go:31": "\t\t\t\tInstanceARN:     aws.ToString(inst.InstanceArn),",
-    "internal/aws/identity_center.go:32": "\t\t\t\tIdentityStoreID: aws.ToString(inst.IdentityStoreId),",
-    "internal/aws/identity_center.go:33": "\t\t\t\tRegion:          region,",
-    "internal/aws/identity_center.go:34": "\t\t\t\tStatus:          string(inst.Status),",
-    "internal/aws/identity_center.go:35": "\t\t\t\tOwnerAccountID:  aws.ToString(inst.OwnerAccountId),",
-    "internal/aws/identity_center.go:60": "\tcfg := c.cfg.Copy()",
-    "internal/aws/identity_center.go:62": "\tclient := ssoadmin.NewFromConfig(cfg)",
-    "internal/aws/identity_center.go:65": "\tfor _, arn := range arns {",
-    "internal/aws/identity_center.go:67": "\t\tif err != nil {",
-    "internal/aws/identity_center.go:70": "\t\taccountIDs, err := listAccountsForPermissionSet(ctx, client, instanceARN, arn)",
-    "internal/aws/identity_center.go:71": "\t\tif err != nil {",
-    "internal/aws/identity_center.go:74": "\t\tps.AccountsAssignedCount = len(accountIDs)",
-    "internal/aws/identity_center.go:75": "\t\tps.ProvisionedAccountIDs = accountIDs",
-    "internal/aws/identity_center.go:77": "\t\tmp, err := listManagedPoliciesForPermissionSet(ctx, client, instanceARN, arn)",
-    "internal/aws/identity_center.go:78": "\t\tif err != nil {",
-    "internal/aws/identity_center.go:81": "\t\tps.ManagedPoliciesCount = len(mp)",
-    "internal/aws/identity_center.go:82": "\t\tif withInternalEnrichment {",
-    "internal/aws/identity_center.go:83": "\t\t\tps.ManagedPolicyARNs = mp",
-    "internal/aws/identity_center.go:84": "\t\t\tinlinePresent, err := permissionSetHasInlinePolicy(ctx, client, instanceARN, arn)",
-    "internal/aws/identity_center.go:85": "\t\t\tif err != nil {",
-    "internal/aws/identity_center.go:88": "\t\t\tps.HasInlinePolicy = inlinePresent",
-    "internal/aws/identity_center.go:119": "\tif err != nil {",
-    "internal/aws/identity_center.go:123": "\tif ps == nil {",
-    "internal/aws/identity_center.go:127": "\t\tARN:                    psARN,",
-    "internal/aws/identity_center.go:128": "\t\tName:                   aws.ToString(ps.Name),",
-    "internal/aws/identity_center.go:129": "\t\tDescription:            aws.ToString(ps.Description),",
-    "internal/aws/identity_center.go:130": "\t\tSessionDurationISO8601: aws.ToString(ps.SessionDuration),",
-    "internal/aws/identity_center.go:164": "\tfor {",
-    "internal/aws/identity_center.go:171": "\t\tif err != nil {",
-    "internal/aws/identity_center.go:174": "\t\tfor _, a := range resp.AccountAssignments {",
-    "internal/aws/identity_center.go:176": "\t\t\t\tAccountID:        aws.ToString(a.AccountId),",
-    "internal/aws/identity_center.go:177": "\t\t\t\tPermissionSetARN: aws.ToString(a.PermissionSetArn),",
-    "internal/aws/identity_center.go:178": "\t\t\t\tPrincipalType:    string(a.PrincipalType),",
-    "internal/aws/identity_center.go:179": "\t\t\t\tPrincipalID:      aws.ToString(a.PrincipalId),",
-    "internal/aws/identity_center.go:233": "\tfor {",
-    "internal/aws/identity_center.go:238": "\t\tif err != nil {",
-    "internal/aws/identity_center.go:241": "\t\tfor _, u := range resp.Users {",
-    "internal/aws/identity_center.go:243": "\t\t\t\tUserID:        aws.ToString(u.UserId),",
-    "internal/aws/identity_center.go:244": "\t\t\t\tUserName:      aws.ToString(u.UserName),",
-    "internal/aws/identity_center.go:245": "\t\t\t\tDisplayName:   aws.ToString(u.DisplayName),",
-    "internal/aws/identity_center.go:246": "\t\t\t\tHasExternalID: len(u.ExternalIds) \u003e 0,",
-    "internal/aws/identity_center.go:248": "\t\t\tfor _, e := range u.Emails {",
-    "internal/aws/identity_center.go:249": "\t\t\t\tif e.Primary {",
-    "internal/aws/identity_center.go:250": "\t\t\t\t\tuser.PrimaryEmail = aws.ToString(e.Value)",
-    "internal/aws/identity_center.go:272": "\tfor {",
-    "internal/aws/identity_center.go:277": "\t\tif err != nil {",
-    "internal/aws/identity_center.go:280": "\t\tfor _, g := range resp.Groups {",
-    "internal/aws/identity_center.go:282": "\t\t\t\tGroupID:     aws.ToString(g.GroupId),",
-    "internal/aws/identity_center.go:283": "\t\t\t\tDisplayName: aws.ToString(g.DisplayName),",
-    "internal/aws/identity_center.go:284": "\t\t\t\tDescription: aws.ToString(g.Description),",
-    "internal/aws/identity_center.go:299": "\tcfg := c.cfg.Copy()",
-    "internal/aws/identity_center.go:301": "\tclient := identitystore.NewFromConfig(cfg)",
-    "internal/aws/identity_center.go:303": "\tout := append([]IdentityStoreGroup(nil), groups...)",
-    "internal/aws/identity_center.go:304": "\tfor i := range out {",
-    "internal/aws/identity_center.go:305": "\t\tmemberIDs, err := listGroupMembers(ctx, client, identityStoreID, out[i].GroupID)",
-    "internal/aws/identity_center.go:306": "\t\tif err != nil {",
-    "internal/aws/identity_center.go:309": "\t\tout[i].MemberUserIDs = memberIDs",
-    "internal/aws/identity_center.go:310": "\t\tout[i].MemberCount = len(memberIDs)",
+    "internal/aws/identity_center.go:25": "\tfor {",
+    "internal/aws/identity_center.go:27": "\t\tif err != nil {",
+    "internal/aws/identity_center.go:30": "\t\tfor _, inst := range out.Instances {",
+    "internal/aws/identity_center.go:32": "\t\t\t\tInstanceARN:     aws.ToString(inst.InstanceArn),",
+    "internal/aws/identity_center.go:33": "\t\t\t\tIdentityStoreID: aws.ToString(inst.IdentityStoreId),",
+    "internal/aws/identity_center.go:34": "\t\t\t\tRegion:          region,",
+    "internal/aws/identity_center.go:35": "\t\t\t\tStatus:          string(inst.Status),",
+    "internal/aws/identity_center.go:36": "\t\t\t\tOwnerAccountID:  aws.ToString(inst.OwnerAccountId),",
+    "internal/aws/identity_center.go:61": "\tcfg := c.cfg.Copy()",
+    "internal/aws/identity_center.go:63": "\tclient := ssoadmin.NewFromConfig(cfg)",
+    "internal/aws/identity_center.go:66": "\tfor _, arn := range arns {",
+    "internal/aws/identity_center.go:68": "\t\tif err != nil {",
+    "internal/aws/identity_center.go:71": "\t\taccountIDs, err := listAccountsForPermissionSet(ctx, client, instanceARN, arn)",
+    "internal/aws/identity_center.go:72": "\t\tif err != nil {",
+    "internal/aws/identity_center.go:75": "\t\tps.AccountsAssignedCount = len(accountIDs)",
+    "internal/aws/identity_center.go:76": "\t\tps.ProvisionedAccountIDs = accountIDs",
+    "internal/aws/identity_center.go:78": "\t\tmp, err := listManagedPoliciesForPermissionSet(ctx, client, instanceARN, arn)",
+    "internal/aws/identity_center.go:79": "\t\tif err != nil {",
+    "internal/aws/identity_center.go:82": "\t\tps.ManagedPoliciesCount = len(mp)",
+    "internal/aws/identity_center.go:83": "\t\tif withInternalEnrichment {",
+    "internal/aws/identity_center.go:84": "\t\t\tps.ManagedPolicyARNs = mp",
+    "internal/aws/identity_center.go:85": "\t\t\tinlinePresent, err := permissionSetHasInlinePolicy(ctx, client, instanceARN, arn)",
+    "internal/aws/identity_center.go:86": "\t\t\tif err != nil {",
+    "internal/aws/identity_center.go:89": "\t\t\tps.HasInlinePolicy = inlinePresent",
+    "internal/aws/identity_center.go:120": "\tif err != nil {",
+    "internal/aws/identity_center.go:124": "\tif ps == nil {",
+    "internal/aws/identity_center.go:128": "\t\tARN:                    psARN,",
+    "internal/aws/identity_center.go:129": "\t\tName:                   aws.ToString(ps.Name),",
+    "internal/aws/identity_center.go:130": "\t\tDescription:            aws.ToString(ps.Description),",
+    "internal/aws/identity_center.go:131": "\t\tSessionDurationISO8601: aws.ToString(ps.SessionDuration),",
+    "internal/aws/identity_center.go:165": "\tfor {",
+    "internal/aws/identity_center.go:172": "\t\tif err != nil {",
+    "internal/aws/identity_center.go:175": "\t\tfor _, a := range resp.AccountAssignments {",
+    "internal/aws/identity_center.go:177": "\t\t\t\tAccountID:        aws.ToString(a.AccountId),",
+    "internal/aws/identity_center.go:178": "\t\t\t\tPermissionSetARN: aws.ToString(a.PermissionSetArn),",
+    "internal/aws/identity_center.go:179": "\t\t\t\tPrincipalType:    string(a.PrincipalType),",
+    "internal/aws/identity_center.go:180": "\t\t\t\tPrincipalID:      aws.ToString(a.PrincipalId),",
+    "internal/aws/identity_center.go:234": "\tfor {",
+    "internal/aws/identity_center.go:239": "\t\tif err != nil {",
+    "internal/aws/identity_center.go:242": "\t\tfor _, u := range resp.Users {",
+    "internal/aws/identity_center.go:244": "\t\t\t\tUserID:        aws.ToString(u.UserId),",
+    "internal/aws/identity_center.go:245": "\t\t\t\tUserName:      aws.ToString(u.UserName),",
+    "internal/aws/identity_center.go:246": "\t\t\t\tDisplayName:   aws.ToString(u.DisplayName),",
+    "internal/aws/identity_center.go:247": "\t\t\t\tHasExternalID: hasSCIMExternalID(u.ExternalIds),",
+    "internal/aws/identity_center.go:249": "\t\t\tfor _, e := range u.Emails {",
+    "internal/aws/identity_center.go:250": "\t\t\t\tif e.Primary {",
+    "internal/aws/identity_center.go:251": "\t\t\t\t\tuser.PrimaryEmail = aws.ToString(e.Value)",
+    "internal/aws/identity_center.go:289": "\tfor {",
+    "internal/aws/identity_center.go:294": "\t\tif err != nil {",
+    "internal/aws/identity_center.go:297": "\t\tfor _, g := range resp.Groups {",
+    "internal/aws/identity_center.go:299": "\t\t\t\tGroupID:     aws.ToString(g.GroupId),",
+    "internal/aws/identity_center.go:300": "\t\t\t\tDisplayName: aws.ToString(g.DisplayName),",
+    "internal/aws/identity_center.go:301": "\t\t\t\tDescription: aws.ToString(g.Description),",
+    "internal/aws/identity_center.go:316": "\tcfg := c.cfg.Copy()",
+    "internal/aws/identity_center.go:318": "\tclient := identitystore.NewFromConfig(cfg)",
+    "internal/aws/identity_center.go:320": "\tout := append([]IdentityStoreGroup(nil), groups...)",
+    "internal/aws/identity_center.go:321": "\tfor i := range out {",
+    "internal/aws/identity_center.go:322": "\t\tmemberIDs, err := listGroupMembers(ctx, client, identityStoreID, out[i].GroupID)",
+    "internal/aws/identity_center.go:323": "\t\tif err != nil {",
+    "internal/aws/identity_center.go:326": "\t\tout[i].MemberUserIDs = memberIDs",
+    "internal/aws/identity_center.go:327": "\t\tout[i].MemberCount = len(memberIDs)",
     "internal/aws/images_snapshots.go:62": "\tfor paginator.HasMorePages() {",
     "internal/aws/images_snapshots.go:64": "\t\tif err != nil {",
     "internal/aws/images_snapshots.go:67": "\t\tfor _, s := range page.Snapshots {",
@@ -47067,102 +47067,102 @@
     "internal/collector/identity_center.go:238": "\t}",
     "internal/collector/identity_center.go:239": "\treturn \"\"",
     "internal/collector/identity_center.go:240": "}",
-    "internal/collector/identity_center.go:247": "func identityCenterMFAEvidence(users, withExternalID int) string {",
-    "internal/collector/identity_center.go:248": "\tswitch {",
-    "internal/collector/identity_center.go:249": "\tcase users \u003e 0 \u0026\u0026 withExternalID == users:",
-    "internal/collector/identity_center.go:250": "\t\treturn mfaEvidenceExternalIdP",
-    "internal/collector/identity_center.go:251": "\tcase users \u003e 0 \u0026\u0026 withExternalID == 0:",
-    "internal/collector/identity_center.go:252": "\t\treturn mfaEvidenceManualRequired",
-    "internal/collector/identity_center.go:253": "\t}",
-    "internal/collector/identity_center.go:254": "\treturn mfaEvidenceUnknown",
-    "internal/collector/identity_center.go:255": "}",
-    "internal/collector/identity_center.go:270": "func (c *Collector) collectIdentityCenterAssignments(ctx context.Context, client idcClient, inst aws.IdentityCenterInstance, permSets []aws.IdentityCenterPermissionSet, accountID string) (rows []IdentityCenterAssignmentRow, evaluated, truncated bool, dropped int, failure error) {",
-    "internal/collector/identity_center.go:271": "\trows = []IdentityCenterAssignmentRow{}",
-    "internal/collector/identity_center.go:272": "\tfor _, ps := range permSets {",
-    "internal/collector/identity_center.go:273": "\t\tfor _, provisionedAccountID := range ps.ProvisionedAccountIDs {",
-    "internal/collector/identity_center.go:274": "\t\t\tassignments, err := client.ListIdentityCenterAccountAssignments(ctx, inst.Region, inst.InstanceARN, provisionedAccountID, ps.ARN)",
-    "internal/collector/identity_center.go:275": "\t\t\tif err != nil {",
-    "internal/collector/identity_center.go:276": "\t\t\t\tif isAccessDeniedErr(err) {",
-    "internal/collector/identity_center.go:277": "\t\t\t\t\tc.warnAccessDenied(accountID, \"identity_center_assignments\", \"sso:ListAccountAssignments\")",
-    "internal/collector/identity_center.go:278": "\t\t\t\t} else {",
-    "internal/collector/identity_center.go:279": "\t\t\t\t\tc.warn(\"account %s: failed to list IdC account assignments: %v\", accountID, err)",
-    "internal/collector/identity_center.go:280": "\t\t\t\t}",
-    "internal/collector/identity_center.go:281": "\t\t\t\treturn []IdentityCenterAssignmentRow{}, false, false, 0, err",
-    "internal/collector/identity_center.go:282": "\t\t\t}",
-    "internal/collector/identity_center.go:283": "\t\t\tfor _, a := range assignments {",
-    "internal/collector/identity_center.go:284": "\t\t\t\trows = append(rows, IdentityCenterAssignmentRow{",
-    "internal/collector/identity_center.go:285": "\t\t\t\t\tAccountID:        a.AccountID,",
-    "internal/collector/identity_center.go:286": "\t\t\t\t\tPermissionSetARN: a.PermissionSetARN,",
-    "internal/collector/identity_center.go:287": "\t\t\t\t\tPrincipalType:    a.PrincipalType,",
-    "internal/collector/identity_center.go:288": "\t\t\t\t\tPrincipalID:      a.PrincipalID,",
-    "internal/collector/identity_center.go:289": "\t\t\t\t})",
-    "internal/collector/identity_center.go:290": "\t\t\t}",
-    "internal/collector/identity_center.go:291": "\t\t}",
-    "internal/collector/identity_center.go:292": "\t}",
-    "internal/collector/identity_center.go:293": "",
-    "internal/collector/identity_center.go:294": "\tkept, droppedCount, wasTruncated := Truncate(rows, IdentityCenterAssignmentsCap, func(a, b IdentityCenterAssignmentRow) bool {",
-    "internal/collector/identity_center.go:295": "\t\tif a.AccountID != b.AccountID {",
-    "internal/collector/identity_center.go:296": "\t\t\treturn a.AccountID \u003c b.AccountID",
-    "internal/collector/identity_center.go:297": "\t\t}",
-    "internal/collector/identity_center.go:298": "\t\tif a.PermissionSetARN != b.PermissionSetARN {",
-    "internal/collector/identity_center.go:299": "\t\t\treturn a.PermissionSetARN \u003c b.PermissionSetARN",
-    "internal/collector/identity_center.go:300": "\t\t}",
-    "internal/collector/identity_center.go:301": "\t\treturn a.PrincipalID \u003c b.PrincipalID",
-    "internal/collector/identity_center.go:302": "\t})",
-    "internal/collector/identity_center.go:303": "\tif wasTruncated {",
-    "internal/collector/identity_center.go:304": "\t\tc.warn(\"account %s: IdC account assignment inventory truncated to %d (dropped %d)\", accountID, IdentityCenterAssignmentsCap, droppedCount)",
-    "internal/collector/identity_center.go:305": "\t}",
-    "internal/collector/identity_center.go:306": "\treturn kept, true, wasTruncated, droppedCount, nil",
-    "internal/collector/identity_center.go:307": "}",
-    "internal/collector/identity_center.go:309": "func permissionSetsToInventory(in []aws.IdentityCenterPermissionSet) []IdentityCenterPermissionSetRow {",
-    "internal/collector/identity_center.go:310": "\tout := make([]IdentityCenterPermissionSetRow, 0, len(in))",
-    "internal/collector/identity_center.go:311": "\tfor _, ps := range in {",
-    "internal/collector/identity_center.go:312": "\t\trow := IdentityCenterPermissionSetRow{",
-    "internal/collector/identity_center.go:313": "\t\t\tName:                   ps.Name,",
-    "internal/collector/identity_center.go:314": "\t\t\tARN:                    ps.ARN,",
-    "internal/collector/identity_center.go:315": "\t\t\tDescription:            ps.Description,",
-    "internal/collector/identity_center.go:316": "\t\t\tSessionDurationISO8601: ps.SessionDurationISO8601,",
-    "internal/collector/identity_center.go:317": "\t\t\tManagedPoliciesCount:   ps.ManagedPoliciesCount,",
-    "internal/collector/identity_center.go:318": "\t\t\tAccountsAssignedCount:  ps.AccountsAssignedCount,",
-    "internal/collector/identity_center.go:319": "\t\t\tProvisionedAccountIDs:  append([]string{}, ps.ProvisionedAccountIDs...),",
-    "internal/collector/identity_center.go:320": "\t\t\tHasInlinePolicy:        ps.HasInlinePolicy,",
-    "internal/collector/identity_center.go:321": "\t\t}",
-    "internal/collector/identity_center.go:322": "\t\tif len(ps.ManagedPolicyARNs) \u003e 0 {",
-    "internal/collector/identity_center.go:323": "\t\t\trow.ManagedPolicyARNs = append([]string(nil), ps.ManagedPolicyARNs...)",
-    "internal/collector/identity_center.go:324": "\t\t}",
-    "internal/collector/identity_center.go:325": "\t\tout = append(out, row)",
-    "internal/collector/identity_center.go:326": "\t}",
-    "internal/collector/identity_center.go:327": "\treturn out",
-    "internal/collector/identity_center.go:328": "}",
-    "internal/collector/identity_center.go:330": "func identityStoreUsersToInventory(in []aws.IdentityStoreUser) []IdentityCenterUserRow {",
-    "internal/collector/identity_center.go:331": "\tout := make([]IdentityCenterUserRow, 0, len(in))",
-    "internal/collector/identity_center.go:332": "\tfor _, u := range in {",
-    "internal/collector/identity_center.go:333": "\t\tout = append(out, IdentityCenterUserRow{",
-    "internal/collector/identity_center.go:334": "\t\t\tUserID:        u.UserID,",
-    "internal/collector/identity_center.go:335": "\t\t\tUserName:      u.UserName,",
-    "internal/collector/identity_center.go:336": "\t\t\tDisplayName:   u.DisplayName,",
-    "internal/collector/identity_center.go:337": "\t\t\tPrimaryEmail:  u.PrimaryEmail,",
-    "internal/collector/identity_center.go:338": "\t\t\tHasExternalID: u.HasExternalID,",
-    "internal/collector/identity_center.go:339": "\t\t})",
-    "internal/collector/identity_center.go:340": "\t}",
-    "internal/collector/identity_center.go:341": "\treturn out",
-    "internal/collector/identity_center.go:342": "}",
-    "internal/collector/identity_center.go:344": "func identityStoreGroupsToInventory(in []aws.IdentityStoreGroup) []IdentityCenterGroupRow {",
-    "internal/collector/identity_center.go:345": "\tout := make([]IdentityCenterGroupRow, 0, len(in))",
-    "internal/collector/identity_center.go:346": "\tfor _, g := range in {",
-    "internal/collector/identity_center.go:347": "\t\trow := IdentityCenterGroupRow{",
-    "internal/collector/identity_center.go:348": "\t\t\tGroupID:     g.GroupID,",
-    "internal/collector/identity_center.go:349": "\t\t\tDisplayName: g.DisplayName,",
-    "internal/collector/identity_center.go:350": "\t\t\tDescription: g.Description,",
-    "internal/collector/identity_center.go:351": "\t\t\tMemberCount: g.MemberCount,",
-    "internal/collector/identity_center.go:352": "\t\t}",
-    "internal/collector/identity_center.go:353": "\t\tif g.MemberUserIDs != nil {",
-    "internal/collector/identity_center.go:354": "\t\t\trow.MemberUserIDs = append([]string{}, g.MemberUserIDs...)",
-    "internal/collector/identity_center.go:355": "\t\t}",
-    "internal/collector/identity_center.go:356": "\t\tout = append(out, row)",
-    "internal/collector/identity_center.go:357": "\t}",
-    "internal/collector/identity_center.go:358": "\treturn out",
-    "internal/collector/identity_center.go:359": "}",
+    "internal/collector/identity_center.go:248": "func identityCenterMFAEvidence(users, withExternalID int) string {",
+    "internal/collector/identity_center.go:249": "\tswitch {",
+    "internal/collector/identity_center.go:250": "\tcase users \u003e 0 \u0026\u0026 withExternalID == users:",
+    "internal/collector/identity_center.go:251": "\t\treturn mfaEvidenceExternalIdP",
+    "internal/collector/identity_center.go:252": "\tcase users \u003e 0 \u0026\u0026 withExternalID == 0:",
+    "internal/collector/identity_center.go:253": "\t\treturn mfaEvidenceManualRequired",
+    "internal/collector/identity_center.go:254": "\t}",
+    "internal/collector/identity_center.go:255": "\treturn mfaEvidenceUnknown",
+    "internal/collector/identity_center.go:256": "}",
+    "internal/collector/identity_center.go:271": "func (c *Collector) collectIdentityCenterAssignments(ctx context.Context, client idcClient, inst aws.IdentityCenterInstance, permSets []aws.IdentityCenterPermissionSet, accountID string) (rows []IdentityCenterAssignmentRow, evaluated, truncated bool, dropped int, failure error) {",
+    "internal/collector/identity_center.go:272": "\trows = []IdentityCenterAssignmentRow{}",
+    "internal/collector/identity_center.go:273": "\tfor _, ps := range permSets {",
+    "internal/collector/identity_center.go:274": "\t\tfor _, provisionedAccountID := range ps.ProvisionedAccountIDs {",
+    "internal/collector/identity_center.go:275": "\t\t\tassignments, err := client.ListIdentityCenterAccountAssignments(ctx, inst.Region, inst.InstanceARN, provisionedAccountID, ps.ARN)",
+    "internal/collector/identity_center.go:276": "\t\t\tif err != nil {",
+    "internal/collector/identity_center.go:277": "\t\t\t\tif isAccessDeniedErr(err) {",
+    "internal/collector/identity_center.go:278": "\t\t\t\t\tc.warnAccessDenied(accountID, \"identity_center_assignments\", \"sso:ListAccountAssignments\")",
+    "internal/collector/identity_center.go:279": "\t\t\t\t} else {",
+    "internal/collector/identity_center.go:280": "\t\t\t\t\tc.warn(\"account %s: failed to list IdC account assignments: %v\", accountID, err)",
+    "internal/collector/identity_center.go:281": "\t\t\t\t}",
+    "internal/collector/identity_center.go:282": "\t\t\t\treturn []IdentityCenterAssignmentRow{}, false, false, 0, err",
+    "internal/collector/identity_center.go:283": "\t\t\t}",
+    "internal/collector/identity_center.go:284": "\t\t\tfor _, a := range assignments {",
+    "internal/collector/identity_center.go:285": "\t\t\t\trows = append(rows, IdentityCenterAssignmentRow{",
+    "internal/collector/identity_center.go:286": "\t\t\t\t\tAccountID:        a.AccountID,",
+    "internal/collector/identity_center.go:287": "\t\t\t\t\tPermissionSetARN: a.PermissionSetARN,",
+    "internal/collector/identity_center.go:288": "\t\t\t\t\tPrincipalType:    a.PrincipalType,",
+    "internal/collector/identity_center.go:289": "\t\t\t\t\tPrincipalID:      a.PrincipalID,",
+    "internal/collector/identity_center.go:290": "\t\t\t\t})",
+    "internal/collector/identity_center.go:291": "\t\t\t}",
+    "internal/collector/identity_center.go:292": "\t\t}",
+    "internal/collector/identity_center.go:293": "\t}",
+    "internal/collector/identity_center.go:294": "",
+    "internal/collector/identity_center.go:295": "\tkept, droppedCount, wasTruncated := Truncate(rows, IdentityCenterAssignmentsCap, func(a, b IdentityCenterAssignmentRow) bool {",
+    "internal/collector/identity_center.go:296": "\t\tif a.AccountID != b.AccountID {",
+    "internal/collector/identity_center.go:297": "\t\t\treturn a.AccountID \u003c b.AccountID",
+    "internal/collector/identity_center.go:298": "\t\t}",
+    "internal/collector/identity_center.go:299": "\t\tif a.PermissionSetARN != b.PermissionSetARN {",
+    "internal/collector/identity_center.go:300": "\t\t\treturn a.PermissionSetARN \u003c b.PermissionSetARN",
+    "internal/collector/identity_center.go:301": "\t\t}",
+    "internal/collector/identity_center.go:302": "\t\treturn a.PrincipalID \u003c b.PrincipalID",
+    "internal/collector/identity_center.go:303": "\t})",
+    "internal/collector/identity_center.go:304": "\tif wasTruncated {",
+    "internal/collector/identity_center.go:305": "\t\tc.warn(\"account %s: IdC account assignment inventory truncated to %d (dropped %d)\", accountID, IdentityCenterAssignmentsCap, droppedCount)",
+    "internal/collector/identity_center.go:306": "\t}",
+    "internal/collector/identity_center.go:307": "\treturn kept, true, wasTruncated, droppedCount, nil",
+    "internal/collector/identity_center.go:308": "}",
+    "internal/collector/identity_center.go:310": "func permissionSetsToInventory(in []aws.IdentityCenterPermissionSet) []IdentityCenterPermissionSetRow {",
+    "internal/collector/identity_center.go:311": "\tout := make([]IdentityCenterPermissionSetRow, 0, len(in))",
+    "internal/collector/identity_center.go:312": "\tfor _, ps := range in {",
+    "internal/collector/identity_center.go:313": "\t\trow := IdentityCenterPermissionSetRow{",
+    "internal/collector/identity_center.go:314": "\t\t\tName:                   ps.Name,",
+    "internal/collector/identity_center.go:315": "\t\t\tARN:                    ps.ARN,",
+    "internal/collector/identity_center.go:316": "\t\t\tDescription:            ps.Description,",
+    "internal/collector/identity_center.go:317": "\t\t\tSessionDurationISO8601: ps.SessionDurationISO8601,",
+    "internal/collector/identity_center.go:318": "\t\t\tManagedPoliciesCount:   ps.ManagedPoliciesCount,",
+    "internal/collector/identity_center.go:319": "\t\t\tAccountsAssignedCount:  ps.AccountsAssignedCount,",
+    "internal/collector/identity_center.go:320": "\t\t\tProvisionedAccountIDs:  append([]string{}, ps.ProvisionedAccountIDs...),",
+    "internal/collector/identity_center.go:321": "\t\t\tHasInlinePolicy:        ps.HasInlinePolicy,",
+    "internal/collector/identity_center.go:322": "\t\t}",
+    "internal/collector/identity_center.go:323": "\t\tif len(ps.ManagedPolicyARNs) \u003e 0 {",
+    "internal/collector/identity_center.go:324": "\t\t\trow.ManagedPolicyARNs = append([]string(nil), ps.ManagedPolicyARNs...)",
+    "internal/collector/identity_center.go:325": "\t\t}",
+    "internal/collector/identity_center.go:326": "\t\tout = append(out, row)",
+    "internal/collector/identity_center.go:327": "\t}",
+    "internal/collector/identity_center.go:328": "\treturn out",
+    "internal/collector/identity_center.go:329": "}",
+    "internal/collector/identity_center.go:331": "func identityStoreUsersToInventory(in []aws.IdentityStoreUser) []IdentityCenterUserRow {",
+    "internal/collector/identity_center.go:332": "\tout := make([]IdentityCenterUserRow, 0, len(in))",
+    "internal/collector/identity_center.go:333": "\tfor _, u := range in {",
+    "internal/collector/identity_center.go:334": "\t\tout = append(out, IdentityCenterUserRow{",
+    "internal/collector/identity_center.go:335": "\t\t\tUserID:        u.UserID,",
+    "internal/collector/identity_center.go:336": "\t\t\tUserName:      u.UserName,",
+    "internal/collector/identity_center.go:337": "\t\t\tDisplayName:   u.DisplayName,",
+    "internal/collector/identity_center.go:338": "\t\t\tPrimaryEmail:  u.PrimaryEmail,",
+    "internal/collector/identity_center.go:339": "\t\t\tHasExternalID: u.HasExternalID,",
+    "internal/collector/identity_center.go:340": "\t\t})",
+    "internal/collector/identity_center.go:341": "\t}",
+    "internal/collector/identity_center.go:342": "\treturn out",
+    "internal/collector/identity_center.go:343": "}",
+    "internal/collector/identity_center.go:345": "func identityStoreGroupsToInventory(in []aws.IdentityStoreGroup) []IdentityCenterGroupRow {",
+    "internal/collector/identity_center.go:346": "\tout := make([]IdentityCenterGroupRow, 0, len(in))",
+    "internal/collector/identity_center.go:347": "\tfor _, g := range in {",
+    "internal/collector/identity_center.go:348": "\t\trow := IdentityCenterGroupRow{",
+    "internal/collector/identity_center.go:349": "\t\t\tGroupID:     g.GroupID,",
+    "internal/collector/identity_center.go:350": "\t\t\tDisplayName: g.DisplayName,",
+    "internal/collector/identity_center.go:351": "\t\t\tDescription: g.Description,",
+    "internal/collector/identity_center.go:352": "\t\t\tMemberCount: g.MemberCount,",
+    "internal/collector/identity_center.go:353": "\t\t}",
+    "internal/collector/identity_center.go:354": "\t\tif g.MemberUserIDs != nil {",
+    "internal/collector/identity_center.go:355": "\t\t\trow.MemberUserIDs = append([]string{}, g.MemberUserIDs...)",
+    "internal/collector/identity_center.go:356": "\t\t}",
+    "internal/collector/identity_center.go:357": "\t\tout = append(out, row)",
+    "internal/collector/identity_center.go:358": "\t}",
+    "internal/collector/identity_center.go:359": "\treturn out",
+    "internal/collector/identity_center.go:360": "}",
     "internal/collector/images_snapshots.go:17": "\tsnapshots, err := client.ListOwnedSnapshots(ctx, region)",
     "internal/collector/images_snapshots.go:18": "\tif err != nil {",
     "internal/collector/images_snapshots.go:22": "\tout := \u0026StoredImageMetrics{SnapshotCount: len(snapshots)}",
@@ -47792,11 +47792,11 @@
     "internal/collector/normalized.go:512": "\treturn float64Ptr(float64(*pct))",
     "internal/collector/normalized.go:513": "}",
     "internal/collector/normalized.go:515": "func intPtr(v int) *int { return \u0026v }",
-    "internal/collector/posture.go:1837": "\t\tSchemaVersion: SchemaVersion,",
-    "internal/collector/posture.go:1838": "\t\tCollectedAt:   now.UTC().Format(time.RFC3339),",
-    "internal/collector/posture.go:1839": "\t\tAccounts:      []AccountPosture{},",
-    "internal/collector/posture.go:1846": "\t\tAccountID: accountID,",
-    "internal/collector/posture.go:1847": "\t\tRegions:   regions,",
+    "internal/collector/posture.go:1838": "\t\tSchemaVersion: SchemaVersion,",
+    "internal/collector/posture.go:1839": "\t\tCollectedAt:   now.UTC().Format(time.RFC3339),",
+    "internal/collector/posture.go:1840": "\t\tAccounts:      []AccountPosture{},",
+    "internal/collector/posture.go:1847": "\t\tAccountID: accountID,",
+    "internal/collector/posture.go:1848": "\t\tRegions:   regions,",
     "internal/collector/rds.go:28": "\tresult := \u0026rdsMetricsWithCounts{minRetention: -1}",
     "internal/collector/rds.go:30": "\tinstances, err := client.ListDBInstances(ctx, region)",
     "internal/collector/rds.go:31": "\tif err != nil {",

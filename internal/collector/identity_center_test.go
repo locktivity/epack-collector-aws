@@ -494,3 +494,37 @@ func hasWarning(c *Collector, substr string) bool {
 	}
 	return false
 }
+
+// A directory where some users came from SCIM provisioning and the rest
+// carry an external ID from another issuer is a mix, so where its users' MFA
+// is set is unknown. Neither issuer nor ID reaches the artifacts.
+func TestIdentityCenterExternalIDsFromMixedIssuers(t *testing.T) {
+	isolateAWSEnvironment(t)
+	res := runKit(t, kitConfig(), kitSecrets(), externalIDUsersResponses(kitRootOnlyReport, kitSCIMIssuer, kitDirectoryIssuer))
+	if res.ExitCode != 0 || res.Result == nil {
+		t.Fatalf("run failed with exit %d: %s", res.ExitCode, res.Stderr)
+	}
+
+	var detailed Output
+	decodeArtifact(t, res, awsPath, &detailed)
+	idc := detailed.Accounts[0].IdentityCenter
+	if idc.ExternalIDUserCount != 1 || idc.MFAEvidence != "unknown" {
+		t.Errorf("%d users with a SCIM external ID, evidence %q; want 1 and unknown", idc.ExternalIDUserCount, idc.MFAEvidence)
+	}
+	if len(idc.Users) != 2 || !idc.Users[0].HasExternalID || idc.Users[1].HasExternalID {
+		t.Errorf("users = %+v, want only dana's external ID from SCIM provisioning", idc.Users)
+	}
+	var posture CloudPosture
+	decodeArtifact(t, res, cloudPosturePath, &posture)
+	if got := posture.WorkforceSignIn; !samePtr(got.InUse, boolPtr(true)) || got.MFASource != "unknown" {
+		t.Errorf("in_use %s, mfa_source %q; want true and unknown", showBool(got.InUse), got.MFASource)
+	}
+
+	for _, a := range res.Artifacts {
+		for _, secret := range externalIDCanaries() {
+			if strings.Contains(string(a.Data), secret) {
+				t.Errorf("%s carries %q", a.Path, secret)
+			}
+		}
+	}
+}

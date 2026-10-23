@@ -240,10 +240,11 @@ func identityCenterInstanceType(inst aws.IdentityCenterInstance, accountID strin
 }
 
 // identityCenterMFAEvidence says where the MFA of a directory's users is set,
-// from how many of them have an external ID, which an external identity
-// provider's user provisioning sets: at that provider when every user has
-// one, in Identity Center when none does, and unknown for a mix or a
-// directory with no users.
+// from how many of them have an external ID from SCIM provisioning, which IAM
+// Identity Center sets when an external identity provider provisions a user:
+// at that provider when every user has one, in Identity Center when none
+// does, and unknown for a mix or a directory with no users. Users synced from
+// Active Directory count as Identity Center's own.
 func identityCenterMFAEvidence(users, withExternalID int) string {
 	switch {
 	case users > 0 && withExternalID == users:

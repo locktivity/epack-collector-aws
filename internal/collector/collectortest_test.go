@@ -467,17 +467,14 @@ func kitSuite() collectortest.Suite {
 				},
 			},
 			{
-				// Every user has an external ID, which an identity provider's
-				// user provisioning sets, so their MFA is set at that
-				// provider. The IDs and their issuer are canaries, so only
-				// whether a user has one may reach the artifacts.
+				// Every user has an external ID from SCIM provisioning, which
+				// IAM Identity Center records when an identity provider
+				// provisions a user, so their MFA is set at that provider.
+				// The IDs and their issuer are canaries, so only whether a
+				// user has one may reach the artifacts.
 				Name:      "Identity Center users from an external identity provider",
-				Responses: externalIDUsersResponses(kitRootOnlyReport),
-				Secrets: map[string]string{
-					"KIT_EXTERNAL_ID_ISSUER": kitExternalIDIssuer,
-					"KIT_DANA_EXTERNAL_ID":   kitDanaExternalID,
-					"KIT_ELI_EXTERNAL_ID":    kitEliExternalID,
-				},
+				Responses: externalIDUsersResponses(kitRootOnlyReport, kitSCIMIssuer, kitSCIMIssuer),
+				Secrets:   externalIDCanaries(),
 				Expect: map[string]map[string]any{
 					awsPath: {
 						"/accounts/0/identity_center/external_id_user_count":  2,
@@ -488,6 +485,27 @@ func kitSuite() collectortest.Suite {
 						"/workforce_sign_in/in_use":     true,
 						"/workforce_sign_in/user_count": 2,
 						"/workforce_sign_in/mfa_source": "external_idp",
+					},
+				},
+			},
+			{
+				// An external ID from another issuer, such as an Active
+				// Directory sync, does not show an identity provider sets the
+				// users' MFA, so the directory reads as Identity Center's own.
+				Name:      "Identity Center users with external IDs from another issuer",
+				Responses: externalIDUsersResponses(kitRootOnlyReport, kitDirectoryIssuer, kitDirectoryIssuer),
+				Secrets:   externalIDCanaries(),
+				Expect: map[string]map[string]any{
+					awsPath: {
+						"/accounts/0/identity_center/external_id_user_count":  0,
+						"/accounts/0/identity_center/mfa_evidence":            "manual_required",
+						"/accounts/0/identity_center/users/0/has_external_id": false,
+						"/accounts/0/identity_center/users/1/has_external_id": false,
+					},
+					cloudPosturePath: {
+						"/workforce_sign_in/in_use":     true,
+						"/workforce_sign_in/user_count": 2,
+						"/workforce_sign_in/mfa_source": "sign_in_service",
 					},
 				},
 			},

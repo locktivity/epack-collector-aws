@@ -514,8 +514,10 @@ type IdentityCenterPermissionSet struct {
 // email marked Primary on the user. The identity store API exposes no
 // enabled/disabled status; consumers wanting activity signals correlate
 // against IdP-side evidence instead. HasExternalID is whether the user has
-// an external ID, which an external identity provider's user provisioning
-// sets. The IDs and their issuers are not kept.
+// an external ID from SCIM provisioning, which IAM Identity Center sets when
+// an external identity provider provisions the user. An external ID from any
+// other issuer, such as an Active Directory sync, does not count. The IDs and
+// their issuers are not kept.
 type IdentityStoreUser struct {
 	UserID        string
 	UserName      string

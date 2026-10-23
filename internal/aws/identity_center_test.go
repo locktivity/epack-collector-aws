@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	idstoretypes "github.com/aws/aws-sdk-go-v2/service/identitystore/types"
 )
 
 // roundTripFunc answers a test client's requests.
@@ -89,27 +90,68 @@ func TestListIdentityCenterInstances_NoInstanceIsEmpty(t *testing.T) {
 	}
 }
 
-// An external ID is set by an identity provider's user provisioning. Only
-// whether a user has one is kept: neither the ID nor its issuer.
-func TestListIdentityStoreUsers_KeepsExternalIDPresenceOnly(t *testing.T) {
+// The issuer SCIM provisioning records on a user's external ID, and one a
+// directory sync might set instead.
+const (
+	scimIssuer      = "arn:aws:identitystore::111122223333:identitystore/d-1111111111/provisioningtenant/a1b2c3d4-5678-90ab-cdef-111111111111"
+	directoryIssuer = "arn:aws:ds:us-east-1:111122223333:directory/d-2222222222"
+)
+
+// Only an external ID from SCIM provisioning marks a user as coming from an
+// external identity provider. Neither the ID nor its issuer is kept.
+func TestListIdentityStoreUsers_KeepsSCIMExternalIDPresenceOnly(t *testing.T) {
 	client := testClient(func(*http.Request, string) (string, string) {
 		return jsonContentType, `{"Users":[` +
-			`{"IdentityStoreId":"d-1111","UserId":"u-1","UserName":"dana","ExternalIds":[{"Issuer":"https://scim.idp.example/v2","Id":"00udana0001"}]},` +
-			`{"IdentityStoreId":"d-1111","UserId":"u-2","UserName":"eli","ExternalIds":[]},` +
-			`{"IdentityStoreId":"d-1111","UserId":"u-3","UserName":"fay"}]}`
+			`{"IdentityStoreId":"d-1111111111","UserId":"u-1","UserName":"dana","ExternalIds":[{"Issuer":"` + scimIssuer + `","Id":"00udana0001"}]},` +
+			`{"IdentityStoreId":"d-1111111111","UserId":"u-2","UserName":"eli","ExternalIds":[{"Issuer":"` + directoryIssuer + `","Id":"S-1-5-21-1001"}]},` +
+			`{"IdentityStoreId":"d-1111111111","UserId":"u-3","UserName":"fay","ExternalIds":[]},` +
+			`{"IdentityStoreId":"d-1111111111","UserId":"u-4","UserName":"gus"}]}`
 	})
 
-	users, err := client.ListIdentityStoreUsers(context.Background(), DefaultRegionAWS, "d-1111")
+	users, err := client.ListIdentityStoreUsers(context.Background(), DefaultRegionAWS, "d-1111111111")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(users) != 3 {
-		t.Fatalf("users = %+v, want 3", users)
+	if len(users) != 4 {
+		t.Fatalf("users = %+v, want 4", users)
 	}
-	for i, want := range []bool{true, false, false} {
+	for i, want := range []bool{true, false, false, false} {
 		if users[i].HasExternalID != want {
 			t.Errorf("%s HasExternalID = %v, want %v", users[i].UserName, users[i].HasExternalID, want)
 		}
+	}
+}
+
+func TestHasSCIMExternalID(t *testing.T) {
+	ids := func(issuers ...string) []idstoretypes.ExternalId {
+		out := make([]idstoretypes.ExternalId, 0, len(issuers))
+		for _, issuer := range issuers {
+			out = append(out, idstoretypes.ExternalId{Issuer: aws.String(issuer), Id: aws.String("kit-id")})
+		}
+		return out
+	}
+	cases := []struct {
+		name string
+		ids  []idstoretypes.ExternalId
+		want bool
+	}{
+		{"a SCIM provisioning tenant", ids(scimIssuer), true},
+		{"a SCIM provisioning tenant in upper case", ids(strings.ToUpper(scimIssuer)), true},
+		{"a SCIM provisioning tenant in another partition", ids(strings.Replace(scimIssuer, "arn:aws:", "arn:aws-us-gov:", 1)), true},
+		{"an issuer a directory sync might set", ids(directoryIssuer), false},
+		{"the identity store without a provisioning tenant", ids("arn:aws:identitystore::111122223333:identitystore/d-1111111111"), false},
+		{"an identity provider's own URL", ids("https://scim.idp.example/v2/provisioningtenant/1111"), false},
+		{"an empty issuer", ids(""), false},
+		{"no issuer", []idstoretypes.ExternalId{{Id: aws.String("kit-id")}}, false},
+		{"no external IDs", nil, false},
+		{"one of each", ids(directoryIssuer, scimIssuer), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasSCIMExternalID(tc.ids); got != tc.want {
+				t.Errorf("hasSCIMExternalID = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -1473,7 +1473,8 @@ type IdentityCenterPermissionSetRow struct {
 // IdentityCenterUserRow is a per-user audit-level row from the identity
 // store. PrimaryEmail is empty when no email is marked Primary on the user.
 // No PII beyond the primary email is collected at any level: HasExternalID
-// says whether the user has an external ID, never what it is.
+// says whether the user has an external ID from SCIM provisioning, never
+// what it is.
 type IdentityCenterUserRow struct {
 	UserID        string `json:"user_id"`
 	UserName      string `json:"user_name"`

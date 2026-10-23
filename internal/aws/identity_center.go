@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/identitystore"
@@ -222,7 +223,7 @@ func permissionSetHasInlinePolicy(ctx context.Context, client *ssoadmin.Client, 
 // ListIdentityStoreUsers returns all users in the identity store. Primary email
 // is the entry marked Primary=true on the user (per SCIM); blank if no email
 // is registered or none is marked primary. Of the user's external IDs, only
-// whether there are any is kept.
+// whether one came from SCIM provisioning is kept.
 func (c *AWSClient) ListIdentityStoreUsers(ctx context.Context, region, identityStoreID string) ([]IdentityStoreUser, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
@@ -243,7 +244,7 @@ func (c *AWSClient) ListIdentityStoreUsers(ctx context.Context, region, identity
 				UserID:        aws.ToString(u.UserId),
 				UserName:      aws.ToString(u.UserName),
 				DisplayName:   aws.ToString(u.DisplayName),
-				HasExternalID: len(u.ExternalIds) > 0,
+				HasExternalID: hasSCIMExternalID(u.ExternalIds),
 			}
 			for _, e := range u.Emails {
 				if e.Primary {
@@ -258,6 +259,22 @@ func (c *AWSClient) ListIdentityStoreUsers(ctx context.Context, region, identity
 		}
 		nextToken = resp.NextToken
 	}
+}
+
+// hasSCIMExternalID reports whether any of a user's external IDs was issued
+// by SCIM provisioning, which IAM Identity Center records with an issuer of
+// the form
+// arn:aws:identitystore::<account>:identitystore/<store id>/provisioningtenant/<tenant id>.
+// The match ignores case and the ARN's partition. An external ID from any
+// other issuer, such as an Active Directory sync, does not count.
+func hasSCIMExternalID(ids []idstoretypes.ExternalId) bool {
+	for _, id := range ids {
+		issuer := strings.ToLower(aws.ToString(id.Issuer))
+		if strings.HasPrefix(issuer, "arn:") && strings.Contains(issuer, ":identitystore::") && strings.Contains(issuer, "/provisioningtenant/") {
+			return true
+		}
+	}
+	return false
 }
 
 // ListIdentityStoreGroups returns all groups in the identity store, with

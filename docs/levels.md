@@ -125,13 +125,13 @@ per-rule / per-finding detail at internal.
 
 - **trust**: enabled flag, instance metadata (status, owning account, and
   whether it is an organization or account instance), user / group /
-  permission-set counts, the count of users with an external ID,
-  `mfa_evidence`, and the regions whose instance listing answered. The
-  instance is looked for in every scanned region.
+  permission-set counts, the count of users with an external ID from SCIM
+  provisioning, `mfa_evidence`, and the regions whose instance listing
+  answered. The instance is looked for in every scanned region.
 - **audit**: the full access model. `users[]` (id, login, display name,
-  primary email, and whether the user has an external ID; identity-system
-  inventories are audit-level evidence, and no PII beyond the primary email is
-  collected), `groups[]` with
+  primary email, and whether the user has an external ID from SCIM
+  provisioning; identity-system inventories are audit-level evidence, and no
+  PII beyond the primary email is collected), `groups[]` with
   `member_user_ids`, `permission_sets[]` (name, session duration,
   managed-policy count, provisioned account IDs), and `account_assignments[]`
   (principal to permission set to account edges, meaningful only when
