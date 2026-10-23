@@ -544,7 +544,7 @@ type fakeRoleLister struct {
 	err   error
 }
 
-func (f fakeRoleLister) ListRoles(_ context.Context, callback func([]aws.Role) error) error {
+func (f fakeRoleLister) ListRoles(_ context.Context, _ string, callback func([]aws.Role) error) error {
 	if f.err != nil {
 		return f.err
 	}
@@ -745,17 +745,21 @@ func TestCredentialReportToInternal_PreservesRootRow(t *testing.T) {
 }
 
 type fakeIAMClient struct {
-	report         *aws.CredentialReport
-	reportErr      error
-	summary        *aws.AccountSummary
-	summaryErr     error
-	features       *aws.OrganizationFeatures
-	featuresErr    error
-	rolesErr       error
-	orgAccountIDs  []string
-	orgAccountsErr error
-	passwordPolicy *aws.PasswordPolicy
-	passwordErr    error
+	report                 *aws.CredentialReport
+	reportErr              error
+	summary                *aws.AccountSummary
+	summaryErr             error
+	features               *aws.OrganizationFeatures
+	featuresErr            error
+	rolesErr               error
+	identityCenterRoles    []aws.Role
+	identityCenterRolesErr error
+	samlProviders          []aws.SAMLProvider
+	samlProvidersErr       error
+	orgAccountIDs          []string
+	orgAccountsErr         error
+	passwordPolicy         *aws.PasswordPolicy
+	passwordErr            error
 }
 
 func (f fakeIAMClient) GetCredentialReport(_ context.Context) (*aws.CredentialReport, error) {
@@ -782,8 +786,18 @@ func (f fakeIAMClient) ListMFADevices(_ context.Context, _ string) ([]aws.MFADev
 	return nil, nil
 }
 
-func (f fakeIAMClient) ListRoles(_ context.Context, _ func([]aws.Role) error) error {
-	return f.rolesErr
+func (f fakeIAMClient) ListRoles(_ context.Context, pathPrefix string, callback func([]aws.Role) error) error {
+	if pathPrefix != identityCenterRolePath {
+		return f.rolesErr
+	}
+	if f.identityCenterRolesErr != nil {
+		return f.identityCenterRolesErr
+	}
+	return callback(f.identityCenterRoles)
+}
+
+func (f fakeIAMClient) ListSAMLProviders(_ context.Context) ([]aws.SAMLProvider, error) {
+	return f.samlProviders, f.samlProvidersErr
 }
 
 func TestCollectIAMMetrics_CredentialReportTimeout(t *testing.T) {
@@ -1097,4 +1111,62 @@ func TestCollectIAMMetricsPasswordPolicyStates(t *testing.T) {
 		}
 		requireGap(t, c, "/accounts/0/iam/password_policy")
 	})
+}
+
+// The ways into an account besides IAM users: SAML providers it trusts, and
+// the roles and SAML provider IAM Identity Center leaves in it.
+func TestCollectIAMMetrics_SignInPaths(t *testing.T) {
+	c := newTestCollector(Config{})
+	client := fakeIAMClient{
+		report: &aws.CredentialReport{},
+		samlProviders: []aws.SAMLProvider{
+			{Name: "AWSSSO_1111222233334444_DO_NOT_DELETE"},
+			{Name: "Okta"},
+			{Name: "GoogleWorkspace"},
+		},
+		identityCenterRoles: []aws.Role{
+			{RoleName: "AWSReservedSSO_AdministratorAccess_1111222233334444"},
+			{RoleName: "AWSReservedSSO_ReadOnlyAccess_5555666677778888"},
+		},
+	}
+
+	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", accountAt(0), componentsdk.LevelTrust)
+
+	if !pctIs(metrics.SAMLProviderCount, 2) || !pctIs(metrics.IdentityCenterSAMLProviderCount, 1) || !pctIs(metrics.IdentityCenterRoleCount, 2) {
+		t.Errorf("SAML providers %s, Identity Center's %s, its roles %s; want 2, 1, 2",
+			showPct(metrics.SAMLProviderCount), showPct(metrics.IdentityCenterSAMLProviderCount), showPct(metrics.IdentityCenterRoleCount))
+	}
+	requireNoGaps(t, c)
+}
+
+// A policy without iam:ListSAMLProviders leaves the provider counts out and
+// says which permission to grant; the roles still count.
+func TestCollectIAMMetrics_SignInPathFailuresLeaveCountsOut(t *testing.T) {
+	c := newTestCollector(Config{})
+	client := fakeIAMClient{
+		report:              &aws.CredentialReport{},
+		samlProvidersErr:    errors.New("AccessDenied: User is not authorized to perform: iam:ListSAMLProviders"),
+		identityCenterRoles: []aws.Role{{RoleName: "AWSReservedSSO_AdministratorAccess_1111222233334444"}},
+	}
+
+	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", accountAt(0), componentsdk.LevelTrust)
+
+	if metrics.SAMLProviderCount != nil || metrics.IdentityCenterSAMLProviderCount != nil {
+		t.Errorf("SAML provider counts %s and %s, want both left out", showPct(metrics.SAMLProviderCount), showPct(metrics.IdentityCenterSAMLProviderCount))
+	}
+	requireGap(t, c, "/accounts/0/iam/saml_provider_count", "/accounts/0/iam/identity_center_saml_provider_count")
+	if !pctIs(metrics.IdentityCenterRoleCount, 1) {
+		t.Errorf("Identity Center roles = %s, want 1", showPct(metrics.IdentityCenterRoleCount))
+	}
+	if len(c.warnings) == 0 || !strings.Contains(c.warnings[0], "iam:ListSAMLProviders") {
+		t.Errorf("warnings = %v, want one naming iam:ListSAMLProviders", c.warnings)
+	}
+
+	c = newTestCollector(Config{})
+	client.identityCenterRolesErr = errors.New("Throttling: Rate exceeded")
+	metrics = c.collectIAMMetrics(context.Background(), client, "123456789012", accountAt(0), componentsdk.LevelTrust)
+	if metrics.IdentityCenterRoleCount != nil {
+		t.Errorf("Identity Center roles = %s, want it left out", showPct(metrics.IdentityCenterRoleCount))
+	}
+	requireGap(t, c, "/accounts/0/iam/identity_center_role_count")
 }

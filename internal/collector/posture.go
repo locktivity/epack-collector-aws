@@ -165,6 +165,15 @@ type IAMMetrics struct {
 	AccessKeysRotated           *int `json:"access_keys_rotated"`
 	AccessKeysRotatedUserCount  int  `json:"access_keys_rotated_user_count"`
 
+	// Ways into the account besides IAM users. SAMLProviderCount is the SAML
+	// identity providers the account trusts for sign-in, leaving out the
+	// ones IAM Identity Center creates, which IdentityCenterSAMLProviderCount
+	// counts. IdentityCenterRoleCount is the roles Identity Center provisions
+	// for its permission sets. Each is null when its listing failed.
+	SAMLProviderCount               *int `json:"saml_provider_count"`
+	IdentityCenterSAMLProviderCount *int `json:"identity_center_saml_provider_count"`
+	IdentityCenterRoleCount         *int `json:"identity_center_role_count"`
+
 	// Root credential state comes from the credential report's root row or the
 	// account summary; the Root* fields below are meaningful only when
 	// root_credential_state_evaluated is true (i.e., at least one source
@@ -1399,24 +1408,32 @@ type IAMPasswordPolicy struct {
 // IdentityCenterStatus contains AWS IAM Identity Center (formerly AWS SSO)
 // posture.
 //
-// Trust fields tell you whether IdC is enabled and how big it is. Audit
-// surfaces the access model itself: per-permission-set rows (the unit of
-// access an admin grants), the user and group inventory, group membership
-// edges, and the account assignment edges. Joining users, member_user_ids,
-// account_assignments, and permission_sets reconstructs who can access which
-// account with which permission set, entirely within the pack. Internal adds
-// the managed-policy ARNs attached to each permission set.
+// Trust fields tell you whether IdC is enabled, what kind of instance it is,
+// how big it is, and where its users' MFA is set. Audit surfaces the access
+// model itself: per-permission-set rows (the unit of access an admin grants),
+// the user and group inventory, group membership edges, and the account
+// assignment edges. Joining users, member_user_ids, account_assignments, and
+// permission_sets reconstructs who can access which account with which
+// permission set, entirely within the pack. Internal adds the managed-policy
+// ARNs attached to each permission set.
 type IdentityCenterStatus struct {
 	// Trust: resource-conditional sub-fields keep omitempty because their
 	// absence means "the IdC resource itself doesn't exist" (Enabled=false),
-	// not "wasn't collected at this level".
-	Enabled            bool   `json:"enabled"`
-	InstanceARN        string `json:"instance_arn,omitempty"`
-	InstanceRegion     string `json:"instance_region,omitempty"`
-	IdentityStoreID    string `json:"identity_store_id,omitempty"`
-	UserCount          int    `json:"user_count"`
-	GroupCount         int    `json:"group_count"`
-	PermissionSetCount int    `json:"permission_set_count"`
+	// not "wasn't collected at this level". RegionsChecked lists the regions
+	// whose instance listing answered.
+	Enabled                bool     `json:"enabled"`
+	InstanceARN            string   `json:"instance_arn,omitempty"`
+	InstanceRegion         string   `json:"instance_region,omitempty"`
+	InstanceStatus         string   `json:"instance_status,omitempty"`
+	InstanceOwnerAccountID string   `json:"instance_owner_account_id,omitempty"`
+	InstanceType           string   `json:"instance_type,omitempty"`
+	IdentityStoreID        string   `json:"identity_store_id,omitempty"`
+	UserCount              int      `json:"user_count"`
+	ExternalIDUserCount    int      `json:"external_id_user_count"`
+	MFAEvidence            string   `json:"mfa_evidence,omitempty"`
+	GroupCount             int      `json:"group_count"`
+	PermissionSetCount     int      `json:"permission_set_count"`
+	RegionsChecked         []string `json:"regions_checked"`
 
 	// Audit: present (possibly []) when collected at audit+ and IdC is
 	// enabled; absent when not collected at this level. AccountAssignments rows
@@ -1455,12 +1472,15 @@ type IdentityCenterPermissionSetRow struct {
 
 // IdentityCenterUserRow is a per-user audit-level row from the identity
 // store. PrimaryEmail is empty when no email is marked Primary on the user.
-// No PII beyond the primary email is collected at any level.
+// No PII beyond the primary email is collected at any level: HasExternalID
+// says whether the user has an external ID from SCIM provisioning, never
+// what it is.
 type IdentityCenterUserRow struct {
-	UserID       string `json:"user_id"`
-	UserName     string `json:"user_name"`
-	DisplayName  string `json:"display_name,omitempty"`
-	PrimaryEmail string `json:"primary_email,omitempty"`
+	UserID        string `json:"user_id"`
+	UserName      string `json:"user_name"`
+	DisplayName   string `json:"display_name,omitempty"`
+	PrimaryEmail  string `json:"primary_email,omitempty"`
+	HasExternalID bool   `json:"has_external_id"`
 }
 
 // IdentityCenterGroupRow is a per-group audit-level row. MemberUserIDs holds

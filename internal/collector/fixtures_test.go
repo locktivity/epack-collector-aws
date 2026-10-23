@@ -385,6 +385,7 @@ func kitIAMResponses(report string) []collectortest.Response {
 			"<MFADevices><member><UserName>bob</UserName><SerialNumber>arn:aws:iam::111122223333:mfa/bob</SerialNumber>"+
 				"<EnableDate>2024-06-01T00:00:00Z</EnableDate></member></MFADevices><IsTruncated>false</IsTruncated>"),
 		queryResponse("aws.iam.ListRoles", kitIAMURL, "<Roles>"+roleXML.String()+"</Roles><IsTruncated>false</IsTruncated>"),
+		samlProvidersResponse(),
 		jsonResponse("aws.organizations.ListAccounts", "https://organizations.us-east-1.amazonaws.com/", map[string]any{
 			"Accounts": []any{
 				map[string]any{"Id": kitAccountID, "Arn": "arn:aws:organizations::111122223333:account/o-kit12345678/111122223333", "Name": "Northwind Prod", "Email": "aws-prod@northwind.example", "Status": "ACTIVE"},
@@ -864,8 +865,10 @@ func kitSecurityResponses() []collectortest.Response {
 	}
 }
 
-// kitIdentityCenterResponses answer an Identity Center instance with two
-// users, an admin group, and one permission set assigned in this account.
+// kitIdentityCenterResponses answer the organization's Identity Center
+// instance, which this account owns as the management account, with two
+// users, an admin group, and one permission set assigned in the deploy
+// account. Identity Center provisions no role in this account.
 func kitIdentityCenterResponses() []collectortest.Response {
 	sso, ids := regional("sso"), regional("identitystore")
 	return []collectortest.Response{
@@ -878,10 +881,10 @@ func kitIdentityCenterResponses() []collectortest.Response {
 		jsonItemResponse("aws.identitystore.ListGroupMemberships", ids, map[string]any{"GroupId": "g-1111"}, map[string]any{"GroupMemberships": []any{map[string]any{"IdentityStoreId": kitStoreID, "MembershipId": "m-1111", "GroupId": "g-1111", "MemberId": map[string]any{"UserId": "u-1111"}}}}),
 		jsonResponse("aws.ssoadmin.ListPermissionSets", sso, map[string]any{"PermissionSets": []string{kitPermSetARN}}),
 		jsonItemResponse("aws.ssoadmin.DescribePermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"PermissionSet": map[string]any{"PermissionSetArn": kitPermSetARN, "Name": "AdministratorAccess", "Description": "Full access", "SessionDuration": "PT1H"}}),
-		jsonItemResponse("aws.ssoadmin.ListAccountsForProvisionedPermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"AccountIds": []string{kitAccountID}}),
+		jsonItemResponse("aws.ssoadmin.ListAccountsForProvisionedPermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"AccountIds": []string{"444455556666"}}),
 		jsonItemResponse("aws.ssoadmin.ListManagedPoliciesInPermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"AttachedManagedPolicies": []any{map[string]any{"Arn": "arn:aws:iam::aws:policy/AdministratorAccess", "Name": "AdministratorAccess"}}}),
 		jsonItemResponse("aws.ssoadmin.GetInlinePolicyForPermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"InlinePolicy": `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"organizations:LeaveOrganization","Resource":"*"}]}`}),
-		jsonItemResponse("aws.ssoadmin.ListAccountAssignments", sso, map[string]any{"PermissionSetArn": kitPermSetARN, "AccountId": kitAccountID}, map[string]any{"AccountAssignments": []any{map[string]any{"AccountId": kitAccountID, "PermissionSetArn": kitPermSetARN, "PrincipalType": "GROUP", "PrincipalId": "g-1111"}}}),
+		jsonItemResponse("aws.ssoadmin.ListAccountAssignments", sso, map[string]any{"PermissionSetArn": kitPermSetARN, "AccountId": "444455556666"}, map[string]any{"AccountAssignments": []any{map[string]any{"AccountId": "444455556666", "PermissionSetArn": kitPermSetARN, "PrincipalType": "GROUP", "PrincipalId": "g-1111"}}}),
 	}
 }
 
@@ -895,11 +898,25 @@ func emptyAccountResponses() []collectortest.Response {
 		empty("aws.iam.ListAccountAliases", kitIAMURL, "<AccountAliases/><IsTruncated>false</IsTruncated>"),
 		empty("aws.iam.ListRoles", kitIAMURL, "<Roles/><IsTruncated>false</IsTruncated>"),
 	)...)
-	return append(responses,
+	responses = append(responses,
 		restResponse("aws.s3.ListBuckets", http.MethodGet, kitS3URL+"/?x-id=ListBuckets", 0, "<ListAllMyBucketsResult><Owner><ID>kit</ID></Owner><Buckets/></ListAllMyBucketsResult>"),
 		accountBlockResponse(kitACLBlock),
 		restResponse("aws.cloudfront.ListDistributions", http.MethodGet, "https://cloudfront.amazonaws.com/2020-05-31/distribution", 0,
 			"<DistributionList><Marker></Marker><MaxItems>100</MaxItems><IsTruncated>false</IsTruncated><Quantity>0</Quantity></DistributionList>"),
+		jsonResponse("aws.cloudtrail.DescribeTrails", regional("cloudtrail"), map[string]any{"trailList": []any{}}),
+		jsonResponse("aws.configservice.DescribeConfigurationRecorders", regional("config"), map[string]any{"ConfigurationRecorders": []any{}}),
+		restResponse("aws.securityhub.DescribeHub", http.MethodGet, "https://securityhub.us-east-1.amazonaws.com/accounts", http.StatusUnauthorized, shub),
+		restResponse("aws.securityhub.GetFindings", http.MethodPost, "https://securityhub.us-east-1.amazonaws.com/findings", http.StatusUnauthorized, shub),
+	)
+	return append(responses, emptyRegionResponses(kitRegion)...)
+}
+
+// emptyRegionResponses answer the calls the collector makes in every region
+// it scans, for a region with nothing deployed and no regional security
+// service turned on.
+func emptyRegionResponses(region string) []collectortest.Response {
+	empty := func(op, endpoint, result string) collectortest.Response { return queryResponse(op, endpoint, result) }
+	return inRegion(region,
 		empty("aws.rds.DescribeDBInstances", regional("rds"), "<DBInstances/>"),
 		empty("aws.rds.DescribeDBClusters", regional("rds"), "<DBClusters/>"),
 		empty("aws.rds.DescribeEventSubscriptions", regional("rds"), "<EventSubscriptionsList/>"),
@@ -928,12 +945,111 @@ func emptyAccountResponses() []collectortest.Response {
 		jsonResponse("aws.secretsmanager.ListSecrets", regional("secretsmanager"), map[string]any{"SecretList": []any{}}),
 		jsonResponse("aws.ssm.DescribeParameters", regional("ssm"), map[string]any{"Parameters": []any{}}),
 		jsonResponse("aws.wafv2.ListWebACLs", regional("wafv2"), map[string]any{"WebACLs": []any{}}),
-		jsonResponse("aws.cloudtrail.DescribeTrails", regional("cloudtrail"), map[string]any{"trailList": []any{}}),
-		jsonResponse("aws.configservice.DescribeConfigurationRecorders", regional("config"), map[string]any{"ConfigurationRecorders": []any{}}),
 		restResponse("aws.guardduty.ListDetectors", http.MethodGet, "https://guardduty.us-east-1.amazonaws.com/detector", 0, `{"detectorIds":[]}`),
 		restResponse("aws.accessanalyzer.ListAnalyzers", http.MethodGet, "https://access-analyzer.us-east-1.amazonaws.com/analyzer", 0, `{"analyzers":[]}`),
-		restResponse("aws.securityhub.DescribeHub", http.MethodGet, "https://securityhub.us-east-1.amazonaws.com/accounts", http.StatusUnauthorized, shub),
-		restResponse("aws.securityhub.GetFindings", http.MethodPost, "https://securityhub.us-east-1.amazonaws.com/findings", http.StatusUnauthorized, shub),
 		jsonResponse("aws.ssoadmin.ListInstances", regional("sso"), map[string]any{"Instances": []any{}}),
 	)
+}
+
+// inRegion returns responses answering in region what they answer in the
+// kit's region.
+func inRegion(region string, responses ...collectortest.Response) []collectortest.Response {
+	out := make([]collectortest.Response, 0, len(responses))
+	for _, r := range responses {
+		r.URL = strings.Replace(r.URL, "."+kitRegion+".", "."+region+".", 1)
+		out = append(out, r)
+	}
+	return out
+}
+
+// samlProvidersResponse answers the SAML provider listing with a provider of
+// each name.
+func samlProvidersResponse(names ...string) collectortest.Response {
+	var list strings.Builder
+	for _, name := range names {
+		fmt.Fprintf(&list, "<member><Arn>arn:aws:iam::111122223333:saml-provider/%s</Arn><ValidUntil>2030-01-01T00:00:00Z</ValidUntil><CreateDate>2024-01-01T00:00:00Z</CreateDate></member>", name)
+	}
+	return queryResponse("aws.iam.ListSAMLProviders", kitIAMURL, "<SAMLProviderList>"+list.String()+"</SAMLProviderList>")
+}
+
+// identityCenterRolesResponse answers the listing of the roles under IAM
+// Identity Center's path with the role it provisions for each permission set
+// named. The kit's listing of every role leaves them out.
+func identityCenterRolesResponse(permissionSets ...string) collectortest.Response {
+	var roles strings.Builder
+	for i, ps := range permissionSets {
+		name := fmt.Sprintf("AWSReservedSSO_%s_%016x", ps, i+1)
+		fmt.Fprintf(&roles, "<member><Path>%sus-east-1/</Path><RoleName>%s</RoleName><RoleId>AROAKITSSO%04d</RoleId><Arn>arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/us-east-1/%s</Arn>"+
+			"<CreateDate>2024-01-01T00:00:00Z</CreateDate><AssumeRolePolicyDocument>%s</AssumeRolePolicyDocument></member>",
+			identityCenterRolePath, name, i, name, kitTrustPolicy(`{"Federated":"arn:aws:iam::111122223333:saml-provider/AWSSSO_kit1111222233334444_DO_NOT_DELETE"}`))
+	}
+	return queryItemResponse("aws.iam.ListRoles", kitIAMURL, map[string]string{"PathPrefix": identityCenterRolePath}, "<Roles>"+roles.String()+"</Roles><IsTruncated>false</IsTruncated>")
+}
+
+// noIdentityCenterResponses answer as kitResponsesWithReport does, for an
+// account that sees no Identity Center instance in its region.
+func noIdentityCenterResponses(report string) []collectortest.Response {
+	return replaceResponses(kitResponsesWithReport(report), jsonResponse("aws.ssoadmin.ListInstances", regional("sso"), map[string]any{"Instances": []any{}}))
+}
+
+// memberAccountResponses answer a member account with no IAM users that
+// cannot see its organization's Identity Center instance, where Identity
+// Center has provisioned two permission sets' roles and its SAML provider.
+func memberAccountResponses() []collectortest.Response {
+	responses := replaceResponses(noIdentityCenterResponses(kitRootOnlyReport), samlProvidersResponse("AWSSSO_kit1111222233334444_DO_NOT_DELETE"))
+	return append([]collectortest.Response{identityCenterRolesResponse("AdministratorAccess", "ReadOnlyAccess")}, responses...)
+}
+
+// directSAMLResponses answer an account with no IAM users and no Identity
+// Center whose people sign in through a SAML provider it trusts directly.
+func directSAMLResponses() []collectortest.Response {
+	return replaceResponses(noIdentityCenterResponses(kitRootOnlyReport), samlProvidersResponse("NorthwindOkta"))
+}
+
+// secondRegionInstanceResponses answer the kit account scanned in its own
+// region and an empty us-west-2, where Identity Center's instance lives.
+func secondRegionInstanceResponses() []collectortest.Response {
+	responses := append(noIdentityCenterResponses(kitCredentialReport), emptyRegionResponses("us-west-2")...)
+	responses = replaceResponses(responses, inRegion("us-west-2", kitIdentityCenterResponses()[0])...)
+	return append(responses, inRegion("us-west-2", kitIdentityCenterResponses()[1:]...)...)
+}
+
+// The issuers of the external IDs on the identity store users in
+// externalIDUsersResponses: the SCIM provisioning tenant IAM Identity Center
+// records when an identity provider provisions a user, and a directory a
+// sync might name instead. No output may carry an issuer or an ID.
+const (
+	kitSCIMIssuer      = "arn:aws:identitystore::111122223333:identitystore/d-9067111111/provisioningtenant/a1b2c3d4-5678-90ab-cdef-111111111111"
+	kitDirectoryIssuer = "arn:aws:ds:us-east-1:111122223333:directory/d-9067222222"
+	kitDanaExternalID  = "00ukitdana0000000001"
+	kitEliExternalID   = "00ukiteli00000000002"
+)
+
+// externalIDCanaries are the issuers and external IDs in
+// externalIDUsersResponses as scenario secrets, which the kit fails a run
+// for printing or emitting.
+func externalIDCanaries() map[string]string {
+	return map[string]string{
+		"KIT_SCIM_ISSUER":      kitSCIMIssuer,
+		"KIT_DIRECTORY_ISSUER": kitDirectoryIssuer,
+		"KIT_DANA_EXTERNAL_ID": kitDanaExternalID,
+		"KIT_ELI_EXTERNAL_ID":  kitEliExternalID,
+	}
+}
+
+// externalIDUsersResponses answer as kitResponsesWithReport does, with each
+// Identity Center user carrying an external ID: dana's from danaIssuer and
+// eli's from eliIssuer.
+func externalIDUsersResponses(report, danaIssuer, eliIssuer string) []collectortest.Response {
+	user := func(id, name, display, email, issuer, externalID string) map[string]any {
+		return map[string]any{
+			"IdentityStoreId": kitStoreID, "UserId": id, "UserName": name, "DisplayName": display,
+			"Emails":      []any{map[string]any{"Value": email, "Primary": true, "Type": "work"}},
+			"ExternalIds": []any{map[string]any{"Issuer": issuer, "Id": externalID}},
+		}
+	}
+	return replaceResponses(kitResponsesWithReport(report), jsonResponse("aws.identitystore.ListUsers", regional("identitystore"), map[string]any{"Users": []any{
+		user("u-1111", "dana@northwind.example", "Dana Ito", "dana@northwind.example", danaIssuer, kitDanaExternalID),
+		user("u-2222", "eli@northwind.example", "Eli Park", "eli@northwind.example", eliIssuer, kitEliExternalID),
+	}}))
 }

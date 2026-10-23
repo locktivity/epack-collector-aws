@@ -128,3 +128,39 @@ func TestDeniedGapsNameTheirCallAndPermission(t *testing.T) {
 		}
 	}
 }
+
+// Without iam:ListSAMLProviders, the provider counts are left out with a gap
+// that names the permission, and the normalized artifact still says whether
+// Identity Center is in use.
+func TestSAMLProvidersDeniedLeavesInUseDecided(t *testing.T) {
+	isolateAWSEnvironment(t)
+	res := runKit(t, kitConfig(), kitSecrets(), replaceResponses(kitResponses(),
+		iamDenied("aws.iam.ListSAMLProviders", "iam:ListSAMLProviders", "because no identity-based policy allows the iam:ListSAMLProviders action"),
+	))
+	if res.ExitCode != 0 || res.Result == nil {
+		t.Fatalf("run failed with exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	for _, at := range []struct{ path, pointer string }{
+		{awsPath, "/accounts/0/iam/saml_provider_count"},
+		{awsPath, "/accounts/0/iam/identity_center_saml_provider_count"},
+		{cloudPosturePath, "/accounts/0/iam/saml_provider_count"},
+	} {
+		g := gapAt(res, at.path, at.pointer)
+		switch {
+		case g == nil:
+			t.Errorf("%s %s: no gap", at.path, at.pointer)
+		case g.Code != componentsdk.CodePermissionDenied || g.Operation != "aws.iam.ListSAMLProviders":
+			t.Errorf("%s %s: code %s, operation %q; want permission_denied naming ListSAMLProviders", at.path, at.pointer, g.Code, g.Operation)
+		case g.MissingPermission != "iam:ListSAMLProviders":
+			t.Errorf("%s %s: missing permission %q, want iam:ListSAMLProviders", at.path, at.pointer, g.MissingPermission)
+		}
+	}
+	if g := gapAt(res, cloudPosturePath, "/workforce_sign_in/in_use"); g != nil {
+		t.Errorf("in_use has a gap: %+v", g)
+	}
+	var posture CloudPosture
+	decodeArtifact(t, res, cloudPosturePath, &posture)
+	if posture.WorkforceSignIn.InUse == nil || !*posture.WorkforceSignIn.InUse {
+		t.Errorf("in_use = %s, want true from the organization instance", showBool(posture.WorkforceSignIn.InUse))
+	}
+}

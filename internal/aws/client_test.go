@@ -1011,3 +1011,71 @@ func TestFileTokenSource(t *testing.T) {
 		}
 	})
 }
+
+// The listing of Identity Center's roles names their path, and pages until
+// IAM says the list is complete.
+func TestListRoles_PathPrefixAndPages(t *testing.T) {
+	var prefixes []string
+	client := testClient(func(_ *http.Request, body string) (string, string) {
+		form := queryAction(t, body)
+		prefixes = append(prefixes, form.Get("PathPrefix"))
+		page := `<member><Path>/aws-reserved/sso.amazonaws.com/</Path><RoleName>AWSReservedSSO_Admin_1111</RoleName><RoleId>AROA1</RoleId>` +
+			`<Arn>arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin_1111</Arn><CreateDate>2024-01-01T00:00:00Z</CreateDate></member>`
+		more := `<IsTruncated>true</IsTruncated><Marker>page-2</Marker>`
+		if form.Get("Marker") == "page-2" {
+			page = strings.ReplaceAll(page, "Admin_1111", "ReadOnly_2222")
+			more = `<IsTruncated>false</IsTruncated>`
+		}
+		return "text/xml", `<ListRolesResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/"><ListRolesResult><Roles>` + page + `</Roles>` + more +
+			`</ListRolesResult><ResponseMetadata><RequestId>kit</RequestId></ResponseMetadata></ListRolesResponse>`
+	})
+
+	var names []string
+	err := client.ListRoles(context.Background(), "/aws-reserved/sso.amazonaws.com/", func(roles []Role) error {
+		for _, r := range roles {
+			names = append(names, r.RoleName)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(names, []string{"AWSReservedSSO_Admin_1111", "AWSReservedSSO_ReadOnly_2222"}) {
+		t.Errorf("roles = %v, want both pages", names)
+	}
+	if !reflect.DeepEqual(prefixes, []string{"/aws-reserved/sso.amazonaws.com/", "/aws-reserved/sso.amazonaws.com/"}) {
+		t.Errorf("PathPrefix = %q, want the reserved path on every page", prefixes)
+	}
+
+	prefixes = nil
+	if err := client.ListRoles(context.Background(), "", func([]Role) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if prefixes[0] != "" {
+		t.Errorf("PathPrefix = %q, want none for every role", prefixes[0])
+	}
+}
+
+func TestListSAMLProviders_NamesFromARNs(t *testing.T) {
+	client := testClient(func(_ *http.Request, body string) (string, string) {
+		if action := queryAction(t, body).Get("Action"); action != "ListSAMLProviders" {
+			t.Errorf("action = %q, want ListSAMLProviders", action)
+		}
+		return "text/xml", `<ListSAMLProvidersResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/"><ListSAMLProvidersResult><SAMLProviderList>` +
+			`<member><Arn>arn:aws:iam::111122223333:saml-provider/AWSSSO_1111222233334444_DO_NOT_DELETE</Arn><ValidUntil>2030-01-01T00:00:00Z</ValidUntil><CreateDate>2024-01-01T00:00:00Z</CreateDate></member>` +
+			`<member><Arn>arn:aws:iam::111122223333:saml-provider/Okta</Arn><ValidUntil>2030-01-01T00:00:00Z</ValidUntil><CreateDate>2024-01-01T00:00:00Z</CreateDate></member>` +
+			`</SAMLProviderList></ListSAMLProvidersResult><ResponseMetadata><RequestId>kit</RequestId></ResponseMetadata></ListSAMLProvidersResponse>`
+	})
+
+	providers, err := client.ListSAMLProviders(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []SAMLProvider{
+		{ARN: "arn:aws:iam::111122223333:saml-provider/AWSSSO_1111222233334444_DO_NOT_DELETE", Name: "AWSSSO_1111222233334444_DO_NOT_DELETE"},
+		{ARN: "arn:aws:iam::111122223333:saml-provider/Okta", Name: "Okta"},
+	}
+	if !reflect.DeepEqual(providers, want) {
+		t.Errorf("providers = %+v, want %+v", providers, want)
+	}
+}

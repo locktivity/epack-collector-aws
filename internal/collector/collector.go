@@ -698,7 +698,7 @@ func (c *Collector) collectSecurityServices(steps *stepper, client *aws.AWSClien
 	// collectAccountSecurity handles per-service warnings internally
 	posture.AccountSecurity = *c.collectAccountSecurity(steps, client, primaryRegion, regions, posture.AccountID, at, &posture.S3, level)
 
-	posture.IdentityCenter = c.collectIdentityCenter(steps.next("identity_center", "IAM Identity Center"), client, primaryRegion, posture.AccountID, at, level)
+	posture.IdentityCenter = c.collectIdentityCenter(steps.next("identity_center", "IAM Identity Center"), client, regions, posture.AccountID, at, level)
 }
 
 // resolveAuthMode determines the effective authentication mode based on config.

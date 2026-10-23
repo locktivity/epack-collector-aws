@@ -2,7 +2,10 @@ package collector
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
+
+	"github.com/locktivity/epack/componentsdk"
 )
 
 // evaluatedAccountFixture returns an AccountPosture with every family's
@@ -12,14 +15,20 @@ func evaluatedAccountFixture() AccountPosture {
 		AccountID: "123456789012",
 		Regions:   []string{"us-east-1", "us-west-2"},
 		IAM: IAMMetrics{
-			CredentialReportEvaluated:    true,
-			RootCredentialStateEvaluated: true,
-			MFAEnabled:                   intPtr(80),
-			RootMFAEnabled:               true,
-			RootAccessProtected:          true,
-			AccessKeysRotated:            intPtr(90),
-			HardwareMFAEnabled:           intPtr(30),
+			CredentialReportEvaluated:       true,
+			RootCredentialStateEvaluated:    true,
+			IAMUserCount:                    10,
+			AccessKeyUserCount:              10,
+			MFAEnabled:                      intPtr(80),
+			RootMFAEnabled:                  true,
+			RootAccessProtected:             true,
+			AccessKeysRotated:               intPtr(90),
+			HardwareMFAEnabled:              intPtr(30),
+			SAMLProviderCount:               intPtr(0),
+			IdentityCenterSAMLProviderCount: intPtr(0),
+			IdentityCenterRoleCount:         intPtr(0),
 		},
+		IdentityCenter: IdentityCenterStatus{RegionsChecked: []string{"us-east-1", "us-west-2"}},
 		S3: S3Metrics{
 			BucketListingEvaluated:          true,
 			BucketCount:                     20,
@@ -578,7 +587,7 @@ func TestCloudPostureJSONStructure(t *testing.T) {
 	}
 
 	topLevelRequired := []string{
-		"schema_version", "collected_at", "provider", "accounts", "accounts_expected",
+		"schema_version", "collected_at", "provider", "accounts", "accounts_expected", "workforce_sign_in",
 	}
 	for _, field := range topLevelRequired {
 		if _, ok := data[field]; !ok {
@@ -609,7 +618,7 @@ func TestCloudPostureJSONStructure(t *testing.T) {
 	}
 
 	groupFields := map[string][]string{
-		"iam":           {"mfa_coverage_pct", "root_mfa_enabled", "root_access_protected", "access_key_rotation_compliant_pct"},
+		"iam":           {"mfa_coverage_pct", "root_mfa_enabled", "root_access_protected", "access_key_rotation_compliant_pct", "user_count", "access_key_user_count", "saml_provider_count"},
 		"storage":       {"encryption_pct", "public_access_blocked_pct"},
 		"logging":       {"audit_log_enabled", "audit_log_all_regions", "cloudtrail_enabled", "cloudtrail_multiregion"},
 		"network":       {"ssh_open_to_world_pct", "rdp_open_to_world_pct"},
@@ -766,4 +775,231 @@ func TestNormalizedIAM_RootWithoutCredentialsCountsAsMFAProtected(t *testing.T) 
 	if unprotected.RootMFAEnabled == nil || *unprotected.RootMFAEnabled {
 		t.Errorf("root password without MFA: root_mfa_enabled = %v, want false", unprotected.RootMFAEnabled)
 	}
+}
+
+// The counts behind the IAM percentages are 0 over an empty population,
+// where the percentage is left out, and left out where the credential
+// report was not read.
+func TestToCloudPosture_IAMCounts(t *testing.T) {
+	account := evaluatedAccountFixture()
+	account.IAM.IAMUserCount, account.IAM.AccessKeyUserCount, account.IAM.SAMLProviderCount = 5, 2, intPtr(1)
+	noUsers := evaluatedAccountFixture()
+	noUsers.IAM.IAMUserCount, noUsers.IAM.AccessKeyUserCount = 0, 0
+	noUsers.IAM.MFAEnabled, noUsers.IAM.AccessKeysRotated = nil, nil
+	unread := evaluatedAccountFixture()
+	unread.IAM.CredentialReportEvaluated = false
+	unread.IAM.SAMLProviderCount = nil
+
+	posture := (&Output{Accounts: []AccountPosture{account, noUsers, unread}}).ToCloudPosture()
+
+	got := posture.Accounts[0].IAM
+	if !pctIs(got.UserCount, 5) || !pctIs(got.AccessKeyUserCount, 2) || !pctIs(got.SAMLProviderCount, 1) {
+		t.Errorf("counts %s, %s, %s; want 5, 2, 1", showPct(got.UserCount), showPct(got.AccessKeyUserCount), showPct(got.SAMLProviderCount))
+	}
+	got = posture.Accounts[1].IAM
+	if !pctIs(got.UserCount, 0) || !pctIs(got.AccessKeyUserCount, 0) || got.MFACoveragePct != nil || got.AccessKeyRotationCompliantPct != nil {
+		t.Errorf("no IAM users: counts %s and %s, percentages %v and %v; want 0, 0, and both left out",
+			showPct(got.UserCount), showPct(got.AccessKeyUserCount), got.MFACoveragePct, got.AccessKeyRotationCompliantPct)
+	}
+	got = posture.Accounts[2].IAM
+	if got.UserCount != nil || got.AccessKeyUserCount != nil || got.SAMLProviderCount != nil {
+		t.Errorf("unread: counts %s, %s, %s; want all left out", showPct(got.UserCount), showPct(got.AccessKeyUserCount), showPct(got.SAMLProviderCount))
+	}
+}
+
+// A failed account's stub leaves the counts out with the account's failure.
+func TestCloudPosture_FailedAccountStubLeavesCountsOut(t *testing.T) {
+	c := newTestCollector(Config{})
+	failure := componentsdk.CodeError(componentsdk.CodePermissionDenied, errors.New("AccessDenied: not authorized to perform: sts:AssumeRoleWithWebIdentity"))
+	output := &Output{
+		Accounts:       []AccountPosture{evaluatedAccountFixture()},
+		FailedAccounts: []FailedAccountRecord{{AccountID: "222222222222", ErrorCode: "AccessDenied", err: failure}},
+	}
+
+	posture := c.cloudPosture(output)
+
+	if posture.Accounts[1].IAM.UserCount != nil {
+		t.Error("the stub carries a user count")
+	}
+	for _, pointer := range []string{"/accounts/1/iam/user_count", "/accounts/1/iam/access_key_user_count", "/accounts/1/iam/saml_provider_count", "/workforce_sign_in/in_use"} {
+		if g := normalizedGap(c, pointer); g == nil || g.Code != componentsdk.CodePermissionDenied {
+			t.Errorf("%s: gap %+v, want the account's permission_denied", pointer, g)
+		}
+	}
+}
+
+// signInAccount returns an account scanned in us-east-1 with idc as its
+// Identity Center evidence and the Identity Center roles and SAML providers
+// counted as given.
+func signInAccount(idc IdentityCenterStatus, roles, providers *int) AccountPosture {
+	return AccountPosture{
+		AccountID:      "111111111111",
+		Regions:        []string{"us-east-1"},
+		IAM:            IAMMetrics{SAMLProviderCount: intPtr(0), IdentityCenterRoleCount: roles, IdentityCenterSAMLProviderCount: providers},
+		IdentityCenter: idc,
+	}
+}
+
+// noInstance is an account's evidence where the listing answered in its
+// only region and found no instance.
+func noInstance() IdentityCenterStatus {
+	return IdentityCenterStatus{RegionsChecked: []string{"us-east-1"}}
+}
+
+// orgInstance is an account's evidence of an active organization instance
+// whose directory, store, has users of whom withExternalID have an external
+// ID.
+func orgInstance(store string, users, withExternalID int) IdentityCenterStatus {
+	return IdentityCenterStatus{
+		Enabled: true, InstanceStatus: "ACTIVE", InstanceType: "organization", IdentityStoreID: store,
+		UserCount: users, ExternalIDUserCount: withExternalID, MFAEvidence: identityCenterMFAEvidence(users, withExternalID),
+		RegionsChecked: []string{"us-east-1"},
+	}
+}
+
+func TestNormalizedWorkforceSignIn(t *testing.T) {
+	accountInstance := orgInstance("d-1", 2, 0)
+	accountInstance.InstanceType = "account"
+	creating := orgInstance("d-1", 2, 0)
+	creating.InstanceStatus = "CREATE_IN_PROGRESS"
+	typeUnread := orgInstance("d-1", 2, 0)
+	typeUnread.InstanceType = ""
+	directoryUnread := orgInstance("d-1", 0, 0)
+	directoryUnread.MFAEvidence = ""
+	listingIncomplete := signInAccount(noInstance(), intPtr(0), intPtr(0))
+	listingIncomplete.Regions = []string{"us-east-1", "us-west-2"}
+
+	cases := []struct {
+		name      string
+		accounts  []AccountPosture
+		failed    int
+		inUse     *bool
+		users     *int
+		mfaSource string
+	}{
+		{"an organization instance in one account, its roles in another",
+			[]AccountPosture{signInAccount(orgInstance("d-1", 3, 0), intPtr(0), intPtr(0)), signInAccount(noInstance(), intPtr(2), intPtr(1))},
+			0, boolPtr(true), intPtr(3), "sign_in_service"},
+		{"no Identity Center in any account",
+			[]AccountPosture{signInAccount(noInstance(), intPtr(0), intPtr(0)), signInAccount(noInstance(), intPtr(0), intPtr(0))},
+			0, boolPtr(false), nil, ""},
+		{"roles in a member account that cannot see the instance",
+			[]AccountPosture{signInAccount(noInstance(), intPtr(1), intPtr(0))},
+			0, boolPtr(true), nil, "unknown"},
+		{"Identity Center's SAML provider alone",
+			[]AccountPosture{signInAccount(noInstance(), intPtr(0), intPtr(1))},
+			0, boolPtr(true), nil, "unknown"},
+		{"SAML providers unread, the instance and role listings found neither",
+			[]AccountPosture{signInAccount(noInstance(), intPtr(0), nil)},
+			0, boolPtr(false), nil, ""},
+		{"an account instance",
+			[]AccountPosture{signInAccount(accountInstance, intPtr(0), intPtr(0))},
+			0, boolPtr(false), nil, ""},
+		{"an instance still being created",
+			[]AccountPosture{signInAccount(creating, intPtr(0), intPtr(0))},
+			0, boolPtr(false), nil, ""},
+		{"two accounts see the same directory",
+			[]AccountPosture{signInAccount(orgInstance("d-1", 2, 2), intPtr(0), intPtr(0)), signInAccount(orgInstance("d-1", 2, 2), intPtr(1), intPtr(1))},
+			0, boolPtr(true), intPtr(2), "external_idp"},
+		{"two directories",
+			[]AccountPosture{signInAccount(orgInstance("d-1", 2, 2), intPtr(0), intPtr(0)), signInAccount(orgInstance("d-2", 1, 0), intPtr(0), intPtr(0))},
+			0, boolPtr(true), intPtr(3), "unknown"},
+		{"a directory with no users",
+			[]AccountPosture{signInAccount(orgInstance("d-1", 0, 0), intPtr(0), intPtr(0))},
+			0, boolPtr(true), intPtr(0), "unknown"},
+		{"an instance listing that failed in a region",
+			[]AccountPosture{listingIncomplete},
+			0, nil, nil, ""},
+		{"roles unread",
+			[]AccountPosture{signInAccount(noInstance(), nil, intPtr(0))},
+			0, nil, nil, ""},
+		{"an instance whose type is unread",
+			[]AccountPosture{signInAccount(typeUnread, intPtr(0), intPtr(0))},
+			0, nil, nil, ""},
+		{"roles show it in use where another account's listing failed",
+			[]AccountPosture{signInAccount(noInstance(), intPtr(1), intPtr(1)), listingIncomplete},
+			0, boolPtr(true), nil, ""},
+		{"the directory unread",
+			[]AccountPosture{signInAccount(directoryUnread, intPtr(0), intPtr(0))},
+			0, boolPtr(true), nil, ""},
+		{"an account that failed, nothing elsewhere",
+			[]AccountPosture{signInAccount(noInstance(), intPtr(0), intPtr(0))},
+			1, nil, nil, ""},
+		{"an account that failed, roles elsewhere",
+			[]AccountPosture{signInAccount(noInstance(), intPtr(1), intPtr(0))},
+			1, boolPtr(true), nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			output := &Output{Accounts: tc.accounts}
+			for i := 0; i < tc.failed; i++ {
+				output.FailedAccounts = append(output.FailedAccounts, FailedAccountRecord{ErrorCode: "AccessDenied"})
+			}
+			got := output.ToCloudPosture().WorkforceSignIn
+			if !samePtr(got.InUse, tc.inUse) || !sameInt(got.UserCount, tc.users) || got.MFASource != tc.mfaSource {
+				t.Errorf("in_use %v, user_count %s, mfa_source %q; want %v, %s, %q",
+					showBool(got.InUse), showPct(got.UserCount), got.MFASource, showBool(tc.inUse), showPct(tc.users), tc.mfaSource)
+			}
+		})
+	}
+}
+
+// A folded value left out carries the gap of the read that left it unknown.
+func TestNormalizedWorkforceSignIn_LeftOutValuesCarryTheirGap(t *testing.T) {
+	c := newTestCollector(Config{})
+	listing := componentsdk.CodeError(componentsdk.CodeRateLimited, errors.New("Throttling: Rate exceeded"))
+	c.gaps.leaveOut(listing, "/accounts/0/identity_center")
+	account := signInAccount(IdentityCenterStatus{}, intPtr(0), intPtr(0))
+
+	posture := c.cloudPosture(&Output{Accounts: []AccountPosture{account}})
+
+	if posture.WorkforceSignIn.InUse != nil {
+		t.Errorf("in_use = %v, want it left out", *posture.WorkforceSignIn.InUse)
+	}
+	for _, pointer := range []string{"/workforce_sign_in/in_use", "/workforce_sign_in/user_count", "/workforce_sign_in/mfa_source"} {
+		if g := normalizedGap(c, pointer); g == nil || g.Code != componentsdk.CodeRateLimited {
+			t.Errorf("%s: gap %+v, want the instance listing's rate_limited", pointer, g)
+		}
+	}
+
+	c = newTestCollector(Config{})
+	users := componentsdk.CodeError(componentsdk.CodePermissionDenied, errors.New("AccessDeniedException: not authorized to perform: identitystore:ListUsers"))
+	c.gaps.leaveOut(users, "/accounts/0/identity_center/user_count")
+	unread := orgInstance("d-1", 0, 0)
+	unread.MFAEvidence = ""
+	posture = c.cloudPosture(&Output{Accounts: []AccountPosture{signInAccount(unread, intPtr(0), intPtr(0))}})
+	if !samePtr(posture.WorkforceSignIn.InUse, boolPtr(true)) {
+		t.Errorf("in_use = %s, want true from the instance", showBool(posture.WorkforceSignIn.InUse))
+	}
+	if g := normalizedGap(c, "/workforce_sign_in/in_use"); g != nil {
+		t.Errorf("in_use has a gap: %+v", g)
+	}
+	for _, pointer := range []string{"/workforce_sign_in/user_count", "/workforce_sign_in/mfa_source"} {
+		if g := normalizedGap(c, pointer); g == nil || g.Code != componentsdk.CodePermissionDenied {
+			t.Errorf("%s: gap %+v, want the user listing's permission_denied", pointer, g)
+		}
+	}
+}
+
+// normalizedGap returns the gap c recorded at pointer in the normalized
+// artifact, or nil.
+func normalizedGap(c *Collector, pointer string) *componentsdk.Gap {
+	for _, g := range c.gaps.rec.Gaps() {
+		if g.Path == cloudPosturePath && g.Pointer == pointer {
+			return &g
+		}
+	}
+	return nil
+}
+
+func sameInt(a, b *int) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
+
+func showBool(p *bool) string {
+	if p == nil {
+		return "left out"
+	}
+	if *p {
+		return "true"
+	}
+	return "false"
 }

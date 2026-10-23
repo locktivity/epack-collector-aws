@@ -27,6 +27,7 @@ var kitOperations = []string{
 	"aws.iam.ListOrganizationsFeatures",
 	"aws.iam.ListMFADevices",
 	"aws.iam.ListRoles",
+	"aws.iam.ListSAMLProviders",
 	"aws.organizations.ListAccounts",
 	"aws.s3.ListBuckets",
 	"aws.s3.GetBucketLocation",
@@ -192,7 +193,9 @@ func kitSuite() collectortest.Suite {
 				// virtual, and the account's snapshot is not public. A count
 				// that reads 0, such as the distribution's HTTP origins, is
 				// emitted. The group open to the world on all traffic counts
-				// as open on SSH and RDP alike.
+				// as open on SSH and RDP alike. The account owns its
+				// organization's Identity Center instance and holds no
+				// Identity Center roles, so the instance alone shows it in use.
 				Name:      "clean",
 				Responses: kitResponses(),
 				Expect: map[string]map[string]any{awsPath: {
@@ -219,6 +222,21 @@ func kitSuite() collectortest.Suite {
 					"/accounts/0/network/open_to_world_rdp":                                      25,
 					"/accounts/0/network/security_groups/3/open_to_world_ssh":                    true,
 					"/accounts/0/network/security_groups/3/open_to_world_rdp":                    true,
+					"/accounts/0/iam/saml_provider_count":                                        0,
+					"/accounts/0/iam/identity_center_role_count":                                 0,
+					"/accounts/0/identity_center/instance_status":                                "ACTIVE",
+					"/accounts/0/identity_center/instance_owner_account_id":                      kitAccountID,
+					"/accounts/0/identity_center/instance_type":                                  "organization",
+					"/accounts/0/identity_center/regions_checked":                                []any{kitRegion},
+					"/accounts/0/identity_center/external_id_user_count":                         0,
+					"/accounts/0/identity_center/mfa_evidence":                                   "manual_required",
+				}, cloudPosturePath: {
+					"/accounts/0/iam/user_count":            3,
+					"/accounts/0/iam/access_key_user_count": 2,
+					"/accounts/0/iam/saml_provider_count":   0,
+					"/workforce_sign_in/in_use":             true,
+					"/workforce_sign_in/user_count":         2,
+					"/workforce_sign_in/mfa_source":         "sign_in_service",
 				}, kitResultPath: kitStepPins()},
 			},
 			{
@@ -350,8 +368,144 @@ func kitSuite() collectortest.Suite {
 						"/accounts/0/identity_center/user_count":          2,
 					},
 					cloudPosturePath: {
-						"/accounts/0/iam/mfa_coverage_pct":                  nil,
-						"/accounts/0/iam/access_key_rotation_compliant_pct": nil,
+						"/accounts/0/iam/mfa_coverage_pct":                  collectortest.Absent,
+						"/accounts/0/iam/access_key_rotation_compliant_pct": collectortest.Absent,
+						"/accounts/0/iam/user_count":                        0,
+						"/accounts/0/iam/access_key_user_count":             0,
+						"/accounts/0/iam/saml_provider_count":               0,
+						"/workforce_sign_in/in_use":                         true,
+						"/workforce_sign_in/user_count":                     2,
+						"/workforce_sign_in/mfa_source":                     "sign_in_service",
+					},
+				},
+			},
+			{
+				// With no IAM users, no SAML provider, and no Identity
+				// Center, only the root user signs in to the account, and
+				// each count reads 0.
+				Name:      "no IAM users, no Identity Center",
+				Responses: noIdentityCenterResponses(kitRootOnlyReport),
+				Expect: map[string]map[string]any{
+					awsPath: {
+						"/accounts/0/iam/iam_user_count":                      0,
+						"/accounts/0/iam/saml_provider_count":                 0,
+						"/accounts/0/iam/identity_center_saml_provider_count": 0,
+						"/accounts/0/iam/identity_center_role_count":          0,
+						"/accounts/0/identity_center/enabled":                 false,
+						"/accounts/0/identity_center/regions_checked":         []any{kitRegion},
+						"/accounts/0/identity_center/instance_type":           collectortest.Absent,
+					},
+					cloudPosturePath: {
+						"/accounts/0/iam/user_count":                        0,
+						"/accounts/0/iam/access_key_user_count":             0,
+						"/accounts/0/iam/saml_provider_count":               0,
+						"/accounts/0/iam/mfa_coverage_pct":                  collectortest.Absent,
+						"/accounts/0/iam/access_key_rotation_compliant_pct": collectortest.Absent,
+						"/workforce_sign_in/in_use":                         false,
+						"/workforce_sign_in/user_count":                     collectortest.Absent,
+						"/workforce_sign_in/mfa_source":                     collectortest.Absent,
+					},
+				},
+			},
+			{
+				// The instance's home region is the second region scanned.
+				Name:      "Identity Center instance in a second region",
+				Responses: secondRegionInstanceResponses(),
+				Config:    map[string]any{"regions": []any{kitRegion, "us-west-2"}},
+				Expect: map[string]map[string]any{
+					awsPath: {
+						"/accounts/0/identity_center/enabled":         true,
+						"/accounts/0/identity_center/instance_region": "us-west-2",
+						"/accounts/0/identity_center/instance_type":   "organization",
+						"/accounts/0/identity_center/regions_checked": []any{kitRegion, "us-west-2"},
+					},
+					cloudPosturePath: {
+						"/workforce_sign_in/in_use":     true,
+						"/workforce_sign_in/user_count": 2,
+						"/workforce_sign_in/mfa_source": "sign_in_service",
+					},
+				},
+			},
+			{
+				// A member account cannot see its organization's instance, so
+				// the roles and SAML provider Identity Center leaves in it
+				// show it in use, and where its users' MFA is set is unknown.
+				Name:      "member account with Identity Center roles",
+				Responses: memberAccountResponses(),
+				Expect: map[string]map[string]any{
+					awsPath: {
+						"/accounts/0/iam/identity_center_role_count":          2,
+						"/accounts/0/iam/identity_center_saml_provider_count": 1,
+						"/accounts/0/iam/saml_provider_count":                 0,
+						"/accounts/0/identity_center/enabled":                 false,
+					},
+					cloudPosturePath: {
+						"/accounts/0/iam/user_count":          0,
+						"/accounts/0/iam/saml_provider_count": 0,
+						"/workforce_sign_in/in_use":           true,
+						"/workforce_sign_in/user_count":       collectortest.Absent,
+						"/workforce_sign_in/mfa_source":       "unknown",
+					},
+				},
+			},
+			{
+				// People who sign in through a SAML provider the account
+				// trusts directly are not IAM users, so the provider count
+				// shows them.
+				Name:      "SAML provider trusted directly",
+				Responses: directSAMLResponses(),
+				Expect: map[string]map[string]any{
+					awsPath: {
+						"/accounts/0/iam/saml_provider_count":                 1,
+						"/accounts/0/iam/identity_center_saml_provider_count": 0,
+					},
+					cloudPosturePath: {
+						"/accounts/0/iam/user_count":          0,
+						"/accounts/0/iam/saml_provider_count": 1,
+						"/workforce_sign_in/in_use":           false,
+					},
+				},
+			},
+			{
+				// Every user has an external ID from SCIM provisioning, which
+				// IAM Identity Center records when an identity provider
+				// provisions a user, so their MFA is set at that provider.
+				// The IDs and their issuer are canaries, so only whether a
+				// user has one may reach the artifacts.
+				Name:      "Identity Center users from an external identity provider",
+				Responses: externalIDUsersResponses(kitRootOnlyReport, kitSCIMIssuer, kitSCIMIssuer),
+				Secrets:   externalIDCanaries(),
+				Expect: map[string]map[string]any{
+					awsPath: {
+						"/accounts/0/identity_center/external_id_user_count":  2,
+						"/accounts/0/identity_center/mfa_evidence":            "external_idp",
+						"/accounts/0/identity_center/users/0/has_external_id": true,
+					},
+					cloudPosturePath: {
+						"/workforce_sign_in/in_use":     true,
+						"/workforce_sign_in/user_count": 2,
+						"/workforce_sign_in/mfa_source": "external_idp",
+					},
+				},
+			},
+			{
+				// An external ID from another issuer, such as an Active
+				// Directory sync, does not show an identity provider sets the
+				// users' MFA, so the directory reads as Identity Center's own.
+				Name:      "Identity Center users with external IDs from another issuer",
+				Responses: externalIDUsersResponses(kitRootOnlyReport, kitDirectoryIssuer, kitDirectoryIssuer),
+				Secrets:   externalIDCanaries(),
+				Expect: map[string]map[string]any{
+					awsPath: {
+						"/accounts/0/identity_center/external_id_user_count":  0,
+						"/accounts/0/identity_center/mfa_evidence":            "manual_required",
+						"/accounts/0/identity_center/users/0/has_external_id": false,
+						"/accounts/0/identity_center/users/1/has_external_id": false,
+					},
+					cloudPosturePath: {
+						"/workforce_sign_in/in_use":     true,
+						"/workforce_sign_in/user_count": 2,
+						"/workforce_sign_in/mfa_source": "sign_in_service",
 					},
 				},
 			},

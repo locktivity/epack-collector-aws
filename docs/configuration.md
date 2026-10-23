@@ -178,6 +178,8 @@ If a surface is missing its required permissions, the collector emits a per-surf
 
 `iam:ListOrganizationsFeatures` only evaluates centralized root access from the AWS Organizations management account or an IAM delegated administrator account. Member-account roles record the AWS error code in the evidence pack instead of inferring the organization-level state.
 
+Without `iam:ListSAMLProviders`, the SAML provider counts are left out with a `permission_denied` gap. Whether IAM Identity Center is in use is still decided from the instance and role listings.
+
 ### Trust level (default)
 
 The minimum policy. Required for every collection level.
@@ -199,6 +201,7 @@ The minimum policy. Required for every collection level.
         "iam:ListOrganizationsFeatures",
         "iam:ListMFADevices",
         "iam:ListRoles",
+        "iam:ListSAMLProviders",
 
         "s3:GetAccountPublicAccessBlock",
         "s3:GetBucketLocation",

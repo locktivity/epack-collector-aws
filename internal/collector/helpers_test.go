@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -88,4 +89,18 @@ func gapAt(res componentsdk.InProcessResult, path, pointer string) *componentsdk
 		}
 	}
 	return nil
+}
+
+// decodeArtifact decodes the artifact a run emitted at path into v.
+func decodeArtifact(t *testing.T, res componentsdk.InProcessResult, path string, v any) {
+	t.Helper()
+	for _, a := range res.Artifacts {
+		if a.Path == path && a.File == "" {
+			if err := json.Unmarshal(a.Data, v); err != nil {
+				t.Fatalf("decoding %s: %v", path, err)
+			}
+			return
+		}
+	}
+	t.Fatalf("no artifact at %s", path)
 }
