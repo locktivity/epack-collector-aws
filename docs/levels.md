@@ -42,9 +42,11 @@ The active level appears in the output artifact as the top-level
 
 - **trust**: `iam_users_present`, MFA / hardware-MFA / access-key-rotation
   percentages and the user counts they are taken of, literal root MFA state,
-  root credential-presence flags, root access protection, and centralized root
+  root credential-presence flags, root access protection, centralized root
   access feature evidence when the caller is the Organizations management
-  account or delegated administrator.
+  account or delegated administrator, the count of SAML providers the account
+  trusts, and the counts of roles and SAML providers IAM Identity Center
+  created in the account.
 - **audit**: `users[]` (per-user MFA + access-key + console flags),
   `roles[]` (per-role ARN, external-trust flag, wildcard-principal flag,
   the foreign principal account IDs, and a best-effort
@@ -121,10 +123,15 @@ per-rule / per-finding detail at internal.
 
 ### IAM Identity Center (`identity_center`)
 
-- **trust**: enabled flag, instance metadata, user / group / permission-set counts.
+- **trust**: enabled flag, instance metadata (status, owning account, and
+  whether it is an organization or account instance), user / group /
+  permission-set counts, the count of users with an external ID,
+  `mfa_evidence`, and the regions whose instance listing answered. The
+  instance is looked for in every scanned region.
 - **audit**: the full access model. `users[]` (id, login, display name,
-  primary email; identity-system inventories are audit-level evidence, and no
-  PII beyond the primary email is collected), `groups[]` with
+  primary email, and whether the user has an external ID; identity-system
+  inventories are audit-level evidence, and no PII beyond the primary email is
+  collected), `groups[]` with
   `member_user_ids`, `permission_sets[]` (name, session duration,
   managed-policy count, provisioned account IDs), and `account_assignments[]`
   (principal to permission set to account edges, meaningful only when

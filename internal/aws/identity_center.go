@@ -10,47 +10,56 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssoadmin"
 )
 
-// ListIdentityCenterInstances returns IdC instances in the given region.
-// Returns an empty slice if IdC is not enabled in that region. There is at most
-// one instance per account in any single region.
+// ListIdentityCenterInstances returns the IdC instances the caller can see in
+// the given region. Returns an empty slice if there are none. A member
+// account sees no organization instance, only an account instance of its
+// own.
 func (c *AWSClient) ListIdentityCenterInstances(ctx context.Context, region string) ([]IdentityCenterInstance, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	client := ssoadmin.NewFromConfig(cfg)
 
-	out, err := client.ListInstances(ctx, &ssoadmin.ListInstancesInput{})
-	if err != nil {
-		return nil, fmt.Errorf("listing identity center instances: %w", err)
+	instances := []IdentityCenterInstance{}
+	var nextToken *string
+	for {
+		out, err := client.ListInstances(ctx, &ssoadmin.ListInstancesInput{NextToken: nextToken})
+		if err != nil {
+			return nil, fmt.Errorf("listing identity center instances: %w", err)
+		}
+		for _, inst := range out.Instances {
+			instances = append(instances, IdentityCenterInstance{
+				InstanceARN:     aws.ToString(inst.InstanceArn),
+				IdentityStoreID: aws.ToString(inst.IdentityStoreId),
+				Region:          region,
+				Status:          string(inst.Status),
+				OwnerAccountID:  aws.ToString(inst.OwnerAccountId),
+			})
+		}
+		if out.NextToken == nil || *out.NextToken == "" {
+			return instances, nil
+		}
+		nextToken = out.NextToken
 	}
-
-	instances := make([]IdentityCenterInstance, 0, len(out.Instances))
-	for _, inst := range out.Instances {
-		instances = append(instances, IdentityCenterInstance{
-			InstanceARN:     aws.ToString(inst.InstanceArn),
-			IdentityStoreID: aws.ToString(inst.IdentityStoreId),
-			Region:          region,
-		})
-	}
-	return instances, nil
 }
 
-// ListIdentityCenterPermissionSets returns all permission sets on the given
-// instance. When withInternalEnrichment is true, each row additionally carries
-// the attached managed-policy ARNs and a HasInlinePolicy flag (policy contents
-// are intentionally not fetched — they encode tenant-specific authorization
-// logic and shouldn't land in evidence packs).
-func (c *AWSClient) ListIdentityCenterPermissionSets(ctx context.Context, region, instanceARN string, withInternalEnrichment bool) ([]IdentityCenterPermissionSet, error) {
+// ListIdentityCenterPermissionSetARNs returns the ARNs of the permission sets
+// on the given instance.
+func (c *AWSClient) ListIdentityCenterPermissionSetARNs(ctx context.Context, region, instanceARN string) ([]string, error) {
+	cfg := c.cfg.Copy()
+	cfg.Region = region
+	return listAllPermissionSetARNs(ctx, ssoadmin.NewFromConfig(cfg), instanceARN)
+}
+
+// DescribeIdentityCenterPermissionSets describes the permission sets with the
+// given ARNs on the instance, with the accounts each is provisioned to. When
+// withInternalEnrichment is true, each row additionally carries the attached
+// managed-policy ARNs and a HasInlinePolicy flag. Policy contents are not
+// fetched, since they encode tenant-specific authorization logic and
+// shouldn't land in evidence packs.
+func (c *AWSClient) DescribeIdentityCenterPermissionSets(ctx context.Context, region, instanceARN string, arns []string, withInternalEnrichment bool) ([]IdentityCenterPermissionSet, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	client := ssoadmin.NewFromConfig(cfg)
-
-	arns, err := listAllPermissionSetARNs(ctx, client, instanceARN)
-	if err != nil {
-		return nil, err
-	}
-	if len(arns) == 0 {
-		return []IdentityCenterPermissionSet{}, nil
-	}
 
 	out := make([]IdentityCenterPermissionSet, 0, len(arns))
 	for _, arn := range arns {
@@ -212,7 +221,8 @@ func permissionSetHasInlinePolicy(ctx context.Context, client *ssoadmin.Client, 
 
 // ListIdentityStoreUsers returns all users in the identity store. Primary email
 // is the entry marked Primary=true on the user (per SCIM); blank if no email
-// is registered or none is marked primary.
+// is registered or none is marked primary. Of the user's external IDs, only
+// whether there are any is kept.
 func (c *AWSClient) ListIdentityStoreUsers(ctx context.Context, region, identityStoreID string) ([]IdentityStoreUser, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
@@ -230,9 +240,10 @@ func (c *AWSClient) ListIdentityStoreUsers(ctx context.Context, region, identity
 		}
 		for _, u := range resp.Users {
 			user := IdentityStoreUser{
-				UserID:      aws.ToString(u.UserId),
-				UserName:    aws.ToString(u.UserName),
-				DisplayName: aws.ToString(u.DisplayName),
+				UserID:        aws.ToString(u.UserId),
+				UserName:      aws.ToString(u.UserName),
+				DisplayName:   aws.ToString(u.DisplayName),
+				HasExternalID: len(u.ExternalIds) > 0,
 			}
 			for _, e := range u.Emails {
 				if e.Primary {

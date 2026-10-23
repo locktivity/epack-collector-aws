@@ -118,6 +118,13 @@ type Role struct {
 	HasExternalTrust         bool // Computed from trust policy
 }
 
+// SAMLProvider is a SAML identity provider the account trusts for sign-in.
+// Name is the last part of its ARN.
+type SAMLProvider struct {
+	ARN  string
+	Name string
+}
+
 // Bucket represents an S3 bucket with security settings.
 // DefaultEncryptionEnabled includes AWS's SSE-S3 baseline for new objects.
 type Bucket struct {
@@ -474,11 +481,16 @@ type AccessAnalyzer struct {
 
 // IdentityCenterInstance is a single AWS IAM Identity Center (formerly AWS SSO)
 // instance. There is at most one instance per account, deployed in one home
-// region.
+// region. Status is AWS's, such as ACTIVE or CREATE_IN_PROGRESS.
+// OwnerAccountID is the account that owns the instance: the organization's
+// management account for an organization instance, and the account itself
+// for an account instance.
 type IdentityCenterInstance struct {
 	InstanceARN     string
 	IdentityStoreID string
 	Region          string
+	Status          string
+	OwnerAccountID  string
 }
 
 // IdentityCenterPermissionSet is one permission set provisioned to the
@@ -501,12 +513,15 @@ type IdentityCenterPermissionSet struct {
 // IdentityStoreUser is one user in the identity store. PrimaryEmail is the
 // email marked Primary on the user. The identity store API exposes no
 // enabled/disabled status; consumers wanting activity signals correlate
-// against IdP-side evidence instead.
+// against IdP-side evidence instead. HasExternalID is whether the user has
+// an external ID, which an external identity provider's user provisioning
+// sets. The IDs and their issuers are not kept.
 type IdentityStoreUser struct {
-	UserID       string
-	UserName     string
-	DisplayName  string
-	PrimaryEmail string
+	UserID        string
+	UserName      string
+	DisplayName   string
+	PrimaryEmail  string
+	HasExternalID bool
 }
 
 // IdentityStoreGroup is one group in the identity store. MemberCount and

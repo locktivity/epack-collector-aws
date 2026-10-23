@@ -18,7 +18,7 @@ type mfaDeviceLister interface {
 }
 
 type roleLister interface {
-	ListRoles(ctx context.Context, callback func([]aws.Role) error) error
+	ListRoles(ctx context.Context, pathPrefix string, callback func([]aws.Role) error) error
 }
 
 // iamClient is the slice of the AWS client used by collectIAMMetrics,
@@ -29,9 +29,19 @@ type iamClient interface {
 	GetPasswordPolicy(ctx context.Context) (*aws.PasswordPolicy, error)
 	ListOrganizationsFeatures(ctx context.Context) (*aws.OrganizationFeatures, error)
 	ListOrganizationAccountIDs(ctx context.Context) ([]string, error)
+	ListSAMLProviders(ctx context.Context) ([]aws.SAMLProvider, error)
 	mfaDeviceLister
 	roleLister
 }
+
+// IAM Identity Center creates a role under identityCenterRolePath, named with
+// identityCenterRolePrefix, for each permission set assigned in an account,
+// and a SAML provider named with identityCenterSAMLProviderPrefix.
+const (
+	identityCenterRolePath           = "/aws-reserved/sso.amazonaws.com/"
+	identityCenterRolePrefix         = "AWSReservedSSO_"
+	identityCenterSAMLProviderPrefix = "AWSSSO_"
+)
 
 // collectIAMMetrics collects IAM-related security metrics.
 //
@@ -103,6 +113,8 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, acc
 		c.gaps.partial(unmeasured, err, iamAt.p("hardware_mfa_enabled"), iamAt.p("hardware_mfa_enabled_user_count"))
 	}
 
+	c.collectSignInPaths(ctx, client, accountID, iamAt, metrics)
+
 	if level.AtLeast(componentsdk.LevelAudit) {
 		if report != nil {
 			metrics.Users = c.iamUsersFromReport(report)
@@ -125,6 +137,53 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, acc
 	}
 
 	return metrics
+}
+
+// collectSignInPaths counts the ways people sign in to the account other than
+// as IAM users: the SAML providers it trusts, and the roles and SAML provider
+// IAM Identity Center creates in an account it gives people access to. A
+// count whose listing failed is left out with a gap.
+func (c *Collector) collectSignInPaths(ctx context.Context, client iamClient, accountID string, iamAt at, metrics *IAMMetrics) {
+	providers, err := client.ListSAMLProviders(ctx)
+	if err != nil {
+		if isAccessDeniedErr(err) {
+			c.warnAccessDenied(accountID, "iam_saml_providers", "iam:ListSAMLProviders")
+		} else {
+			c.warn("account %s: failed to list SAML providers: %v", accountID, err)
+		}
+		c.gaps.leaveOut(err, iamAt.p("saml_provider_count"), iamAt.p("identity_center_saml_provider_count"))
+	} else {
+		direct, identityCenter := 0, 0
+		for _, p := range providers {
+			if strings.HasPrefix(p.Name, identityCenterSAMLProviderPrefix) {
+				identityCenter++
+			} else {
+				direct++
+			}
+		}
+		metrics.SAMLProviderCount = &direct
+		metrics.IdentityCenterSAMLProviderCount = &identityCenter
+	}
+
+	roles := 0
+	err = client.ListRoles(ctx, identityCenterRolePath, func(batch []aws.Role) error {
+		for _, r := range batch {
+			if strings.HasPrefix(r.RoleName, identityCenterRolePrefix) {
+				roles++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if isAccessDeniedErr(err) {
+			c.warnAccessDenied(accountID, "iam_identity_center_roles", "iam:ListRoles")
+		} else {
+			c.warn("account %s: failed to list IAM Identity Center roles: %v", accountID, err)
+		}
+		c.gaps.leaveOut(err, iamAt.p("identity_center_role_count"))
+		return
+	}
+	metrics.IdentityCenterRoleCount = &roles
 }
 
 // rootStateFlags are the root user's credential flags, by JSON name.
@@ -295,7 +354,7 @@ func (c *Collector) iamUsersFromReport(report *aws.CredentialReport) []IAMUser {
 // `[]` not `null`.
 func (c *Collector) collectIAMRoles(ctx context.Context, client roleLister, accountID string, level componentsdk.Level, orgAccounts *organizationAccounts) ([]IAMRole, error) {
 	roles := []IAMRole{}
-	err := client.ListRoles(ctx, func(batch []aws.Role) error {
+	err := client.ListRoles(ctx, "", func(batch []aws.Role) error {
 		for _, r := range batch {
 			analysis := analyzeTrustPolicy(r.AssumeRolePolicyDocument, accountID)
 			row := IAMRole{

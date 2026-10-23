@@ -6,13 +6,13 @@ Collects AWS account security posture metrics for the epack ecosystem.
 
 - **Configurable collection depth**: an optional `level` config knob (`trust` / `audit` / `internal`) controls how much detail to collect. See [docs/levels.md](docs/levels.md) for the artifact contract and per-surface field breakdowns.
 - **Multi-account support**: collect from multiple AWS accounts in a single run.
-- **IAM**: MFA coverage, password policies, access-key rotation, root-account state; per-user / per-role inventory + full credential report at higher levels.
+- **IAM**: MFA coverage, password policies, access-key rotation, root-account state, and the SAML providers and IAM Identity Center roles people sign in through; per-user / per-role inventory + full credential report at higher levels.
 - **S3**: encryption, public-access blocks, versioning, logging; per-bucket policy / ACL / lifecycle at higher levels.
 - **RDS**: encryption, public accessibility, deletion protection, backups, Multi-AZ; per-instance / per-cluster rows.
 - **Network**: security-group analysis; per-VPC inventory with internal-level flow log status and per-SG-rule inventory.
 - **WAF**: web ACL coverage of internet-facing entry points (application load balancers, CloudFront distributions) and rate-limiting enforcement; per-ACL rule inventory at higher levels.
 - **Account security services**: CloudTrail, AWS Config (with per-rule compliance), GuardDuty (with finding notification and per-finding triage), Security Hub, Inspector.
-- **Identity Center (IAM Identity Center / AWS SSO)**: instance + user / group / permission-set inventory.
+- **Identity Center (IAM Identity Center / AWS SSO)**: the instance in any scanned region, whether users' MFA is set at an external identity provider, and user / group / permission-set inventory.
 - **Lambda**: deprecated runtime detection, public Function URL detection, per-function metadata (env var KEYS only — values never collected).
 - **EC2**: IMDSv2 enforcement, public-IP exposure, default-VPC residency, unencrypted-volume detection.
 - **CloudWatch Logs**: retention + customer-KMS coverage, per-log-group inventory.
@@ -153,6 +153,9 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
         "hardware_mfa_enabled_user_count": 0,
         "access_keys_rotated": 80,
         "access_keys_rotated_user_count": 4,
+        "saml_provider_count": 0,
+        "identity_center_saml_provider_count": 1,
+        "identity_center_role_count": 3,
         "root_mfa_enabled": true,
         "root_credentials_present": true,
         "root_password_present": true,
@@ -266,9 +269,14 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
       },
       "identity_center": {
         "enabled": true,
+        "instance_status": "ACTIVE",
+        "instance_type": "organization",
         "user_count": 47,
+        "external_id_user_count": 47,
+        "mfa_evidence": "external_idp",
         "group_count": 12,
-        "permission_set_count": 8
+        "permission_set_count": 8,
+        "regions_checked": ["us-east-1", "us-west-2"]
       },
       "lambda": {
         "function_count": 23,
@@ -315,6 +323,11 @@ artifact contract and per-surface field breakdowns.
 Each percentage is a whole number rounded down, with the count it is taken of
 beside it, such as `mfa_enabled_user_count` for `mfa_enabled`, and the count it
 is over, such as `iam_user_count`.
+
+The collector also writes `artifacts/aws.cloud-posture.json` in the shared
+`evidencepack/cloud-posture@v1` format, with the counts behind its percentages
+and whether IAM Identity Center is in use. See
+[docs/overview.md](docs/overview.md#normalized-artifact).
 
 A value the collector could not read, such as a percentage whose source call
 was denied, is null. The run's result artifact

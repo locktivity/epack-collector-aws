@@ -33,6 +33,9 @@ null; the count beside it (here `iam_user_count`) is 0.
 | `hardware_mfa_enabled_user_count` | IAM users with hardware MFA |
 | `access_keys_rotated` | Percentage of users with active access keys whose keys were all rotated within 90 days |
 | `access_keys_rotated_user_count` | Users with active access keys whose keys were all rotated within 90 days |
+| `saml_provider_count` | SAML identity providers the account trusts for sign-in, not counting the ones IAM Identity Center creates |
+| `identity_center_saml_provider_count` | SAML providers IAM Identity Center created in the account, whose names start with `AWSSSO_` |
+| `identity_center_role_count` | Roles IAM Identity Center provisioned in the account for its permission sets, named `AWSReservedSSO_` under `/aws-reserved/sso.amazonaws.com/` |
 | `root_credential_state_evaluated` | Whether root credential state was read from the credential report or the account summary. The root credential flags below are meaningful only when true |
 | `root_mfa_enabled` | Whether root MFA is active (false when root has no credentials) |
 | `root_credentials_present` | Whether root has any password, access key, or signing certificate present |
@@ -122,10 +125,16 @@ Interpretation guide:
 
 | Metric | Description |
 |--------|-------------|
-| `enabled` | Whether an IdC instance exists in the primary region |
+| `enabled` | Whether an Identity Center instance was found in any scanned region. A member account cannot see its organization's instance |
+| `instance_status` | AWS's status for the instance, such as `ACTIVE`. Only an active instance signs people in |
+| `instance_owner_account_id` | The account that owns the instance: the management account for an organization instance |
+| `instance_type` | `organization` or `account`. An account instance cannot sign people in to AWS accounts |
 | `user_count` | Users in the connected identity store |
+| `external_id_user_count` | Users with an external ID, which an external identity provider sets when it provisions users. The IDs are not collected |
+| `mfa_evidence` | Where users' MFA is set: `external_idp` when every user has an external ID, `manual_required` when none does, and `unknown` for a mix or a directory with no users |
 | `group_count` | Groups in the connected identity store |
 | `permission_set_count` | Permission sets provisioned on the instance |
+| `regions_checked` | The scanned regions whose instance listing answered |
 
 ### Lambda
 
@@ -196,7 +205,7 @@ The collector automatically handles AWS's regional vs global services:
 
 - **Global services** (IAM, S3 bucket listing, CloudTrail): Collected once
 - **Regional services** (RDS, EC2, GuardDuty, Lambda, CloudWatch Logs, KMS, Secrets Manager, SSM Parameters): Collected from all configured regions
-- **IAM Identity Center**: Probed once in the primary region; accounts with IdC deployed elsewhere should configure that region as primary
+- **IAM Identity Center**: Looked for in every scanned region, since the instance's home region can be any of them. A member account cannot see its organization's instance, so the roles and SAML provider Identity Center creates in the account show it there
 
 Metrics from regional services are aggregated across all regions.
 
@@ -225,3 +234,35 @@ silently disappearing, and the normalized artifact carries a matching stub
 entry (with `collection_error_code` and no metric groups) plus an
 `accounts_expected` count. A metric group with no value left in it is left out
 of the normalized artifact.
+
+## Normalized Artifact
+
+The normalized artifact (`artifacts/aws.cloud-posture.json`) follows the
+`evidencepack/cloud-posture@v1` schema. Each account carries the counts behind
+its MFA and access key rotation percentages, `iam.user_count` and
+`iam.access_key_user_count`. A count is 0 when there is nothing to count, and
+the percentage is then left out. `iam.saml_provider_count` counts the SAML
+providers the account trusts directly. It leaves out the one IAM Identity
+Center creates.
+
+The top-level `workforce_sign_in` block describes IAM Identity Center, AWS's
+workforce sign-in service, across the accounts:
+
+- `in_use` is true when any account shows an active organization instance,
+  the roles Identity Center provisions, or the SAML provider it creates. It is
+  false when the instance and role listings answered for every account and
+  found neither. The SAML provider listing is not needed for false.
+- `user_count` is the number of users in the organization instance's
+  directory, when an account could read it.
+- `mfa_source` is `external_idp` when every user has an external ID, and
+  `sign_in_service` when none does, in which case Identity Center's own MFA
+  settings apply. It is `unknown` for a mix, a directory with no users, or
+  when no account could see the instance, and left out when `in_use` is
+  false. Each account's `identity_center.mfa_evidence` in the detailed
+  artifact gives the same answer, with `manual_required` for
+  `sign_in_service`.
+
+When the accounts' evidence cannot decide a value, the value is left out, and
+the run's result names the read that failed. For example, `in_use` is left out
+when an account's instance listing failed and no account shows Identity
+Center.

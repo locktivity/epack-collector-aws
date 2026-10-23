@@ -7,11 +7,35 @@ import "fmt"
 // This follows the evidencepack/cloud-posture@v1 schema specification.
 // Fields are designed to be vendor-agnostic (works for AWS, GCP, Azure).
 type CloudPosture struct {
-	SchemaVersion    string                `json:"schema_version"`
-	CollectedAt      string                `json:"collected_at"`
-	Provider         string                `json:"provider"`
-	AccountsExpected int                   `json:"accounts_expected"`
-	Accounts         []CloudPostureAccount `json:"accounts"`
+	SchemaVersion    string                      `json:"schema_version"`
+	CollectedAt      string                      `json:"collected_at"`
+	Provider         string                      `json:"provider"`
+	AccountsExpected int                         `json:"accounts_expected"`
+	Accounts         []CloudPostureAccount       `json:"accounts"`
+	WorkforceSignIn  CloudPostureWorkforceSignIn `json:"workforce_sign_in,omitzero"`
+}
+
+// CloudPostureWorkforceSignIn describes AWS IAM Identity Center, the
+// workforce sign-in service, across the accounts: whether it is in use, how
+// many users its directory has, and where their MFA is set. A value the
+// accounts' evidence cannot decide is left out.
+type CloudPostureWorkforceSignIn struct {
+	InUse     *bool  `json:"in_use,omitempty"`
+	UserCount *int   `json:"user_count,omitempty"`
+	MFASource string `json:"mfa_source,omitempty"`
+}
+
+// mfaSourceSignInService is the normalized mfa_source when Identity Center
+// sets its users' MFA itself, which the detailed mfa_evidence reports as
+// manual_required.
+const mfaSourceSignInService = "sign_in_service"
+
+// mfaSource maps a detailed mfa_evidence value to the normalized mfa_source.
+func mfaSource(evidence string) string {
+	if evidence == mfaEvidenceManualRequired {
+		return mfaSourceSignInService
+	}
+	return evidence
 }
 
 // CloudPostureAccount contains normalized metrics for a single cloud account.
@@ -34,11 +58,16 @@ type CloudPostureAccount struct {
 // CloudPostureIAM contains normalized IAM metrics. Fields are pointers so an
 // uncollected metric (credential report or root state failed upstream) is
 // omitted from the artifact rather than serialized as a worst-case zero/false.
+// UserCount and AccessKeyUserCount are the users the two percentages are
+// over, and are 0 where a percentage is left out over no users.
 type CloudPostureIAM struct {
 	MFACoveragePct                *float64 `json:"mfa_coverage_pct,omitempty"`
 	RootMFAEnabled                *bool    `json:"root_mfa_enabled,omitempty"`
 	RootAccessProtected           *bool    `json:"root_access_protected,omitempty"`
 	AccessKeyRotationCompliantPct *float64 `json:"access_key_rotation_compliant_pct,omitempty"`
+	UserCount                     *int     `json:"user_count,omitempty"`
+	AccessKeyUserCount            *int     `json:"access_key_user_count,omitempty"`
+	SAMLProviderCount             *int     `json:"saml_provider_count,omitempty"`
 }
 
 // CloudPostureStorage contains normalized storage security metrics, omitted
@@ -103,6 +132,9 @@ var normalizedSources = []struct {
 	{"iam/root_mfa_enabled", []string{"iam/root_mfa_enabled", "iam/root_credentials_present"}},
 	{"iam/root_access_protected", []string{"iam/root_access_protected"}},
 	{"iam/access_key_rotation_compliant_pct", []string{"iam/access_keys_rotated"}},
+	{"iam/user_count", []string{"iam/iam_user_count"}},
+	{"iam/access_key_user_count", []string{"iam/access_key_user_count"}},
+	{"iam/saml_provider_count", []string{"iam/saml_provider_count"}},
 	{"storage/encryption_pct", []string{"s3/default_encryption_enabled"}},
 	{"storage/public_access_blocked_pct", []string{"s3/public_access_blocked"}},
 	{"logging/audit_log_enabled", []string{"account_security/cloudtrail/enabled"}},
@@ -156,7 +188,163 @@ func toCloudPosture(o *Output, gaps *gapLog) *CloudPosture {
 		}
 	}
 
+	posture.WorkforceSignIn = normalizedWorkforceSignIn(o, gaps)
 	return posture
+}
+
+// signal is what one account's evidence shows of a fact: that it holds, that
+// it does not, or neither, because a read failed.
+type signal int
+
+const (
+	signalNo signal = iota
+	signalYes
+	signalUnknown
+)
+
+// unknownBecause is why a value folded from several accounts is left out:
+// the gap of a detailed value, at pointer, or a failed account's error.
+type unknownBecause struct {
+	pointer string
+	err     error
+}
+
+// leaveOut leaves the normalized values at pointers out for u's reason.
+func (u unknownBecause) leaveOut(gaps *gapLog, pointers ...string) {
+	if gaps == nil {
+		return
+	}
+	gaps.rec.Helper()
+	for _, p := range pointers {
+		if u.err != nil {
+			gaps.leaveOutNormalized(u.err, p)
+		} else {
+			gaps.mirror(u.pointer, p)
+		}
+	}
+}
+
+// identityCenterInstanceSignal says whether an account's instance listing
+// found an active organization instance. An account instance or an instance
+// in another status does not count. It is unknown, with the detailed value
+// whose gap says why, when the instance's type could not be read or the
+// listing failed in a region an instance could be in.
+func identityCenterInstanceSignal(acct AccountPosture, at at) (signal, string) {
+	idc := acct.IdentityCenter
+	active := idc.Enabled && idc.InstanceStatus == identityCenterActive
+	switch {
+	case active && idc.InstanceType == identityCenterOrganizationInstance:
+		return signalYes, ""
+	case active && idc.InstanceType == "":
+		return signalUnknown, at.p("identity_center", "instance_type")
+	case len(acct.Regions) == 0 || len(idc.RegionsChecked) < len(acct.Regions):
+		return signalUnknown, at.p("identity_center", "enabled")
+	}
+	return signalNo, ""
+}
+
+// normalizedWorkforceSignIn folds the accounts' IAM Identity Center evidence
+// into the normalized workforce_sign_in block. Identity Center is in use when
+// any account shows an active organization instance, the roles Identity
+// Center provisions, or the SAML provider it creates. It is not in use when
+// the instance and role listings answered for every account and found
+// neither, so a policy that cannot list SAML providers still decides it.
+// Otherwise in_use is left out with the gap of a read that failed.
+//
+// The user count and where the users' MFA is set come from the directories
+// of the organization instances the accounts could see. A member account
+// cannot see its organization's instance, so when no account could see one,
+// the user count is left out and mfa_source is unknown, or both are left out
+// with a gap when a read that failed could have found the instance.
+func normalizedWorkforceSignIn(o *Output, gaps *gapLog) CloudPostureWorkforceSignIn {
+	type directory struct {
+		users, withExternalID int
+		read                  bool
+		unread                string
+	}
+	var (
+		inUse                         bool
+		instanceUnknown, rolesUnknown *unknownBecause
+		stores                        []string
+		directories                   = map[string]*directory{}
+	)
+	for i, acct := range o.Accounts {
+		at := accountAt(i)
+		idc := acct.IdentityCenter
+		switch instance, why := identityCenterInstanceSignal(acct, at); instance {
+		case signalYes:
+			inUse = true
+			d := directories[idc.IdentityStoreID]
+			if d == nil {
+				d = &directory{}
+				directories[idc.IdentityStoreID] = d
+				stores = append(stores, idc.IdentityStoreID)
+			}
+			switch {
+			case d.read:
+			case idc.MFAEvidence != "":
+				d.read, d.users, d.withExternalID = true, idc.UserCount, idc.ExternalIDUserCount
+			case d.unread == "":
+				d.unread = at.p("identity_center", "user_count")
+			}
+		case signalUnknown:
+			if instanceUnknown == nil {
+				instanceUnknown = &unknownBecause{pointer: why}
+			}
+		}
+		switch roles := acct.IAM.IdentityCenterRoleCount; {
+		case roles == nil:
+			if rolesUnknown == nil {
+				rolesUnknown = &unknownBecause{pointer: at.p("iam", "identity_center_role_count")}
+			}
+		case *roles > 0:
+			inUse = true
+		}
+		if providers := acct.IAM.IdentityCenterSAMLProviderCount; providers != nil && *providers > 0 {
+			inUse = true
+		}
+	}
+	for _, failed := range o.FailedAccounts {
+		if instanceUnknown == nil {
+			instanceUnknown = &unknownBecause{err: failed.err}
+		}
+	}
+
+	var out CloudPostureWorkforceSignIn
+	if !inUse {
+		why := instanceUnknown
+		if why == nil {
+			why = rolesUnknown
+		}
+		if why == nil {
+			out.InUse = boolPtr(false)
+			return out
+		}
+		why.leaveOut(gaps, "/workforce_sign_in/in_use", "/workforce_sign_in/user_count", "/workforce_sign_in/mfa_source")
+		return out
+	}
+
+	out.InUse = boolPtr(true)
+	users, withExternalID := 0, 0
+	for _, store := range stores {
+		d := directories[store]
+		if !d.read {
+			unknownBecause{pointer: d.unread}.leaveOut(gaps, "/workforce_sign_in/user_count", "/workforce_sign_in/mfa_source")
+			return out
+		}
+		users += d.users
+		withExternalID += d.withExternalID
+	}
+	switch {
+	case len(stores) > 0:
+		out.UserCount = intPtr(users)
+		out.MFASource = mfaSource(identityCenterMFAEvidence(users, withExternalID))
+	case instanceUnknown != nil:
+		instanceUnknown.leaveOut(gaps, "/workforce_sign_in/user_count", "/workforce_sign_in/mfa_source")
+	default:
+		out.MFASource = mfaSource(mfaEvidenceUnknown)
+	}
+	return out
 }
 
 // mirrorNormalizedGaps leaves out each of account i's normalized metrics
@@ -184,6 +372,12 @@ func clearNormalized(account *CloudPostureAccount, field string) {
 		account.IAM.RootAccessProtected = nil
 	case "iam/access_key_rotation_compliant_pct":
 		account.IAM.AccessKeyRotationCompliantPct = nil
+	case "iam/user_count":
+		account.IAM.UserCount = nil
+	case "iam/access_key_user_count":
+		account.IAM.AccessKeyUserCount = nil
+	case "iam/saml_provider_count":
+		account.IAM.SAMLProviderCount = nil
 	case "storage/encryption_pct":
 		account.Storage.EncryptionPct = nil
 	case "storage/public_access_blocked_pct":
@@ -216,6 +410,11 @@ func normalizedIAM(iam IAMMetrics) CloudPostureIAM {
 	if iam.CredentialReportEvaluated {
 		out.MFACoveragePct = pctFloat(iam.MFAEnabled)
 		out.AccessKeyRotationCompliantPct = pctFloat(iam.AccessKeysRotated)
+		out.UserCount = intPtr(iam.IAMUserCount)
+		out.AccessKeyUserCount = intPtr(iam.AccessKeyUserCount)
+	}
+	if iam.SAMLProviderCount != nil {
+		out.SAMLProviderCount = intPtr(*iam.SAMLProviderCount)
 	}
 	if iam.RootCredentialStateEvaluated {
 		// An account whose root credentials were removed through centralized

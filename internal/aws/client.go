@@ -58,7 +58,8 @@ type Client interface {
 	ListOrganizationsFeatures(ctx context.Context) (*OrganizationFeatures, error)
 	ListMFADevices(ctx context.Context, userName string) ([]MFADevice, error)
 	GetPasswordPolicy(ctx context.Context) (*PasswordPolicy, error)
-	ListRoles(ctx context.Context, callback func([]Role) error) error
+	ListRoles(ctx context.Context, pathPrefix string, callback func([]Role) error) error
+	ListSAMLProviders(ctx context.Context) ([]SAMLProvider, error)
 
 	// S3
 	ListBuckets(ctx context.Context) ([]Bucket, error)
@@ -87,11 +88,12 @@ type Client interface {
 	GetInspectorSummaryFromSecurityHub(ctx context.Context, region string) (*InspectorSummary, error)
 	ListAccessAnalyzers(ctx context.Context, region string) ([]AccessAnalyzer, error)
 
-	// IAM Identity Center (one instance per account, regional). Caller is
-	// expected to pass the home region; ListIdentityCenterInstances returns nil
-	// for accounts where IdC is not enabled in that region.
+	// IAM Identity Center (one instance per account, regional). The instance
+	// listing answers for one region, so callers probe each region they
+	// scan; it returns an empty slice where the caller sees no instance.
 	ListIdentityCenterInstances(ctx context.Context, region string) ([]IdentityCenterInstance, error)
-	ListIdentityCenterPermissionSets(ctx context.Context, region, instanceARN string, withInternalEnrichment bool) ([]IdentityCenterPermissionSet, error)
+	ListIdentityCenterPermissionSetARNs(ctx context.Context, region, instanceARN string) ([]string, error)
+	DescribeIdentityCenterPermissionSets(ctx context.Context, region, instanceARN string, arns []string, withInternalEnrichment bool) ([]IdentityCenterPermissionSet, error)
 	ListIdentityStoreUsers(ctx context.Context, region, identityStoreID string) ([]IdentityStoreUser, error)
 	ListIdentityStoreGroups(ctx context.Context, region, identityStoreID string) ([]IdentityStoreGroup, error)
 	ListIdentityStoreGroupMembers(ctx context.Context, region, identityStoreID string, groups []IdentityStoreGroup) ([]IdentityStoreGroup, error)
@@ -856,10 +858,15 @@ func (c *AWSClient) GetPasswordPolicy(ctx context.Context) (*PasswordPolicy, err
 	return pp, nil
 }
 
-// ListRoles lists IAM roles and checks for external trust.
-func (c *AWSClient) ListRoles(ctx context.Context, callback func([]Role) error) error {
+// ListRoles lists IAM roles whose path starts with pathPrefix, or every role
+// when pathPrefix is empty, passing each page to callback.
+func (c *AWSClient) ListRoles(ctx context.Context, pathPrefix string, callback func([]Role) error) error {
 	iamClient := iam.NewFromConfig(c.cfg)
-	paginator := iam.NewListRolesPaginator(iamClient, &iam.ListRolesInput{})
+	input := &iam.ListRolesInput{}
+	if pathPrefix != "" {
+		input.PathPrefix = aws.String(pathPrefix)
+	}
+	paginator := iam.NewListRolesPaginator(iamClient, input)
 
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
@@ -886,6 +893,21 @@ func (c *AWSClient) ListRoles(ctx context.Context, callback func([]Role) error) 
 	}
 
 	return nil
+}
+
+// ListSAMLProviders lists the account's SAML identity providers. IAM answers
+// with all of them at once.
+func (c *AWSClient) ListSAMLProviders(ctx context.Context) ([]SAMLProvider, error) {
+	output, err := iam.NewFromConfig(c.cfg).ListSAMLProviders(ctx, &iam.ListSAMLProvidersInput{})
+	if err != nil {
+		return nil, fmt.Errorf("listing SAML providers: %w", err)
+	}
+	providers := make([]SAMLProvider, 0, len(output.SAMLProviderList))
+	for _, p := range output.SAMLProviderList {
+		arn := aws.ToString(p.Arn)
+		providers = append(providers, SAMLProvider{ARN: arn, Name: arn[strings.LastIndex(arn, "/")+1:]})
+	}
+	return providers, nil
 }
 
 // ListBuckets lists all S3 buckets with their security settings. Each
