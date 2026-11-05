@@ -48,8 +48,8 @@ func (c *Collector) collectECSMetrics(ctx context.Context, client *aws.AWSClient
 			row.missing.add(scalingErr, "auto_scaled", "min_capacity", "max_capacity", "scaling_policy_types", "scaling_metrics")
 			if sc, ok := byService[s.Cluster+"/"+s.Name]; ok {
 				row.AutoScaled = true
-				row.MinCapacity = sc.MinCapacity
-				row.MaxCapacity = sc.MaxCapacity
+				row.MinCapacity = &sc.MinCapacity
+				row.MaxCapacity = &sc.MaxCapacity
 				row.ScalingPolicyTypes = sc.PolicyTypes
 				row.ScalingMetrics = sc.Metrics
 			}
@@ -102,7 +102,7 @@ func aggregateECS(services []aws.ECSService, scaling []aws.ECSServiceScaling, sc
 		floor := s.DesiredCount
 		if scaled {
 			out.ServicesWithAutoscalingCount++
-			if len(sc.PolicyTypes) > 0 {
+			if sc.PolicyScales {
 				// The chain complete: capacity bounds registered and a policy
 				// that actually moves the service between them.
 				out.ServicesWithScalingPolicyCount++

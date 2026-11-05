@@ -22,9 +22,12 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 // content type and body for the request and the body it sent.
 func testClient(answer func(r *http.Request, body string) (contentType, payload string)) *AWSClient {
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		raw, err := io.ReadAll(r.Body)
-		if err != nil {
-			return nil, err
+		var raw []byte
+		if r.Body != nil {
+			var err error
+			if raw, err = io.ReadAll(r.Body); err != nil {
+				return nil, err
+			}
 		}
 		contentType, payload := answer(r, string(raw))
 		return &http.Response{

@@ -103,7 +103,7 @@ func aggregateLoadBalancers(lbs []aws.LoadBalancer) *LoadBalancerMetrics {
 				switch l.Protocol {
 				case "TLS":
 					out.NLBTLSListenerCount++
-				case "TCP", "UDP", "TCP_UDP":
+				case "TCP", "UDP", "TCP_UDP", "QUIC", "TCP_QUIC":
 					out.NLBTCPPassthroughListenerCount++
 				}
 			}

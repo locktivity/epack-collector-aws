@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"cmp"
 	"context"
 	"sort"
 	"strings"
@@ -14,6 +15,9 @@ type rdsMetricsWithCounts struct {
 	RDSMetrics
 	instanceCount int
 	clusterCount  int
+	// clusterMembers counts the instances of a listed DB cluster. Each
+	// counts as part of its cluster's database.
+	clusterMembers int
 
 	// Raw counts the percentages come from once every region is merged.
 	encrypted          int
@@ -39,6 +43,10 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 
 	result.instanceCount = len(instances)
 	result.clusterCount = len(clusters)
+	listedClusters := make(map[string]bool, len(clusters))
+	for _, cl := range clusters {
+		listedClusters[cl.DBClusterIdentifier] = true
+	}
 
 	c.collectRDSEventAlerting(ctx, client, region, &result.RDSMetrics)
 
@@ -87,6 +95,10 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 			result.DBPortIngressUnevaluatedCount++
 			continue
 		}
+		if verdict.openErr != nil {
+			result.missing.addPartial(verdict.openErr, 1, "db_port_open_to_internet_count")
+			continue
+		}
 		if verdict.openToInternet {
 			result.DBPortOpenToInternetCount++
 		}
@@ -108,6 +120,10 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 			if verdict.evaluated {
 				row.DBPortOpenToInternet = boolPtr(verdict.openToInternet)
 				row.DBPortIngressSources = verdict.sources
+				if verdict.openErr != nil {
+					row.DBPortOpenToInternet = nil
+					row.missing.add(verdict.openErr, "db_port_open_to_internet")
+				}
 			} else if ingressErr != nil && inst.EndpointPort != 0 && len(inst.VpcSecurityGroupIDs) > 0 {
 				row.missing.add(ingressErr, "db_port_open_to_internet", "db_port_ingress_sources")
 			}
@@ -120,10 +136,18 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 	}
 
 	for _, inst := range instances {
-		result.countDatabase(inst.StorageEncrypted, inst.DeletionProtection, inst.MultiAZ, inst.BackupRetentionPeriod)
 		if inst.PubliclyAccessible {
 			result.publicAccess++
 		}
+		// Multi-AZ, deletion protection, encryption and backup retention
+		// do not apply to an instance in a DB cluster. The cluster manages
+		// them, so the cluster is the database counted. This holds for
+		// Aurora, Multi-AZ DB clusters, DocumentDB and Neptune.
+		if inst.DBClusterIdentifier != "" && listedClusters[inst.DBClusterIdentifier] {
+			result.clusterMembers++
+			continue
+		}
+		result.countDatabase(inst.StorageEncrypted, inst.DeletionProtection, inst.MultiAZ, inst.BackupRetentionPeriod)
 	}
 	for _, cluster := range clusters {
 		result.countDatabase(cluster.StorageEncrypted, cluster.DeletionProtection, cluster.MultiAZ, cluster.BackupRetentionPeriod)
@@ -153,7 +177,7 @@ func (m *rdsMetricsWithCounts) countDatabase(encrypted, deletionProtection, mult
 // finalize computes the percentages and the minimum retention from the
 // merged counts. Each is nil over an empty population.
 func (m *rdsMetricsWithCounts) finalize() {
-	total := m.instanceCount + m.clusterCount
+	total := m.instanceCount - m.clusterMembers + m.clusterCount
 	m.DatabaseCount = total
 	m.InstanceCount = m.instanceCount
 	m.EncryptedAtRest = pctOf(m.encrypted, total)
@@ -183,9 +207,13 @@ func countWithSecurityGroups(instances []aws.DBInstance) int {
 	return n
 }
 
+// dbPortIngress is an instance's database-port ingress. openErr is set when
+// the port is not known to be open and a rule covering it allows a prefix
+// list that could not be read.
 type dbPortIngress struct {
 	evaluated      bool
 	openToInternet bool
+	openErr        error
 	sources        []string
 }
 
@@ -218,26 +246,64 @@ func (c *Collector) collectDBPortIngress(ctx context.Context, client *aws.AWSCli
 		}
 	}
 
-	return evaluateDBPortIngress(instances, sgs), sgErr
+	lists := c.readDBPortPrefixLists(ctx, client, region, instances, sgs)
+	return evaluateDBPortIngress(instances, sgs, lists), sgErr
+}
+
+// readDBPortPrefixLists reads the entries of each managed prefix list that a
+// rule covering an instance's listening port allows.
+func (c *Collector) readDBPortPrefixLists(ctx context.Context, client *aws.AWSClient, region string, instances []aws.DBInstance, sgs []aws.SecurityGroup) map[string]prefixListRead {
+	byID := securityGroupsByID(sgs)
+	lists := map[string]prefixListRead{}
+	for _, inst := range instances {
+		if inst.EndpointPort == 0 {
+			continue
+		}
+		for _, groupID := range inst.VpcSecurityGroupIDs {
+			for _, rule := range byID[groupID].IngressRules {
+				if !rule.CoversTCPPort(inst.EndpointPort) {
+					continue
+				}
+				for _, id := range rule.PrefixListIDs {
+					if _, seen := lists[id]; seen {
+						continue
+					}
+					cidrs, err := client.GetManagedPrefixListCIDRs(ctx, region, id)
+					if err != nil {
+						c.warn("region %s: failed to read prefix list %s, so it is unknown whether the databases whose port it is allowed on are open to the internet: %v", region, id, err)
+					}
+					lists[id] = prefixListRead{cidrs: cidrs, err: err}
+				}
+			}
+		}
+	}
+	return lists
 }
 
 // evaluateDBPortIngress resolves, per instance, which sources the security
 // groups allow on the instance's listening port. An instance with no endpoint
 // port or with an attached group missing from sgs stays unevaluated.
-func evaluateDBPortIngress(instances []aws.DBInstance, sgs []aws.SecurityGroup) map[string]dbPortIngress {
-	byID := make(map[string]aws.SecurityGroup, len(sgs))
-	for _, sg := range sgs {
-		byID[sg.GroupID] = sg
-	}
-
+func evaluateDBPortIngress(instances []aws.DBInstance, sgs []aws.SecurityGroup, lists map[string]prefixListRead) map[string]dbPortIngress {
+	byID := securityGroupsByID(sgs)
 	out := make(map[string]dbPortIngress, len(instances))
 	for _, inst := range instances {
-		out[inst.DBInstanceIdentifier] = instanceDBPortIngress(inst, byID)
+		out[inst.DBInstanceIdentifier] = instanceDBPortIngress(inst, byID, lists)
 	}
 	return out
 }
 
-func instanceDBPortIngress(inst aws.DBInstance, byID map[string]aws.SecurityGroup) dbPortIngress {
+func securityGroupsByID(sgs []aws.SecurityGroup) map[string]aws.SecurityGroup {
+	byID := make(map[string]aws.SecurityGroup, len(sgs))
+	for _, sg := range sgs {
+		byID[sg.GroupID] = sg
+	}
+	return byID
+}
+
+// instanceDBPortIngress judges one instance's port. A rule is open to the
+// internet when its own CIDR blocks, or those of a prefix list it allows,
+// include 0.0.0.0/0 or ::/0.
+func instanceDBPortIngress(inst aws.DBInstance, byID map[string]aws.SecurityGroup, lists map[string]prefixListRead) dbPortIngress {
 	if inst.EndpointPort == 0 || len(inst.VpcSecurityGroupIDs) == 0 {
 		return dbPortIngress{}
 	}
@@ -253,22 +319,25 @@ func instanceDBPortIngress(inst aws.DBInstance, byID map[string]aws.SecurityGrou
 			if !rule.CoversTCPPort(inst.EndpointPort) {
 				continue
 			}
-			if rule.IsOpenToWorld() {
-				verdict.openToInternet = true
-			}
+			open, err := ruleOpenToWorld(rule, lists)
+			verdict.openToInternet = verdict.openToInternet || open
+			verdict.openErr = cmp.Or(verdict.openErr, err)
 			for _, source := range rule.CIDRBlocks {
 				if !seen[source] {
 					seen[source] = true
 					verdict.sources = append(verdict.sources, source)
 				}
 			}
-			for _, source := range rule.SourceSGIDs {
+			for _, source := range append(append([]string{}, rule.SourceSGIDs...), rule.PrefixListIDs...) {
 				if !seen[source] {
 					seen[source] = true
 					verdict.sources = append(verdict.sources, source)
 				}
 			}
 		}
+	}
+	if verdict.openToInternet {
+		verdict.openErr = nil
 	}
 	sort.Strings(verdict.sources)
 	return verdict
@@ -322,6 +391,7 @@ func mergeRDSMetrics(a, b rdsMetricsWithCounts) rdsMetricsWithCounts {
 	result := a
 	result.instanceCount += b.instanceCount
 	result.clusterCount += b.clusterCount
+	result.clusterMembers += b.clusterMembers
 	result.encrypted += b.encrypted
 	result.publicAccess += b.publicAccess
 	result.deletionProtection += b.deletionProtection

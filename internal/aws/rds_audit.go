@@ -12,6 +12,9 @@ import (
 type RDSEventSubscription struct {
 	ID      string
 	Enabled bool
+	// Status is RDS's, such as active, or no-permission when RDS can no
+	// longer post to the topic.
+	Status string
 
 	// Empty means everything, twice over: an empty SourceType covers all
 	// source types, and empty EventCategories covers all categories. The
@@ -41,6 +44,7 @@ func (c *AWSClient) ListRDSEventSubscriptions(ctx context.Context, region string
 			subs = append(subs, RDSEventSubscription{
 				ID:               aws.ToString(s.CustSubscriptionId),
 				Enabled:          aws.ToBool(s.Enabled),
+				Status:           aws.ToString(s.Status),
 				SourceType:       aws.ToString(s.SourceType),
 				EventCategories:  s.EventCategoriesList,
 				CoversAllSources: len(s.SourceIdsList) == 0,

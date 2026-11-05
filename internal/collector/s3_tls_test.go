@@ -30,6 +30,26 @@ func TestClassifyTransportEnforcement(t *testing.T) {
 			want: tlsEnforcementEnforced,
 		},
 		{
+			// A trailing * matches across /, so it covers the bucket and
+			// every object in it.
+			name: "every bucket's ARN",
+			document: `{"Statement":[{"Effect":"Deny","Principal":"*","Action":"s3:*",
+				"Resource":"arn:aws:s3:::*","Condition":{"Bool":{"aws:SecureTransport":"false"}}}]}`,
+			want: tlsEnforcementEnforced,
+		},
+		{
+			name: "a bucket name prefix with a trailing wildcard",
+			document: `{"Statement":[{"Effect":"Deny","Principal":"*","Action":"s3:*",
+				"Resource":["arn:aws:s3:::intake","arn:aws:s3:::intake*"],"Condition":{"Bool":{"aws:SecureTransport":"false"}}}]}`,
+			want: tlsEnforcementEnforced,
+		},
+		{
+			name: "another bucket name prefix with a trailing wildcard",
+			document: `{"Statement":[{"Effect":"Deny","Principal":"*","Action":"s3:*",
+				"Resource":"arn:aws:s3:::other*","Condition":{"Bool":{"aws:SecureTransport":"false"}}}]}`,
+			want: tlsEnforcementPartial,
+		},
+		{
 			name: "principal as AWS map with star",
 			document: `{"Statement":[{"Effect":"Deny","Principal":{"AWS":"*"},"Action":"s3:*",
 				"Resource":["arn:aws:s3:::intake","arn:aws:s3:::intake/*"],

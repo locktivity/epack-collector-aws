@@ -14,16 +14,21 @@ import (
 )
 
 // ListSecretsManagerSecrets returns every Secrets Manager secret in the region
-// with the posture-relevant metadata. Secret VALUES are not fetched. The
-// single paginated ListSecrets call returns name, ARN, description, KMS key,
-// rotation config, timestamps, and tags — everything we need.
+// with the posture-relevant metadata, including secrets scheduled for
+// deletion, which ListSecrets returns only with IncludePlannedDeletion. Secret
+// VALUES are not fetched. The single paginated ListSecrets call returns name,
+// ARN, description, KMS key, rotation config, timestamps, and tags. The
+// rotation days and function are kept only while rotation is on, since the
+// rules keep a schedule after rotation is turned off.
 func (c *AWSClient) ListSecretsManagerSecrets(ctx context.Context, region string) ([]SecretsManagerSecret, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	client := secretsmanager.NewFromConfig(cfg)
 
 	var secrets []SecretsManagerSecret
-	paginator := secretsmanager.NewListSecretsPaginator(client, &secretsmanager.ListSecretsInput{})
+	paginator := secretsmanager.NewListSecretsPaginator(client, &secretsmanager.ListSecretsInput{
+		IncludePlannedDeletion: aws.Bool(true),
+	})
 	for paginator.HasMorePages() {
 		out, err := paginator.NextPage(ctx)
 		if err != nil {
@@ -31,22 +36,24 @@ func (c *AWSClient) ListSecretsManagerSecrets(ctx context.Context, region string
 		}
 		for _, s := range out.SecretList {
 			row := SecretsManagerSecret{
-				Name:              aws.ToString(s.Name),
-				ARN:               aws.ToString(s.ARN),
-				Description:       aws.ToString(s.Description),
-				KMSKeyARN:         aws.ToString(s.KmsKeyId),
-				RotationEnabled:   aws.ToBool(s.RotationEnabled),
-				RotationLambdaARN: aws.ToString(s.RotationLambdaARN),
-				NextRotationDate:  s.NextRotationDate,
-				CreatedDate:       s.CreatedDate,
-				LastChangedDate:   s.LastChangedDate,
-				LastAccessedDate:  s.LastAccessedDate,
-				DeletionDate:      s.DeletedDate,
-				PrimaryRegion:     aws.ToString(s.PrimaryRegion),
-				OwningService:     aws.ToString(s.OwningService),
+				Name:             aws.ToString(s.Name),
+				ARN:              aws.ToString(s.ARN),
+				Description:      aws.ToString(s.Description),
+				KMSKeyARN:        aws.ToString(s.KmsKeyId),
+				RotationEnabled:  aws.ToBool(s.RotationEnabled),
+				NextRotationDate: s.NextRotationDate,
+				CreatedDate:      s.CreatedDate,
+				LastChangedDate:  s.LastChangedDate,
+				LastAccessedDate: s.LastAccessedDate,
+				DeletionDate:     s.DeletedDate,
+				PrimaryRegion:    aws.ToString(s.PrimaryRegion),
+				OwningService:    aws.ToString(s.OwningService),
 			}
-			if s.RotationRules != nil {
-				row.RotationDays = aws.ToInt64(s.RotationRules.AutomaticallyAfterDays)
+			if row.RotationEnabled {
+				row.RotationLambdaARN = aws.ToString(s.RotationLambdaARN)
+				if s.RotationRules != nil {
+					row.RotationDays = aws.ToInt64(s.RotationRules.AutomaticallyAfterDays)
+				}
 			}
 			if len(s.Tags) > 0 {
 				row.Tags = make(map[string]string, len(s.Tags))

@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -158,7 +159,7 @@ func TestEvaluateDBPortIngress(t *testing.T) {
 			{Protocol: "tcp", FromPort: 443, ToPort: 443, CIDRBlocks: []string{"0.0.0.0/0"}},
 		}}
 
-		got := evaluateDBPortIngress([]aws.DBInstance{prod}, []aws.SecurityGroup{sg})["prod-db"]
+		got := evaluateDBPortIngress([]aws.DBInstance{prod}, []aws.SecurityGroup{sg}, nil)["prod-db"]
 
 		if !got.evaluated {
 			t.Fatal("verdict should be evaluated")
@@ -176,7 +177,7 @@ func TestEvaluateDBPortIngress(t *testing.T) {
 			{Protocol: "-1", CIDRBlocks: []string{"0.0.0.0/0"}},
 		}}
 
-		got := evaluateDBPortIngress([]aws.DBInstance{prod}, []aws.SecurityGroup{sg})["prod-db"]
+		got := evaluateDBPortIngress([]aws.DBInstance{prod}, []aws.SecurityGroup{sg}, nil)["prod-db"]
 
 		if !got.openToInternet {
 			t.Error("an all-protocol world rule covers every port, including the database port")
@@ -187,7 +188,7 @@ func TestEvaluateDBPortIngress(t *testing.T) {
 	})
 
 	t.Run("an attached group missing from the fetch leaves the instance unevaluated", func(t *testing.T) {
-		got := evaluateDBPortIngress([]aws.DBInstance{prod}, nil)["prod-db"]
+		got := evaluateDBPortIngress([]aws.DBInstance{prod}, nil, nil)["prod-db"]
 
 		if got.evaluated {
 			t.Error("reachability without the attached group is unproven, not closed")
@@ -198,7 +199,7 @@ func TestEvaluateDBPortIngress(t *testing.T) {
 		pending := aws.DBInstance{DBInstanceIdentifier: "creating-db", VpcSecurityGroupIDs: []string{"sg-db"}}
 		sg := aws.SecurityGroup{GroupID: "sg-db"}
 
-		got := evaluateDBPortIngress([]aws.DBInstance{pending}, []aws.SecurityGroup{sg})["creating-db"]
+		got := evaluateDBPortIngress([]aws.DBInstance{pending}, []aws.SecurityGroup{sg}, nil)["creating-db"]
 
 		if got.evaluated {
 			t.Error("no port means no reachability question to answer yet")
@@ -214,11 +215,24 @@ func TestEvaluateDBPortIngress(t *testing.T) {
 			{Protocol: "tcp", FromPort: 0, ToPort: 65535, CIDRBlocks: []string{"10.0.0.0/16"}, SourceSGIDs: []string{"sg-app"}},
 		}}
 
-		got := evaluateDBPortIngress([]aws.DBInstance{inst}, []aws.SecurityGroup{sgA, sgB})["prod-db"]
+		got := evaluateDBPortIngress([]aws.DBInstance{inst}, []aws.SecurityGroup{sgA, sgB}, nil)["prod-db"]
 
 		want := []string{"10.0.0.0/16", "sg-app"}
 		if len(got.sources) != 2 || got.sources[0] != want[0] || got.sources[1] != want[1] {
 			t.Errorf("sources = %v, want %v", got.sources, want)
+		}
+	})
+
+	t.Run("a prefix list that could not be read leaves the port's exposure unknown", func(t *testing.T) {
+		sg := aws.SecurityGroup{GroupID: "sg-db", IngressRules: []aws.SecurityGroupRule{
+			{Protocol: "tcp", FromPort: 5432, ToPort: 5432, PrefixListIDs: []string{"pl-office"}},
+		}}
+		lists := map[string]prefixListRead{"pl-office": {err: errors.New("AccessDenied")}}
+
+		got := evaluateDBPortIngress([]aws.DBInstance{prod}, []aws.SecurityGroup{sg}, lists)["prod-db"]
+
+		if !got.evaluated || got.openToInternet || got.openErr == nil {
+			t.Errorf("verdict = %+v, want evaluated with the exposure unknown", got)
 		}
 	})
 
@@ -227,7 +241,7 @@ func TestEvaluateDBPortIngress(t *testing.T) {
 			{Protocol: "tcp", FromPort: 443, ToPort: 443, CIDRBlocks: []string{"10.0.0.0/16"}},
 		}}
 
-		got := evaluateDBPortIngress([]aws.DBInstance{prod}, []aws.SecurityGroup{sg})["prod-db"]
+		got := evaluateDBPortIngress([]aws.DBInstance{prod}, []aws.SecurityGroup{sg}, nil)["prod-db"]
 
 		if !got.evaluated || got.sources == nil || len(got.sources) != 0 {
 			t.Errorf("verdict = %+v, want evaluated with an empty, non-nil source list", got)

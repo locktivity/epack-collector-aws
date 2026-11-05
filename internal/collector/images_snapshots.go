@@ -71,15 +71,19 @@ func (c *Collector) collectStoredImageMetrics(ctx context.Context, client *aws.A
 	out.PublicSnapshots = []PublicResourceRow{}
 	out.PublicImages = []PublicResourceRow{}
 	for _, s := range public {
-		out.PublicSnapshots = append(out.PublicSnapshots, PublicResourceRow{ID: s.SnapshotID, Region: region, Encrypted: s.Encrypted})
+		out.PublicSnapshots = append(out.PublicSnapshots, PublicResourceRow{ID: s.SnapshotID, Region: region, Encrypted: boolPtr(s.Encrypted)})
 	}
 	for _, img := range images {
 		if !img.Public {
 			continue
 		}
-		out.PublicImages = append(out.PublicImages, PublicResourceRow{
-			ID: img.ImageID, Name: img.Name, Region: region, Encrypted: !img.HasUnencryptedVolume, CreatedAt: img.CreateDate,
-		})
+		row := PublicResourceRow{ID: img.ImageID, Name: img.Name, Region: region, CreatedAt: img.CreateDate}
+		// An image with no EBS volume has nothing EBS encryption covers, so
+		// its row leaves encrypted out.
+		if img.HasEBSVolume {
+			row.Encrypted = boolPtr(!img.HasUnencryptedVolume)
+		}
+		out.PublicImages = append(out.PublicImages, row)
 	}
 	return out, nil
 }

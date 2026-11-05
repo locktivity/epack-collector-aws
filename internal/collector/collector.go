@@ -183,9 +183,10 @@ func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig
 		posture := NewAccountPosture(accountID, nil)
 		c.collectAccountAlias(accountCtx, client, accountID, at, posture)
 		c.collectGlobalMetrics(steps, client, accountID, at, posture, level)
-		posture.AccountSecurity = *c.collectCloudTrailOnly(steps.next("cloudtrail", "CloudTrail trails"), client, accountID, at, &posture.S3, level)
+		posture.AccountSecurity = *c.collectCloudTrailOnly(steps.next("cloudtrail", "CloudTrail trails"), client, err, accountID, at, &posture.S3, level)
 		c.gaps.leaveOut(err, at.p("regions"))
 		c.leaveOutRegional(err, at)
+		posture.inspector = inspectorScan{err: err}
 		normalizeForLevel(posture, level)
 		return posture, nil
 	}
@@ -245,12 +246,14 @@ func (c *Collector) leaveOutRegional(err error, at at) {
 	}
 }
 
-// collectCloudTrailOnly collects the account security surfaces that need no
-// region list: CloudTrail and its delivery buckets.
-func (c *Collector) collectCloudTrailOnly(ctx context.Context, client *aws.AWSClient, accountID string, at at, s3 *S3Metrics, level componentsdk.Level) *AccountSecurity {
+// collectCloudTrailOnly collects the account security surfaces that can be
+// read without a region list: CloudTrail in the client's own region and its
+// delivery buckets. regionsErr is why the region list could not be read, so
+// a trail in another region could be missed.
+func (c *Collector) collectCloudTrailOnly(ctx context.Context, client *aws.AWSClient, regionsErr error, accountID string, at at, s3 *S3Metrics, level componentsdk.Level) *AccountSecurity {
 	security := &AccountSecurity{}
 	trailsAt := at.sub("account_security", "cloudtrail")
-	trails := c.collectCloudTrailStatus(ctx, client, accountID, trailsAt, &security.CloudTrail, level)
+	trails := c.collectCloudTrailStatus(ctx, client, nil, regionsErr, accountID, trailsAt, &security.CloudTrail, level)
 	c.resolveTrailBucketRetention(ctx, client, accountID, trailsAt, trails, s3, &security.CloudTrail)
 	c.recordCloudTrailUnread(trailsAt, &security.CloudTrail)
 	return security
@@ -330,10 +333,15 @@ func (c *Collector) getRegions(ctx context.Context, client *aws.AWSClient) ([]st
 // CloudFront, each as a step. level is passed through to per-surface
 // collectors that gate audit / internal fields.
 func (c *Collector) collectGlobalMetrics(steps *stepper, client *aws.AWSClient, accountID string, at at, posture *AccountPosture, level componentsdk.Level) {
-	posture.IAM = *c.collectIAMMetrics(steps.next("iam", "IAM users, roles, and password policy"), client, accountID, at, level)
+	iamCtx := steps.next("iam", "IAM users, roles, and password policy")
+	posture.IAM = *c.collectIAMMetrics(iamCtx, client, accountID, at, level)
+	if !c.config.SkipAccessPosture {
+		posture.admins = c.collectIAMAdmins(iamCtx, client, posture.IAM.report, accountID)
+	}
 	posture.S3 = *c.collectS3Metrics(steps.next("s3", "S3 buckets"), client, accountID, at, level)
 	posture.CloudFront = *c.collectCloudFrontMetrics(steps.next("cloudfront", "CloudFront distributions"), client, accountID, level)
 	c.recordUnread(at.sub("cloudfront"), posture.CloudFront.missing)
+	recordRowsUnread(c, at.sub("cloudfront", "distributions"), posture.CloudFront.Distributions, func(r *CloudFrontDistributionRow) unread { return r.missing })
 }
 
 // regionScan holds one region's raw surface results and the warnings emitted
@@ -666,6 +674,7 @@ func (c *Collector) recordRegionalUnread(at at, p *AccountPosture) {
 	recordRowsUnread(c, at.sub("rds", "instances"), p.RDS.Instances, func(r *RDSInstance) unread { return r.missing })
 	c.recordUnread(at.sub("network"), p.Network.missing)
 	recordRowsUnread(c, at.sub("network", "vpcs"), p.Network.VPCs, func(r *VPCSummary) unread { return r.missing })
+	recordRowsUnread(c, at.sub("network", "security_groups"), p.Network.SecurityGroups, func(r *SecurityGroupSummary) unread { return r.missing })
 	c.recordUnread(at.sub("lambda"), p.Lambda.missing)
 	recordRowsUnread(c, at.sub("lambda", "functions"), p.Lambda.Functions, func(r *LambdaFunctionRow) unread { return r.missing })
 	c.recordUnread(at.sub("ec2"), p.EC2.missing)
@@ -696,7 +705,7 @@ func (c *Collector) collectSecurityServices(steps *stepper, client *aws.AWSClien
 	}
 
 	// collectAccountSecurity handles per-service warnings internally
-	posture.AccountSecurity = *c.collectAccountSecurity(steps, client, primaryRegion, regions, posture.AccountID, at, &posture.S3, level)
+	posture.AccountSecurity = *c.collectAccountSecurity(steps, client, primaryRegion, regions, posture.AccountID, at, &posture.S3, &posture.inspector, level)
 
 	posture.IdentityCenter = c.collectIdentityCenter(steps.next("identity_center", "IAM Identity Center"), client, regions, posture.AccountID, at, level)
 }

@@ -1,9 +1,12 @@
 package collector
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
+	"github.com/locktivity/epack/componentsdk"
+	"github.com/locktivity/epack/componentsdk/collectortest"
 )
 
 func TestAggregateSES(t *testing.T) {
@@ -101,5 +104,58 @@ func TestMergeSESMetricsSumsAcrossRegions(t *testing.T) {
 	}
 	if len(got.ConfigurationSets) != 1 || len(got.Identities) != 1 {
 		t.Errorf("rows = %d sets and %d identities, want 1 each", len(got.ConfigurationSets), len(got.Identities))
+	}
+}
+
+// runWithSecondRegion runs the kit account over its own region and region,
+// answering every surface in region except the operations in unanswered.
+func runWithSecondRegion(t *testing.T, region string, unanswered ...string) (Output, componentsdk.InProcessResult) {
+	t.Helper()
+	isolateAWSEnvironment(t)
+	var second []collectortest.Response
+	for _, r := range emptyRegionResponses(region) {
+		if !slices.Contains(unanswered, r.Operation) {
+			second = append(second, r)
+		}
+	}
+	cfg := kitConfig()
+	cfg["regions"] = []any{kitRegion, region}
+	res := runKit(t, cfg, kitSecrets(), append(noIdentityCenterResponses(kitCredentialReport), second...))
+	if res.ExitCode != 0 {
+		t.Fatalf("run failed with exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	var out Output
+	decodeArtifact(t, res, awsPath, &out)
+	if len(out.Accounts) != 1 {
+		t.Fatalf("accounts = %d, want 1", len(out.Accounts))
+	}
+	return out, res
+}
+
+// SES has no endpoint in some regions an account can enable, and holds no
+// configuration sets or identities there. The other regions' sets and
+// identities still count.
+func TestSES_RegionWithoutEndpointKeepsOtherRegions(t *testing.T) {
+	for _, tc := range []struct {
+		region     string
+		unanswered []string
+	}{
+		{"ap-east-1", []string{"aws.sesv2.ListConfigurationSets", "aws.sesv2.ListEmailIdentities"}},
+		{"ap-east-2", []string{"aws.sesv2.ListConfigurationSets", "aws.sesv2.ListEmailIdentities"}},
+		{"ap-southeast-6", []string{"aws.sesv2.ListConfigurationSets", "aws.sesv2.ListEmailIdentities"}},
+		{"mx-central-1", []string{"aws.sesv2.ListConfigurationSets", "aws.sesv2.ListEmailIdentities"}},
+		{"eu-west-1", nil},
+	} {
+		t.Run(tc.region, func(t *testing.T) {
+			out, res := runWithSecondRegion(t, tc.region, tc.unanswered...)
+			ses := out.Accounts[0].SES
+			if ses.ConfigurationSetCount != 1 || ses.ConfigurationSetsRequiringTLSCount != 1 || ses.IdentityCount != 1 || ses.IdentitiesRequiringTLSCount != 1 {
+				t.Errorf("configuration_set_count = %d, configuration_sets_requiring_tls_count = %d, identity_count = %d, identities_requiring_tls_count = %d; want 1 each",
+					ses.ConfigurationSetCount, ses.ConfigurationSetsRequiringTLSCount, ses.IdentityCount, ses.IdentitiesRequiringTLSCount)
+			}
+			if g := gapAt(res, awsPath, "/accounts/0/ses"); g != nil {
+				t.Errorf("/accounts/0/ses is left out as %s", g.Code)
+			}
+		})
 	}
 }

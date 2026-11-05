@@ -28,6 +28,10 @@ const (
 	identityCenterActive               = "ACTIVE"
 )
 
+// identityCenterOutsideRegions is why the values an instance sets are left
+// out when the config lists the regions and none of them has an instance.
+var identityCenterOutsideRegions = notRead("An IAM Identity Center instance is listed with ListInstances in the Region where it was enabled, and that Region may not be one of the regions in the config.")
+
 // Where Identity Center users' MFA is set, as mfa_evidence reports it.
 const (
 	mfaEvidenceExternalIdP    = "external_idp"
@@ -41,8 +45,9 @@ const (
 // organization instance, only an account instance of its own. When the
 // listing fails in every region, the whole status is left out. When it fails
 // in some and no instance turns up in the others, the values an instance
-// there would set are left out with a partial gap. A narrower failure leaves
-// out only what it covers.
+// there would set are left out with a partial gap. When the config lists the
+// regions and none of them has an instance, those values are left out as not
+// read. A narrower failure leaves out only what it covers.
 //
 // At audit, the full access model is surfaced: users, groups with member
 // edges, permission sets with their provisioned accounts, and the account
@@ -61,6 +66,12 @@ func (c *Collector) collectIdentityCenter(ctx context.Context, client idcClient,
 		status.missing.addPartial(err, failed, "enabled", "user_count", "external_id_user_count", "group_count", "permission_set_count")
 		if audit {
 			status.missing.addPartial(err, failed, "users", "groups", "permission_sets", "account_assignments")
+		}
+		if len(c.config.Regions) > 0 {
+			status.missing.add(identityCenterOutsideRegions.err, "enabled", "user_count", "external_id_user_count", "group_count", "permission_set_count")
+			if audit {
+				status.missing.add(identityCenterOutsideRegions.err, "users", "groups", "permission_sets", "account_assignments")
+			}
 		}
 		c.recordUnread(idcAt, status.missing)
 		return status
@@ -161,8 +172,11 @@ func (c *Collector) collectIdentityCenter(ctx context.Context, client idcClient,
 }
 
 // findIdentityCenterInstance lists the instances in each region and returns
-// the one to report: the first active one in region order, or else the
-// first. It records the regions whose listing answered in status, and
+// the one to report. That is an active instance another account owns, then
+// the first active one in region order, or else the first. A delegated
+// administrator can hold an account instance of its own beside the
+// organization instance, and only the organization instance has permission
+// sets. It records the regions whose listing answered in status, and
 // returns whether it found an instance, how many regions failed, and the
 // first failure.
 func (c *Collector) findIdentityCenterInstance(ctx context.Context, client idcClient, regions []string, accountID string, status *IdentityCenterStatus) (aws.IdentityCenterInstance, bool, int, error) {
@@ -207,11 +221,18 @@ func (c *Collector) findIdentityCenterInstance(ctx context.Context, client idcCl
 	if len(found) == 0 {
 		return aws.IdentityCenterInstance{}, false, failed, firstErr
 	}
-	report := found[0]
+	report, rank := found[0], 0
 	for _, inst := range found {
-		if inst.Status == identityCenterActive {
-			report = inst
-			break
+		r := 0
+		switch {
+		case inst.Status != identityCenterActive:
+		case inst.OwnerAccountID != "" && inst.OwnerAccountID != accountID:
+			r = 2
+		default:
+			r = 1
+		}
+		if r > rank {
+			report, rank = inst, r
 		}
 	}
 	if len(found) > 1 {

@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -73,6 +74,8 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, acc
 	} else {
 		c.processCredentialReport(report, metrics)
 		metrics.CredentialReportEvaluated = true
+		metrics.report = report
+		metrics.usage = credentialUsage(report, c.now())
 	}
 
 	summary, summaryErr := client.GetAccountSummary(ctx)
@@ -195,7 +198,9 @@ var rootStateFlags = []string{
 // resolveRootState sets the root user's credential state from the account
 // summary, or failing that from the credential report's root row. The report
 // cannot say whether the root password exists, so a flag that depends on it
-// is left out when only the report answered.
+// is left out when only the report answered. The report's active columns are
+// false for an inactive key as well as for no key, so a false key or
+// certificate flag is left out too.
 func (c *Collector) resolveRootState(metrics *IAMMetrics, report *aws.CredentialReport, summary *aws.AccountSummary, summaryErr, reportErr error, iamAt at) {
 	if summary != nil {
 		processRootAccountSummary(summary, metrics)
@@ -217,6 +222,12 @@ func (c *Collector) resolveRootState(metrics *IAMMetrics, report *aws.Credential
 	metrics.RootAccessKeysExist = root.HasAccessKeys()
 	metrics.RootSigningCertificatesPresent = root.HasSigningCertificates()
 	c.gaps.leaveOut(summaryErr, iamAt.p("root_password_present"))
+	if !metrics.RootAccessKeysExist {
+		c.gaps.leaveOut(summaryErr, iamAt.p("root_access_keys_exist"))
+	}
+	if !metrics.RootSigningCertificatesPresent {
+		c.gaps.leaveOut(summaryErr, iamAt.p("root_signing_certificates_present"))
+	}
 	metrics.RootCredentialsPresent = metrics.RootAccessKeysExist || metrics.RootSigningCertificatesPresent
 	if !metrics.RootCredentialsPresent {
 		c.gaps.leaveOut(summaryErr, iamAt.p("root_credentials_present"))
@@ -269,7 +280,8 @@ func credentialReportErrorCode(err error) string {
 // be unit-tested directly without iterating the report.
 func credentialReportToInternal(report *aws.CredentialReport) *IAMCredentialReport {
 	out := &IAMCredentialReport{
-		Users: make([]IAMCredentialReportUser, 0, len(report.Users)),
+		GeneratedAt: formatRFC3339(report.GeneratedTime),
+		Users:       make([]IAMCredentialReportUser, 0, len(report.Users)),
 	}
 	for _, u := range report.Users {
 		out.Users = append(out.Users, credentialReportUserToInternal(u))
@@ -284,12 +296,18 @@ func credentialReportToInternal(report *aws.CredentialReport) *IAMCredentialRepo
 // the literal string "N/A" as a sentinel for fields that don't apply (e.g.,
 // region/service on a key that has never been used); normalizeNA collapses
 // those to empty strings so omitempty drops them from the artifact too,
-// leaving the absence semantic clean.
+// leaving the absence semantic clean. The root account's row has
+// not_supported in the password_enabled column, so its PasswordEnabled is
+// left nil.
 func credentialReportUserToInternal(u aws.CredentialReportUser) IAMCredentialReportUser {
+	var passwordEnabled *bool
+	if !u.IsRootUser() {
+		passwordEnabled = boolPtr(u.PasswordEnabled)
+	}
 	return IAMCredentialReportUser{
 		UserName:                  u.User,
 		UserCreationTime:          formatRFC3339(&u.UserCreationTime),
-		PasswordEnabled:           u.PasswordEnabled,
+		PasswordEnabled:           passwordEnabled,
 		PasswordLastUsed:          formatRFC3339(u.PasswordLastUsed),
 		PasswordLastChanged:       formatRFC3339(u.PasswordLastChanged),
 		PasswordNextRotation:      formatRFC3339(u.PasswordNextRotation),
@@ -662,13 +680,14 @@ func hasHardwareMFADevice(devices []aws.MFADevice) bool {
 }
 
 // isHardwareMFASerial classifies IAM MFA device serials.
-// Virtual MFA devices use the IAM :mfa/ ARN prefix; hardware OTP devices use
-// vendor serials, and FIDO/U2F devices use the IAM :u2f/ ARN prefix.
+// Virtual MFA devices use the IAM :mfa/ ARN prefix and SMS devices the
+// :sms-mfa/ prefix. Hardware OTP devices use vendor serials, and FIDO/U2F
+// devices use the IAM :u2f/ ARN prefix.
 func isHardwareMFASerial(serial string) bool {
 	if serial == "" {
 		return false
 	}
-	return !strings.Contains(serial, ":mfa/")
+	return !strings.Contains(serial, ":mfa/") && !strings.Contains(serial, ":sms-mfa/")
 }
 
 // trustAnalysis is the parsed external-trust view of one role's trust policy.
@@ -712,7 +731,7 @@ func analyzeTrustPolicy(policyDoc string, currentAccount string) trustAnalysis {
 			case p == TrustPolicyPrincipalAll:
 				analysis.hasExternalTrust = true
 				analysis.hasWildcardPrincipal = true
-			case strings.HasPrefix(p, TrustPolicyARNPrefix):
+			case isAccountPrincipalARN(p):
 				parts := strings.Split(p, ":")
 				if len(parts) >= 5 && parts[4] != "" && parts[4] != currentAccount {
 					analysis.hasExternalTrust = true
@@ -735,6 +754,14 @@ func analyzeTrustPolicy(policyDoc string, currentAccount string) trustAnalysis {
 	return analysis
 }
 
+// isAccountPrincipalARN reports whether a principal is an IAM or STS ARN in
+// any partition, such as arn:aws:iam::, arn:aws-cn:iam:: or arn:aws:sts::.
+// An STS ARN names a role session or a federated user of its account.
+func isAccountPrincipalARN(p string) bool {
+	parts := strings.Split(p, ":")
+	return len(parts) >= 6 && parts[0] == "arn" && parts[1] != "" && (parts[2] == "iam" || parts[2] == "sts")
+}
+
 // isBareAccountID reports whether a principal string is a bare 12-digit AWS
 // account ID (shorthand for that account's root principal).
 func isBareAccountID(p string) bool {
@@ -751,7 +778,29 @@ func isBareAccountID(p string) bool {
 
 // trustPolicy represents an IAM trust policy document.
 type trustPolicy struct {
-	Statement []trustStatement `json:"Statement"`
+	Statement trustStatements `json:"Statement"`
+}
+
+// trustStatements is a policy's Statement, which the policy grammar lets be a
+// single statement object or an array of them.
+type trustStatements []trustStatement
+
+// UnmarshalJSON reads a single statement object as a list of one.
+func (s *trustStatements) UnmarshalJSON(data []byte) error {
+	if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 && trimmed[0] == '{' {
+		var one trustStatement
+		if err := json.Unmarshal(trimmed, &one); err != nil {
+			return err
+		}
+		*s = trustStatements{one}
+		return nil
+	}
+	var many []trustStatement
+	if err := json.Unmarshal(data, &many); err != nil {
+		return err
+	}
+	*s = many
+	return nil
 }
 
 // trustStatement represents a single statement in a trust policy.

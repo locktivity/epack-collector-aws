@@ -1,11 +1,13 @@
 package collector
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 	"github.com/locktivity/epack/componentsdk"
+	"github.com/locktivity/epack/componentsdk/collectortest"
 )
 
 func TestSecretsManagerSecretToRow_AuditOmitsInternalFields(t *testing.T) {
@@ -126,5 +128,112 @@ func TestMergeSecretsManagerMetrics_SumsAggregatesAndConcatsSecrets(t *testing.T
 	}
 	if got.Secrets[0].Name != "east-1" || got.Secrets[2].Name != "west-1" {
 		t.Errorf("merge did not preserve insertion order: %+v", got.Secrets)
+	}
+}
+
+// runOutput runs the kit's account with responses and decodes the detailed
+// artifact.
+func runOutput(t *testing.T, responses []collectortest.Response) Output {
+	t.Helper()
+	isolateAWSEnvironment(t)
+	res := runKit(t, kitConfig(), kitSecrets(), responses)
+	if res.ExitCode != 0 {
+		t.Fatalf("run failed with exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	var out Output
+	decodeArtifact(t, res, awsPath, &out)
+	if len(out.Accounts) != 1 {
+		t.Fatalf("accounts = %d, want 1", len(out.Accounts))
+	}
+	return out
+}
+
+const deletedSecretARN = "arn:aws:secretsmanager:us-east-1:111122223333:secret:northwind/old-ZyXwVu"
+
+func rotatedSecret() map[string]any {
+	return map[string]any{
+		"ARN": "arn:aws:secretsmanager:us-east-1:111122223333:secret:northwind/db-AbCdEf", "Name": "northwind/db", "Description": "Database credentials",
+		"KmsKeyId": "arn:aws:kms:us-east-1:111122223333:key/" + kitKMSKeyID, "RotationEnabled": true,
+		"RotationLambdaARN": "arn:aws:lambda:us-east-1:111122223333:function:rotate-db", "RotationRules": map[string]any{"AutomaticallyAfterDays": 30},
+		"CreatedDate": 1704067200, "LastChangedDate": 1764547200,
+	}
+}
+
+// ListSecrets returns a secret scheduled for deletion only when the request
+// sets IncludePlannedDeletion, and the collector asks for it.
+func TestSecretsManager_SecretsPendingDeletionAreListed(t *testing.T) {
+	deleted := map[string]any{"ARN": deletedSecretARN, "Name": "northwind/old", "CreatedDate": 1704067200, "LastChangedDate": 1764547200, "DeletedDate": 1769904000}
+	withDeleted := jsonItemResponse("aws.secretsmanager.ListSecrets", regional("secretsmanager"),
+		map[string]any{"IncludePlannedDeletion": true},
+		map[string]any{"SecretList": []any{rotatedSecret(), deleted}})
+
+	sm := runOutput(t, append([]collectortest.Response{withDeleted}, kitResponses()...)).Accounts[0].SecretsManager
+
+	if sm.SecretCount != 2 || sm.SecretsPendingDeletionCount != 1 {
+		t.Errorf("secret_count = %d, secrets_pending_deletion_count = %d; want 2 and 1", sm.SecretCount, sm.SecretsPendingDeletionCount)
+	}
+	found := false
+	for _, row := range sm.Secrets {
+		if row.ARN == deletedSecretARN {
+			found = true
+			if row.DeletionDate != "2026-02-01T00:00:00Z" {
+				t.Errorf("deletion_date = %q, want 2026-02-01T00:00:00Z", row.DeletionDate)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("secrets = %d rows, none for the secret scheduled for deletion", len(sm.Secrets))
+	}
+}
+
+// The rotation rules keep their schedule after rotation is turned off, so a
+// row with rotation off has no rotation days or function.
+func TestSecretsManager_RotationOffCarriesNoSchedule(t *testing.T) {
+	off := rotatedSecret()
+	off["RotationEnabled"] = false
+	for _, tc := range []struct {
+		name   string
+		secret map[string]any
+		days   int64
+		lambda bool
+	}{
+		{"rotation on", rotatedSecret(), 30, true},
+		{"rotation off", off, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			responses := replaceResponses(kitResponses(),
+				jsonResponse("aws.secretsmanager.ListSecrets", regional("secretsmanager"), map[string]any{"SecretList": []any{tc.secret}}))
+			rows := runOutput(t, responses).Accounts[0].SecretsManager.Secrets
+			if len(rows) != 1 {
+				t.Fatalf("rows = %d, want 1", len(rows))
+			}
+			if rows[0].RotationDays != tc.days || (rows[0].RotationLambdaARN != "") != tc.lambda {
+				t.Errorf("rotation_days = %d, rotation_lambda_arn = %q; want %d and a function: %v", rows[0].RotationDays, rows[0].RotationLambdaARN, tc.days, tc.lambda)
+			}
+		})
+	}
+}
+
+// A secret can carry 50 tags of its own beside aws: tags, which do not count
+// against AWS's limit. Every one of its own tags reaches the row.
+func TestSecretsManager_RowKeepsEveryOwnTagBesideSystemTags(t *testing.T) {
+	tags := []any{map[string]any{"Key": "team", "Value": "platform"}}
+	for i := 1; i < 50; i++ {
+		tags = append(tags, map[string]any{"Key": fmt.Sprintf("tag-%02d", i), "Value": "v"})
+	}
+	for _, key := range []string{"aws:cloudformation:stack-name", "aws:cloudformation:logical-id", "aws:cloudformation:stack-id"} {
+		tags = append(tags, map[string]any{"Key": key, "Value": "northwind"})
+	}
+	secret := rotatedSecret()
+	secret["Tags"] = tags
+	rows := runOutput(t, replaceResponses(kitResponses(),
+		jsonResponse("aws.secretsmanager.ListSecrets", regional("secretsmanager"), map[string]any{"SecretList": []any{secret}}))).Accounts[0].SecretsManager.Secrets
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	for _, tag := range tags[:50] {
+		if key := tag.(map[string]any)["Key"].(string); rows[0].Tags[key] == "" {
+			t.Errorf("tags/%s is missing from the row", key)
+		}
 	}
 }

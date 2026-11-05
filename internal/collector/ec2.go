@@ -2,6 +2,8 @@ package collector
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
@@ -113,8 +115,7 @@ func countUnattachedVolumes(volumes map[string]aws.EBSVolumeState) (total, unenc
 // ec2InstanceToRow projects an aws.EC2Instance onto its audit-level row.
 // Internal-level fields (iam_instance_profile_arn / key_name / tags /
 // attached_volume_ids) are populated when level >= internal. Tags are capped
-// at EC2InstanceTagsCap with stable insertion order — past the cap, tags are
-// silently dropped (we have no useful sort key for tag entries).
+// at EC2InstanceTagsCap, as truncateTags keeps them.
 func ec2InstanceToRow(inst aws.EC2Instance, region string, inDefaultVPC, rootVolumeEncrypted bool, level componentsdk.Level) EC2InstanceRow {
 	row := EC2InstanceRow{
 		InstanceID:          inst.InstanceID,
@@ -150,6 +151,10 @@ func ec2InstanceToRow(inst aws.EC2Instance, region string, inDefaultVPC, rootVol
 	return row
 }
 
+// truncateTags keeps at most cap of a resource's tags. Tags with the aws:
+// prefix do not count against AWS's limit of 50, so a resource can carry
+// more than 50. Past the cap, the resource's own tags are kept before aws:
+// tags, each in key order, so the same tags are kept on every collection.
 func truncateTags(in map[string]string, cap int) map[string]string {
 	if len(in) <= cap {
 		out := make(map[string]string, len(in))
@@ -158,14 +163,22 @@ func truncateTags(in map[string]string, cap int) map[string]string {
 		}
 		return out
 	}
-	out := make(map[string]string, cap)
-	i := 0
-	for k, v := range in {
-		if i >= cap {
-			break
+	keys := make([]string, 0, len(in))
+	for k := range in {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(a, b string) int {
+		if aSystem, bSystem := strings.HasPrefix(a, "aws:"), strings.HasPrefix(b, "aws:"); aSystem != bSystem {
+			if aSystem {
+				return 1
+			}
+			return -1
 		}
-		out[k] = v
-		i++
+		return strings.Compare(a, b)
+	})
+	out := make(map[string]string, cap)
+	for _, k := range keys[:cap] {
+		out[k] = in[k]
 	}
 	return out
 }

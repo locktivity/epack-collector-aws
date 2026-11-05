@@ -35,19 +35,76 @@ func HTTPOptions(extraHosts ...string) componentsdk.HTTPOptions {
 		CredentialHeaders: []string{"X-Amz-Security-Token"},
 		NameOperation:     NameOperation,
 		ClassifyResponse:  ClassifyResponse,
+		NamesPermission:   NamesPermission,
 	}
 }
 
 // NameOperation names an AWS SDK request "aws.<service>.<Operation>" from the
 // service ID and operation name the SDK's middleware puts on the request's
-// context. The collector only reads, so every operation is safe to retry.
+// context, and declares the IAM action it needs. The collector only reads,
+// so every operation is safe to retry.
 func NameOperation(req *http.Request) (componentsdk.Operation, bool) {
 	service := awsmiddleware.GetServiceID(req.Context())
 	operation := awsmiddleware.GetOperationName(req.Context())
 	if service == "" || operation == "" {
 		return componentsdk.Operation{}, false
 	}
-	return componentsdk.Operation{Name: OperationName(service, operation), Safe: true}, true
+	name := OperationName(service, operation)
+	return componentsdk.Operation{Name: name, Safe: true, Permission: IAMAction(name)}, true
+}
+
+// iamPrefixes are the services whose IAM actions take a prefix other than
+// the service's name in the operation name.
+var iamPrefixes = map[string]string{
+	"accessanalyzer":         "access-analyzer",
+	"applicationautoscaling": "application-autoscaling",
+	"cloudwatchlogs":         "logs",
+	"configservice":          "config",
+	"elasticloadbalancingv2": "elasticloadbalancing",
+	"eventbridge":            "events",
+	"s3control":              "s3",
+	"sesv2":                  "ses",
+	"ssoadmin":               "sso",
+}
+
+// iamActionNames are the operations whose IAM action has another name than
+// the operation. STS needs no permission to answer GetCallerIdentity or
+// AssumeRoleWithWebIdentity.
+var iamActionNames = map[string]string{
+	"aws.s3.ListBuckets":                     "s3:ListAllMyBuckets",
+	"aws.s3.GetPublicAccessBlock":            "s3:GetBucketPublicAccessBlock",
+	"aws.s3.GetBucketEncryption":             "s3:GetEncryptionConfiguration",
+	"aws.s3.GetBucketLifecycleConfiguration": "s3:GetLifecycleConfiguration",
+	"aws.s3.GetObjectLockConfiguration":      "s3:GetBucketObjectLockConfiguration",
+	"aws.s3control.GetPublicAccessBlock":     "s3:GetAccountPublicAccessBlock",
+	"aws.sts.GetCallerIdentity":              "",
+	"aws.sts.AssumeRoleWithWebIdentity":      "",
+}
+
+// IAMAction returns the IAM action an operation named by OperationName
+// needs, such as iam:ListRoles for aws.iam.ListRoles. It is "" for an
+// operation that needs none.
+func IAMAction(name string) string {
+	if action, ok := iamActionNames[name]; ok {
+		return action
+	}
+	parts := strings.Split(name, ".")
+	if len(parts) != 3 || parts[0] != "aws" {
+		return ""
+	}
+	prefix := parts[1]
+	if p, ok := iamPrefixes[prefix]; ok {
+		prefix = p
+	}
+	return prefix + ":" + parts[2]
+}
+
+// NamesPermission reports whether a denied call's declared IAM action is
+// the permission to grant. It is when AWS's message names the action it
+// refused, and the refusal is not an explicit deny, which overrides any
+// allow.
+func NamesPermission(_ *http.Response, body []byte) bool {
+	return bytes.Contains(body, []byte("not authorized to perform")) && !bytes.Contains(body, []byte("with an explicit deny"))
 }
 
 // OperationName builds an operation name from an SDK service ID such as

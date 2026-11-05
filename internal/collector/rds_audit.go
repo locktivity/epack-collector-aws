@@ -28,9 +28,10 @@ const (
 // logging from a pending-reboot group would certify logging that is not
 // happening.
 func classifyDMLLogging(instance aws.DBInstance, params map[string]string, paramsErr error) string {
-	if !strings.HasPrefix(instance.Engine, "postgres") {
-		// aurora-postgresql keeps these settings in cluster parameter groups,
-		// which this classifier does not read yet.
+	if !strings.HasPrefix(instance.Engine, "postgres") || instance.DBClusterIdentifier != "" {
+		// aurora-postgresql and the members of a Multi-AZ DB cluster keep
+		// these settings in cluster parameter groups, which this classifier
+		// does not read yet.
 		return dmlLoggingNotClassified
 	}
 	if paramsErr != nil {
@@ -69,9 +70,10 @@ func listContains(commaList, want string) bool {
 // subscriptionCoversBackupFailures reports whether an event subscription would
 // carry a backup failure. Empty categories cover everything, and an empty
 // source type covers all source types, so absence reads as the broadest
-// coverage.
+// coverage. A subscription whose status is no-permission or topic-not-exist
+// cannot post to its topic, so it carries nothing.
 func subscriptionCoversBackupFailures(sub aws.RDSEventSubscription) bool {
-	if !sub.Enabled {
+	if !sub.Enabled || sub.Status == "no-permission" || sub.Status == "topic-not-exist" {
 		return false
 	}
 	if sub.SourceType != "" && sub.SourceType != "db-instance" && sub.SourceType != "db-cluster" {

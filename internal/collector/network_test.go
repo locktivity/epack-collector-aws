@@ -1,9 +1,12 @@
 package collector
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
+	"github.com/locktivity/epack/componentsdk"
+	"github.com/locktivity/epack/componentsdk/collectortest"
 )
 
 func TestAnalyzeSecurityGroupExposure(t *testing.T) {
@@ -15,7 +18,7 @@ func TestAnalyzeSecurityGroupExposure(t *testing.T) {
 		},
 	}
 
-	got := analyzeSecurityGroupExposure(sg)
+	got := analyzeSecurityGroupExposure(sg, nil)
 	if !got.hasOpenSSH {
 		t.Fatalf("expected hasOpenSSH=true")
 	}
@@ -28,12 +31,12 @@ func TestAnalyzeSecurityGroupExposure(t *testing.T) {
 // it exposes SSH and RDP alike.
 func TestAnalyzeSecurityGroupExposure_AllTrafficOpenToWorld(t *testing.T) {
 	open := aws.SecurityGroup{IngressRules: []aws.SecurityGroupRule{{Protocol: "-1", CIDRBlocks: []string{"::/0"}}}}
-	if got := analyzeSecurityGroupExposure(open); !got.hasOpenSSH || !got.hasOpenRDP {
+	if got := analyzeSecurityGroupExposure(open, nil); !got.hasOpenSSH || !got.hasOpenRDP {
 		t.Fatalf("all traffic from ::/0: exposure = %+v, want SSH and RDP open", got)
 	}
 
 	internal := aws.SecurityGroup{IngressRules: []aws.SecurityGroupRule{{Protocol: "-1", CIDRBlocks: []string{"10.0.0.0/8"}}}}
-	if got := analyzeSecurityGroupExposure(internal); got.hasOpenSSH || got.hasOpenRDP {
+	if got := analyzeSecurityGroupExposure(internal, nil); got.hasOpenSSH || got.hasOpenRDP {
 		t.Fatalf("all traffic from 10.0.0.0/8: exposure = %+v, want neither open", got)
 	}
 }
@@ -57,7 +60,7 @@ func TestAnalyzeSecurityGroups(t *testing.T) {
 		},
 	}
 
-	stats := analyzeSecurityGroups(sgs)
+	stats := analyzeSecurityGroups(sgs, nil)
 	if stats.openSSH != 1 {
 		t.Fatalf("expected openSSH=1, got %d", stats.openSSH)
 	}
@@ -107,7 +110,7 @@ func TestMergeNetworkMetrics(t *testing.T) {
 func TestVPCSummaries_AuditOmitsFlowLogs(t *testing.T) {
 	rows := vpcSummaries([]aws.VPC{
 		{VPCID: "vpc-1", IsDefault: true, FlowLogsEnabled: true},
-	}, "us-east-1", false)
+	}, "us-east-1", "111122223333", false)
 
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
@@ -121,7 +124,7 @@ func TestVPCSummaries_InternalIncludesFlowLogsFalse(t *testing.T) {
 	rows := vpcSummaries([]aws.VPC{
 		{VPCID: "vpc-1", FlowLogsEnabled: false, FlowLogsEvaluated: true},
 		{VPCID: "vpc-2", FlowLogsEnabled: true, FlowLogsEvaluated: true},
-	}, "us-east-1", true)
+	}, "us-east-1", "111122223333", true)
 
 	if rows[0].FlowLogsEnabled == nil || *rows[0].FlowLogsEnabled {
 		t.Fatalf("expected internal row to include FlowLogsEnabled=false, got %+v", rows[0].FlowLogsEnabled)
@@ -137,7 +140,7 @@ func TestVPCSummaries_InternalIncludesFlowLogsFalse(t *testing.T) {
 func TestVPCSummaries_InternalSurfacesUnevaluatedFlowLogs(t *testing.T) {
 	rows := vpcSummaries([]aws.VPC{
 		{VPCID: "vpc-1", FlowLogsEvaluated: false, FlowLogsErrorCode: "UnauthorizedOperation"},
-	}, "us-east-1", true)
+	}, "us-east-1", "111122223333", true)
 
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
@@ -150,6 +153,23 @@ func TestVPCSummaries_InternalSurfacesUnevaluatedFlowLogs(t *testing.T) {
 	}
 	if rows[0].FlowLogsErrorCode != "UnauthorizedOperation" {
 		t.Fatalf("expected UnauthorizedOperation error code, got %q", rows[0].FlowLogsErrorCode)
+	}
+}
+
+// A participant cannot describe the flow logs of a VPC another account shares
+// with it, so that VPC's flow logs are not evaluated.
+func TestVPCSummaries_SharedVPCFlowLogsAreNotEvaluated(t *testing.T) {
+	rows := vpcSummaries([]aws.VPC{
+		{VPCID: "vpc-own", OwnerID: "111122223333", FlowLogsEvaluated: true},
+		{VPCID: "vpc-shared", OwnerID: "999988887777", FlowLogsEvaluated: true},
+	}, "us-east-1", "111122223333", true)
+
+	if rows[0].Shared || rows[0].FlowLogsEnabled == nil || *rows[0].FlowLogsEnabled {
+		t.Errorf("owned VPC with no flow log: shared = %v, flow_logs_enabled = %v, want false and false", rows[0].Shared, rows[0].FlowLogsEnabled)
+	}
+	if !rows[1].Shared || rows[1].FlowLogsEnabled != nil || rows[1].FlowLogsEvaluated == nil || *rows[1].FlowLogsEvaluated {
+		t.Errorf("shared VPC: shared = %v, flow_logs_enabled = %v, flow_logs_evaluated = %v, want true, absent and false",
+			rows[1].Shared, rows[1].FlowLogsEnabled, rows[1].FlowLogsEvaluated)
 	}
 }
 
@@ -256,5 +276,126 @@ func TestSGIngressRulesToInternal_SurfacesSourceSGIDs(t *testing.T) {
 	}
 	if len(out[1].SourceSGIDs) != 1 || len(out[1].CIDRBlocks) != 1 {
 		t.Errorf("rule 1 should have both CIDRs and SourceSGIDs, got %+v", out[1])
+	}
+}
+
+// A flow log whose delivery failed publishes nothing, so a VPC whose only flow
+// log fails to deliver has no traffic captured.
+func TestCollectVPCMetrics_FailedFlowLogDoesNotCapture(t *testing.T) {
+	flowLog := func(status string) string {
+		return "<flowLogSet><item><flowLogId>fl-1</flowLogId><resourceId>vpc-0kit</resourceId><flowLogStatus>ACTIVE</flowLogStatus>" +
+			"<trafficType>ALL</trafficType><logDestinationType>cloud-watch-logs</logDestinationType><deliverLogsStatus>" + status +
+			"</deliverLogsStatus></item></flowLogSet>"
+	}
+	for status, want := range map[string]bool{"SUCCESS": true, "FAILED": false} {
+		t.Run(status, func(t *testing.T) {
+			out := runOutput(t, replaceResponses(kitResponses(), ec2Response("aws.ec2.DescribeFlowLogs", flowLog(status))))
+			var row *VPCSummary
+			for i, v := range out.Accounts[0].Network.VPCs {
+				if v.VPCID == "vpc-0kit" {
+					row = &out.Accounts[0].Network.VPCs[i]
+				}
+			}
+			if row == nil || row.FlowLogsEnabled == nil || *row.FlowLogsEnabled != want {
+				t.Errorf("flow_logs_enabled = %+v, want %v", row, want)
+			}
+		})
+	}
+}
+
+// sgReachableFromWeb is the kit's database group, which the RDS read asks
+// for by ID.
+const sgReachableFromWeb = "<item><groupId>sg-0db</groupId><groupName>database</groupName><groupDescription>database</groupDescription><vpcId>vpc-0kit</vpcId><ipPermissions>" +
+	"<item><ipProtocol>tcp</ipProtocol><fromPort>5432</fromPort><toPort>5432</toPort><groups><item><groupId>sg-0web</groupId></item></groups></item>" +
+	"</ipPermissions></item>"
+
+// sshFromPrefixList is an ingress rule allowing SSH from the prefix list
+// pl-0ssh.
+const sshFromPrefixList = "<item><ipProtocol>tcp</ipProtocol><fromPort>22</fromPort><toPort>22</toPort>" +
+	"<prefixListIds><item><prefixListId>pl-0ssh</prefixListId></item></prefixListIds></item>"
+
+// runWithPrefixListGroup runs the kit with the region's security groups being
+// the database group and sg-0ssh, whose one rule allows SSH from pl-0ssh.
+// entries answers the read of the list's entries. The replay answers with the
+// first response a call matches, so these come before the kit's own.
+func runWithPrefixListGroup(t *testing.T, entries collectortest.Response) (componentsdk.InProcessResult, Output) {
+	t.Helper()
+	group := "<item><groupId>sg-0ssh</groupId><groupName>ssh</groupName><groupDescription>ssh</groupDescription><vpcId>vpc-0kit</vpcId>" +
+		"<ipPermissions>" + sshFromPrefixList + "</ipPermissions></item>"
+	responses := []collectortest.Response{
+		ec2Response("aws.ec2.DescribeSecurityGroups", "<securityGroupInfo>"+sgReachableFromWeb+group+"</securityGroupInfo>"),
+		entries,
+	}
+	return runWithGaps(t, kitConfig(), append(responses, kitResponses()...))
+}
+
+func prefixListEntries(cidrs ...string) collectortest.Response {
+	entries := ""
+	for _, c := range cidrs {
+		entries += "<item><cidr>" + c + "</cidr></item>"
+	}
+	return ec2Response("aws.ec2.GetManagedPrefixListEntries", "<entrySet>"+entries+"</entrySet>")
+}
+
+func securityGroupNamed(t *testing.T, out Output, id string) SecurityGroupSummary {
+	t.Helper()
+	for _, sg := range out.Accounts[0].Network.SecurityGroups {
+		if sg.GroupID == id {
+			return sg
+		}
+	}
+	t.Fatalf("no security group %s in %+v", id, out.Accounts[0].Network.SecurityGroups)
+	return SecurityGroupSummary{}
+}
+
+// A rule whose source is a managed prefix list allows every CIDR block in the
+// list, so a list holding 0.0.0.0/0 opens SSH to the world.
+func TestCollectNetworkMetrics_PrefixListSourceOpenToWorld(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cidr string
+		open bool
+	}{
+		{"list holding the world", "0.0.0.0/0", true},
+		{"list holding a private range", "10.0.0.0/8", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, out := runWithPrefixListGroup(t, prefixListEntries(tc.cidr))
+			network := out.Accounts[0].Network
+			want := 0
+			if tc.open {
+				want = 1
+			}
+			if network.OpenToWorldSSHSecurityGroupCount != want {
+				t.Errorf("open_to_world_ssh_security_group_count = %d, want %d", network.OpenToWorldSSHSecurityGroupCount, want)
+			}
+			row := securityGroupNamed(t, out, "sg-0ssh")
+			if row.OpenToWorldSSH != tc.open {
+				t.Errorf("sg-0ssh open_to_world_ssh = %v, want %v", row.OpenToWorldSSH, tc.open)
+			}
+			if len(row.IngressRules) != 1 || len(row.IngressRules[0].PrefixListIDs) != 1 || row.IngressRules[0].PrefixListIDs[0] != "pl-0ssh" {
+				t.Errorf("sg-0ssh ingress rules = %+v, want one naming pl-0ssh", row.IngressRules)
+			}
+		})
+	}
+}
+
+// When the list's entries cannot be read, whether the group is open is
+// unknown, so the group's flag and the SSH counts are left out.
+func TestCollectNetworkMetrics_UnreadPrefixListLeavesExposureOut(t *testing.T) {
+	denied := ec2Response("aws.ec2.GetManagedPrefixListEntries", "")
+	denied.Status = http.StatusForbidden
+	denied.Body = `<Response><Errors><Error><Code>UnauthorizedOperation</Code><Message>You are not authorized to perform this operation.</Message></Error></Errors><RequestID>kit</RequestID></Response>`
+	res, _ := runWithPrefixListGroup(t, denied)
+	for _, pointer := range []string{
+		"/accounts/0/network/open_to_world_ssh_security_group_count",
+		"/accounts/0/network/open_to_world_ssh",
+	} {
+		if gapAt(res, awsPath, pointer) == nil {
+			t.Errorf("no gap at %s", pointer)
+		}
+	}
+	if gapAt(res, awsPath, "/accounts/0/network/open_to_world_rdp") != nil {
+		t.Errorf("gap at open_to_world_rdp, want the RDP count kept: the rule covers only SSH")
 	}
 }

@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"cmp"
 	"context"
 	"errors"
 
@@ -64,7 +65,7 @@ func (c *Collector) collectVPCMetrics(ctx context.Context, client *aws.AWSClient
 	result.vpcCount = len(vpcs)
 
 	if level.AtLeast(componentsdk.LevelAudit) {
-		rows := vpcSummaries(vpcs, region, includeFlowLogs)
+		rows := vpcSummaries(vpcs, region, accountID, includeFlowLogs)
 		for i := range rows {
 			rows[i].missing.add(flowLogsErr, "flow_logs_enabled")
 		}
@@ -74,15 +75,23 @@ func (c *Collector) collectVPCMetrics(ctx context.Context, client *aws.AWSClient
 	return nil
 }
 
-func vpcSummaries(vpcs []aws.VPC, region string, includeFlowLogs bool) []VPCSummary {
+// vpcSummaries projects the VPCs onto their rows. A VPC another account owns
+// and shares with this one is marked shared, and its flow logs are not
+// evaluated, since a participant cannot describe them.
+func vpcSummaries(vpcs []aws.VPC, region, accountID string, includeFlowLogs bool) []VPCSummary {
 	rows := make([]VPCSummary, 0, len(vpcs))
 	for _, vpc := range vpcs {
 		row := VPCSummary{
 			VPCID:     vpc.VPCID,
 			Region:    region,
 			IsDefault: vpc.IsDefault,
+			Shared:    vpc.OwnerID != "" && accountID != "" && vpc.OwnerID != accountID,
 		}
-		if includeFlowLogs {
+		switch {
+		case !includeFlowLogs:
+		case row.Shared:
+			row.FlowLogsEvaluated = boolPtr(false)
+		default:
 			row.FlowLogsEvaluated = boolPtr(vpc.FlowLogsEvaluated)
 			row.FlowLogsErrorCode = vpc.FlowLogsErrorCode
 			if vpc.FlowLogsEvaluated {
@@ -103,14 +112,17 @@ func (c *Collector) collectSecurityGroupMetrics(ctx context.Context, client *aws
 
 	result.securityGroupCount = len(sgs)
 
-	stats := analyzeSecurityGroups(sgs)
+	lists := c.readExposurePrefixLists(ctx, client, region, sgs)
+	stats := analyzeSecurityGroups(sgs, lists)
 	result.openSSH = stats.openSSH
 	result.openRDP = stats.openRDP
+	result.missing.addPartial(stats.sshErr, stats.sshUnknown, "open_to_world_ssh", "open_to_world_ssh_security_group_count")
+	result.missing.addPartial(stats.rdpErr, stats.rdpUnknown, "open_to_world_rdp", "open_to_world_rdp_security_group_count")
 
 	if level.AtLeast(componentsdk.LevelAudit) {
 		result.SecurityGroups = make([]SecurityGroupSummary, 0, len(sgs))
 		for _, sg := range sgs {
-			exposure := analyzeSecurityGroupExposure(sg)
+			exposure := analyzeSecurityGroupExposure(sg, lists)
 			row := SecurityGroupSummary{
 				GroupID:        sg.GroupID,
 				GroupName:      sg.GroupName,
@@ -120,6 +132,8 @@ func (c *Collector) collectSecurityGroupMetrics(ctx context.Context, client *aws
 				OpenToWorldSSH: exposure.hasOpenSSH,
 				OpenToWorldRDP: exposure.hasOpenRDP,
 			}
+			row.missing.add(exposure.sshErr, "open_to_world_ssh")
+			row.missing.add(exposure.rdpErr, "open_to_world_rdp")
 			if level.AtLeast(componentsdk.LevelInternal) {
 				row.IngressRules = sgIngressRulesToInternal(sg.IngressRules)
 			}
@@ -131,8 +145,8 @@ func (c *Collector) collectSecurityGroupMetrics(ctx context.Context, client *aws
 }
 
 // sgIngressRulesToInternal projects per-SG ingress rules onto the internal-level
-// emission. Both CIDR-based and source-SG-based ingress are surfaced; rules
-// with neither set (degenerate config) still emit as a row so the absence of
+// emission. CIDR, source-SG and prefix-list ingress are surfaced. A rule with
+// none of them set (degenerate config) still gets a row, so the absence of
 // allowed sources is visible.
 func sgIngressRulesToInternal(in []aws.SecurityGroupRule) []SGIngressRule {
 	if len(in) == 0 {
@@ -151,23 +165,64 @@ func sgIngressRulesToInternal(in []aws.SecurityGroupRule) []SGIngressRule {
 		if len(r.SourceSGIDs) > 0 {
 			row.SourceSGIDs = append([]string(nil), r.SourceSGIDs...)
 		}
+		if len(r.PrefixListIDs) > 0 {
+			row.PrefixListIDs = append([]string(nil), r.PrefixListIDs...)
+		}
 		out = append(out, row)
 	}
 	return out
 }
 
-// sgStats holds security group analysis results.
+// prefixListRead is a managed prefix list's CIDR blocks, or why they could
+// not be read.
+type prefixListRead struct {
+	cidrs []string
+	err   error
+}
+
+// readExposurePrefixLists reads the entries of each managed prefix list that
+// a rule covering SSH or RDP allows. A rule whose source is a prefix list
+// allows every CIDR block in it.
+func (c *Collector) readExposurePrefixLists(ctx context.Context, client *aws.AWSClient, region string, sgs []aws.SecurityGroup) map[string]prefixListRead {
+	lists := map[string]prefixListRead{}
+	for _, sg := range sgs {
+		for _, rule := range sg.IngressRules {
+			if !rule.IsSSH() && !rule.IsRDP() {
+				continue
+			}
+			for _, id := range rule.PrefixListIDs {
+				if _, seen := lists[id]; seen {
+					continue
+				}
+				cidrs, err := client.GetManagedPrefixListCIDRs(ctx, region, id)
+				if err != nil {
+					c.warn("region %s: failed to read prefix list %s, so it is unknown whether the security groups that allow it are open to the world: %v", region, id, err)
+				}
+				lists[id] = prefixListRead{cidrs: cidrs, err: err}
+			}
+		}
+	}
+	return lists
+}
+
+// sgStats holds security group analysis results. sshUnknown and rdpUnknown
+// count the groups whose exposure depends on a prefix list that could not be
+// read, and sshErr and rdpErr say why.
 type sgStats struct {
-	openSSH int
-	openRDP int
+	openSSH    int
+	openRDP    int
+	sshUnknown int
+	rdpUnknown int
+	sshErr     error
+	rdpErr     error
 }
 
 // analyzeSecurityGroups analyzes all security groups and returns statistics.
-func analyzeSecurityGroups(sgs []aws.SecurityGroup) sgStats {
+func analyzeSecurityGroups(sgs []aws.SecurityGroup, lists map[string]prefixListRead) sgStats {
 	var stats sgStats
 
 	for _, sg := range sgs {
-		exposure := analyzeSecurityGroupExposure(sg)
+		exposure := analyzeSecurityGroupExposure(sg, lists)
 
 		if exposure.hasOpenSSH {
 			stats.openSSH++
@@ -175,34 +230,71 @@ func analyzeSecurityGroups(sgs []aws.SecurityGroup) sgStats {
 		if exposure.hasOpenRDP {
 			stats.openRDP++
 		}
+		if exposure.sshErr != nil {
+			stats.sshUnknown++
+			stats.sshErr = cmp.Or(stats.sshErr, exposure.sshErr)
+		}
+		if exposure.rdpErr != nil {
+			stats.rdpUnknown++
+			stats.rdpErr = cmp.Or(stats.rdpErr, exposure.rdpErr)
+		}
 	}
 
 	return stats
 }
 
-// sgExposure represents what a security group exposes to the world.
+// sgExposure represents what a security group exposes to the world. sshErr
+// and rdpErr are set when the group is not known to be open and a rule
+// covering the port allows a prefix list that could not be read.
 type sgExposure struct {
 	hasOpenSSH bool
 	hasOpenRDP bool
+	sshErr     error
+	rdpErr     error
 }
 
 // analyzeSecurityGroupExposure checks what a single security group exposes.
-func analyzeSecurityGroupExposure(sg aws.SecurityGroup) sgExposure {
+// A rule is open to the world when its own CIDR blocks, or those of a prefix
+// list it allows, include 0.0.0.0/0 or ::/0.
+func analyzeSecurityGroupExposure(sg aws.SecurityGroup, lists map[string]prefixListRead) sgExposure {
 	var exposure sgExposure
 
 	for _, rule := range sg.IngressRules {
-		if !rule.IsOpenToWorld() {
-			continue
-		}
+		open, err := ruleOpenToWorld(rule, lists)
 		if rule.IsSSH() {
-			exposure.hasOpenSSH = true
+			exposure.hasOpenSSH = exposure.hasOpenSSH || open
+			exposure.sshErr = cmp.Or(exposure.sshErr, err)
 		}
 		if rule.IsRDP() {
-			exposure.hasOpenRDP = true
+			exposure.hasOpenRDP = exposure.hasOpenRDP || open
+			exposure.rdpErr = cmp.Or(exposure.rdpErr, err)
 		}
+	}
+	if exposure.hasOpenSSH {
+		exposure.sshErr = nil
+	}
+	if exposure.hasOpenRDP {
+		exposure.rdpErr = nil
 	}
 
 	return exposure
+}
+
+// ruleOpenToWorld reports whether a rule allows traffic from anywhere. When
+// it is not known to, err is why a prefix list it allows could not be read.
+func ruleOpenToWorld(rule aws.SecurityGroupRule, lists map[string]prefixListRead) (bool, error) {
+	if rule.IsOpenToWorld() {
+		return true, nil
+	}
+	var err error
+	for _, id := range rule.PrefixListIDs {
+		list := lists[id]
+		if aws.AnyWorldCIDR(list.cidrs) {
+			return true, nil
+		}
+		err = cmp.Or(err, list.err)
+	}
+	return false, err
 }
 
 // mergeNetworkMetrics merges network metrics from multiple regions.

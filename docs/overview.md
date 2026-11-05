@@ -203,8 +203,10 @@ Parameter VALUES are NEVER collected — only metadata. Value-reading APIs are f
 
 The collector automatically handles AWS's regional vs global services:
 
-- **Global services** (IAM, S3 bucket listing, CloudTrail): Collected once
+- **Global services** (IAM, S3 bucket listing): Collected once
 - **Regional services** (RDS, EC2, GuardDuty, Lambda, CloudWatch Logs, KMS, Secrets Manager, SSM Parameters): Collected from all configured regions
+- **CloudTrail**: Trails are listed in every scanned region, since a single-region trail is listed only in its own region. A multi-region trail appears once
+- **Amazon Inspector**: Its status, coverage, and findings are read in every scanned region, for the vuln-scanning file. The Inspector values in the detailed file come from Security Hub in the primary region
 - **IAM Identity Center**: Looked for in every scanned region, since the instance's home region can be any of them. A member account cannot see its organization's instance, so the roles and SAML provider Identity Center creates in the account show it there
 
 Metrics from regional services are aggregated across all regions.
@@ -231,39 +233,100 @@ Each account's posture is collected independently and included in the output.
 An account that fails entirely is recorded under `failed_accounts` (with the
 account ID parsed from its role ARN and the upstream error code) instead of
 silently disappearing, and the normalized artifact carries a matching stub
-entry (with `collection_error_code` and no metric groups) plus an
-`accounts_expected` count. A metric group with no value left in it is left out
-of the normalized artifact.
+entry (with `collection_error_code` and no metric groups). The normalized
+`all_accounts_collected` is false when any account failed, and from the audit
+level `accounts_expected` counts every configured account. A metric group with
+no value left in it is left out of the normalized artifact. The access-posture
+and vuln-scanning files leave a failed account out of `scopes`. Each total it
+would add to is left out with its error.
 
-## Normalized Artifact
+## Normalized Artifacts
 
-The normalized artifact (`artifacts/aws.cloud-posture.json`) follows the
-`evidencepack/cloud-posture@v1` schema. Each account carries the counts behind
-its MFA and access key rotation percentages, `iam.user_count` and
-`iam.access_key_user_count`. A count is 0 when there is nothing to count, and
-the percentage is then left out. `iam.saml_provider_count` counts the SAML
-providers the account trusts directly. It leaves out the one IAM Identity
-Center creates.
+The collector writes three normalized files. A trust-level file has no
+account IDs, `accounts_expected`, counts, or `scopes`, since the schemas mark
+them audit-level. A percentage over an empty population is null, and its
+present flag is false. When the accounts' evidence cannot decide a value, the
+value is left out, and the run's result names the read that failed. A value
+AWS never reports is left out with an `unsupported` gap. A value AWS reports
+that the collector does not read is left out with a `not_read` gap, whose
+detail names the call that would supply it.
 
-The top-level `workforce_sign_in` block describes IAM Identity Center, AWS's
-workforce sign-in service, across the accounts:
+### Cloud posture
 
-- `in_use` is true when any account shows an active organization instance,
-  the roles Identity Center provisions, or the SAML provider it creates. It is
-  false when the instance and role listings answered for every account and
-  found neither. The SAML provider listing is not needed for false.
-- `user_count` is the number of users in the organization instance's
-  directory, when an account could read it.
-- `mfa_source` is `external_idp` when every user has an external ID from
-  SCIM provisioning, and `sign_in_service` when none does, in which case
-  Identity Center's own MFA settings apply. Users synced from Active
-  Directory count as Identity Center's own. It is `unknown` for a mix, a
-  directory with no users, or when no account could see the instance, and
-  left out when `in_use` is false. Each account's
-  `identity_center.mfa_evidence` in the detailed artifact gives the same
-  answer, with `manual_required` for `sign_in_service`.
+`artifacts/aws.cloud-posture.json` follows the `evidencepack/cloud-posture@v1`
+schema. Storage counts the S3 buckets, `database` the RDS instances and
+clusters, and `network` the security groups. Each group has a present flag at
+every level, such as `storage.storage_resources_present`, and the counts from
+the audit level. Each percentage is computed from its counts. The exposure
+percentages `network.ssh_open_to_world_pct` and
+`network.rdp_open_to_world_pct` round up, so one exposed group never reads 0.
+The other percentages round down. `database.multi_az_pct` is written from the
+audit level. `database.public_access_blocked_pct` is written only as null for
+an account with no databases, since a cluster has no public access setting of
+its own. `threat_detection.enabled` is true when every scanned region has a
+GuardDuty detector whose status is `ENABLED`.
 
-When the accounts' evidence cannot decide a value, the value is left out, and
-the run's result names the read that failed. For example, `in_use` is left out
-when an account's instance listing failed and no account shows Identity
-Center.
+### Access posture
+
+`artifacts/aws.access-posture.json` follows the
+`evidencepack/access-posture@v1` schema, with `system_type` `cloud`. Its
+sections hold totals across the accounts. From the audit level, `scopes`
+lists each account alone, with its alias as the name. A present flag is true
+when any account's is. `sign_in.sso_configured` is false when any account's
+is false, left out when any other account's is unknown, and true otherwise.
+
+- `sign_in.sso_configured` is true when an account has an active
+  organization instance of IAM Identity Center, an `AWSReservedSSO_` role, or
+  a SAML provider. AWS has no account setting to require SSO or MFA for
+  everyone, so `sso_required` and `mfa_required` are left out. So is
+  `scim_enabled`.
+- Members are the IAM users in the credential report. Every IAM user can sign
+  in with its own password or access keys, so the `local_*` values count the
+  same users, with MFA from the report's `mfa_active`. A member is inactive when the password and access
+  keys were all last used more than 90 days before the run, or never.
+- `members.sso_member_count` counts the users in the directory of the
+  organization instance, when an account can read it. It is 0 when no account
+  has Identity Center. People who sign in through a SAML provider an account
+  trusts directly are not counted. Identity Center users are not IAM users,
+  so `member_count` leaves them out. `sso_coverage_pct` and the external
+  member values are left out.
+- Admins are the IAM users with the AWS managed `AdministratorAccess` policy,
+  attached to the user or to one of the user's groups. Other policies are not
+  checked. When a user's policies cannot be read, the admin counts and
+  percentages are left out with a `partial` gap.
+- `root` counts one root user for each account. A root user counts as having
+  MFA when it has MFA, or has no password, access key, or signing certificate
+  to sign in with.
+- Credentials are the IAM users' active access keys. AWS access keys never
+  expire, so `never_expiring_pct` is 100 whenever there is one. A key is
+  unused when it was last used more than 90 days before the run, or never. It
+  is overdue for rotation when it was last rotated more than 90 days before
+  the run. The unrestricted and write access values need the users' policy
+  documents, which are not read, so they are left out with a `not_read` gap.
+  So is `connected_apps`.
+
+### Vulnerability scanning
+
+`artifacts/aws.vuln-scanning.json` follows the
+`evidencepack/vuln-scanning@v1` schema. It has one `inspector` entry each for
+`hosts`, `containers`, and `functions`. Amazon Inspector's status, coverage,
+and findings are read in every scanned region. From the audit level, `scopes`
+lists each account alone.
+
+- `enabled` is true when Inspector and the category's scan type are on in
+  every scanned region. The scan types are EC2 scanning for hosts, ECR
+  scanning for containers, and Lambda standard scanning for functions.
+- The hosts are the running EC2 instances, and the functions are the Lambda
+  functions. The containers are the ECR images in Inspector's coverage, which
+  has them only where ECR scanning is on. Where it is off, the container
+  resource values are left out with a `not_read` gap, since ECR itself is not
+  read.
+- A resource is scanned when its scan status in Inspector's coverage is
+  `ACTIVE`. A region where Inspector is off adds no scanned resource and no
+  finding.
+- The open findings are Inspector's `ACTIVE` findings, by severity. A finding
+  is overdue when it is rated critical and was first observed more than 30
+  days before the run, or rated high and first observed more than 90 days
+  before it.
+- A run with Inspector off still succeeds, with `enabled` false. A read that
+  fails leaves out the values it feeds, with a gap.

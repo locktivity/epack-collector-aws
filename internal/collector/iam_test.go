@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
@@ -353,6 +354,11 @@ func TestIsHardwareMFASerial(t *testing.T) {
 			want:   true,
 		},
 		{
+			name:   "sms MFA arn",
+			serial: "arn:aws:iam::123456789012:sms-mfa/alice",
+			want:   false,
+		},
+		{
 			name:   "empty serial",
 			serial: "",
 			want:   false,
@@ -497,6 +503,41 @@ func TestAnalyzeTrustPolicy(t *testing.T) {
 	got = analyzeTrustPolicy(url.QueryEscape(denyPolicy), current)
 	if got.hasExternalTrust {
 		t.Fatalf("deny statements must not count as external trust, got %+v", got)
+	}
+
+	// The policy grammar lets Statement be a single object.
+	singleStatement := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::111111111111:root"},"Action":"sts:AssumeRole"}}`
+	got = analyzeTrustPolicy(url.QueryEscape(singleStatement), current)
+	if !got.hasExternalTrust || len(got.externalAccountIDs) != 1 || got.externalAccountIDs[0] != "111111111111" {
+		t.Fatalf("expected a single-object Statement trusting 111111111111 to be external, got %+v", got)
+	}
+	singleWildcard := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":"*","Action":"sts:AssumeRole"}}`
+	got = analyzeTrustPolicy(url.QueryEscape(singleWildcard), current)
+	if !got.hasExternalTrust || !got.hasWildcardPrincipal {
+		t.Fatalf("expected a single-object Statement trusting \"*\" to be external with the wildcard flag, got %+v", got)
+	}
+
+	// An ARN names the partition of the account that owns it.
+	for _, partition := range []string{"aws-us-gov", "aws-cn"} {
+		policy := `{"Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:` + partition + `:iam::111111111111:root"}}]}`
+		got = analyzeTrustPolicy(url.QueryEscape(policy), current)
+		if !got.hasExternalTrust || len(got.externalAccountIDs) != 1 || got.externalAccountIDs[0] != "111111111111" {
+			t.Fatalf("expected a %s principal in another account to be external, got %+v", partition, got)
+		}
+	}
+
+	// A role session or a federated user is an STS principal of its account.
+	for _, principal := range []string{"arn:aws:sts::111111111111:assumed-role/deployer/ci-session", "arn:aws:sts::111111111111:federated-user/alice"} {
+		policy := `{"Statement":[{"Effect":"Allow","Principal":{"AWS":"` + principal + `"},"Action":"sts:AssumeRole"}]}`
+		got = analyzeTrustPolicy(url.QueryEscape(policy), current)
+		if !got.hasExternalTrust || len(got.externalAccountIDs) != 1 || got.externalAccountIDs[0] != "111111111111" {
+			t.Fatalf("expected %s to be external trust in 111111111111, got %+v", principal, got)
+		}
+	}
+	ownSession := `{"Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:sts::203984714075:assumed-role/deployer/ci-session"},"Action":"sts:AssumeRole"}]}`
+	got = analyzeTrustPolicy(url.QueryEscape(ownSession), current)
+	if got.hasExternalTrust || len(got.externalAccountIDs) != 0 {
+		t.Fatalf("expected a session of this account to be non-external, got %+v", got)
 	}
 }
 
@@ -856,6 +897,43 @@ func TestCollectIAMMetrics_AllRootSourcesFail(t *testing.T) {
 	}
 }
 
+// The credential report's active columns are false for an inactive key and
+// for no key alike. When only the report answered, a false root key or
+// certificate flag is left out. An active one is a known true.
+func TestCollectIAMMetrics_RootKeysFromTheReportAlone(t *testing.T) {
+	denied := errors.New("AccessDenied: not authorized to perform iam:GetAccountSummary")
+	for _, tc := range []struct {
+		name   string
+		root   aws.CredentialReportUser
+		active bool
+	}{
+		{"no active key or certificate", aws.CredentialReportUser{User: "<root_account>"}, false},
+		{"no active key or certificate, MFA on", aws.CredentialReportUser{User: "<root_account>", MFAActive: true}, false},
+		{"an active key and certificate", aws.CredentialReportUser{User: "<root_account>", AccessKey1Active: true, Cert1Active: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestCollector(Config{})
+			client := fakeIAMClient{
+				report:     &aws.CredentialReport{Users: []aws.CredentialReportUser{tc.root}},
+				summaryErr: denied,
+				features:   &aws.OrganizationFeatures{},
+			}
+			metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", accountAt(0), componentsdk.LevelTrust)
+			if !metrics.RootCredentialStateEvaluated {
+				t.Fatal("RootCredentialStateEvaluated = false, want true from the report's root row")
+			}
+			if metrics.RootAccessKeysExist != tc.active || metrics.RootSigningCertificatesPresent != tc.active {
+				t.Errorf("RootAccessKeysExist=%v RootSigningCertificatesPresent=%v, want %v", metrics.RootAccessKeysExist, metrics.RootSigningCertificatesPresent, tc.active)
+			}
+			for _, p := range []string{"/accounts/0/iam/root_access_keys_exist", "/accounts/0/iam/root_signing_certificates_present"} {
+				if got := c.gaps.covered(p); got == tc.active {
+					t.Errorf("gap covers %s = %v, want %v", p, got, !tc.active)
+				}
+			}
+		})
+	}
+}
+
 func TestCollectIAMMetrics_ReportFailureAtAudit(t *testing.T) {
 	c := newTestCollector(Config{})
 	client := fakeIAMClient{
@@ -1169,4 +1247,77 @@ func TestCollectIAMMetrics_SignInPathFailuresLeaveCountsOut(t *testing.T) {
 		t.Errorf("Identity Center roles = %s, want it left out", showPct(metrics.IdentityCenterRoleCount))
 	}
 	requireGap(t, c, "/accounts/0/iam/identity_center_role_count")
+}
+
+// IAM returns a credential report up to four hours old, so the report's
+// GeneratedTime says how old the user figures are.
+func TestCredentialReport_GeneratedAtIsTheReportTime(t *testing.T) {
+	isolateAWSEnvironment(t)
+	responses := replaceResponses(kitResponses(), queryResponse("aws.iam.GetCredentialReport", kitIAMURL,
+		"<Content>"+base64.StdEncoding.EncodeToString([]byte(kitCredentialReport))+"</Content><ReportFormat>text/csv</ReportFormat>"+
+			"<GeneratedTime>2025-12-31T20:15:00Z</GeneratedTime>"))
+	res := runKit(t, kitConfig(), kitSecrets(), responses)
+	var doc struct {
+		Accounts []struct {
+			IAM struct {
+				CredentialReport struct {
+					GeneratedAt string `json:"generated_at"`
+					Users       []any  `json:"users"`
+				} `json:"credential_report"`
+			} `json:"iam"`
+		} `json:"accounts"`
+	}
+	decodeArtifact(t, res, awsPath, &doc)
+	if len(doc.Accounts) != 1 {
+		t.Fatalf("accounts = %d, want 1", len(doc.Accounts))
+	}
+	report := doc.Accounts[0].IAM.CredentialReport
+	if report.GeneratedAt != "2025-12-31T20:15:00Z" || len(report.Users) != 4 {
+		t.Errorf("generated_at = %q with %d users, want 2025-12-31T20:15:00Z with 4", report.GeneratedAt, len(report.Users))
+	}
+}
+
+// The credential report's root row has not_supported in the password_enabled
+// column, so password_enabled is left out of the root row.
+// root_password_present comes from the account summary. The IAM users' rows
+// keep the report's value.
+func TestCredentialReport_RootRowLeavesPasswordEnabledOut(t *testing.T) {
+	isolateAWSEnvironment(t)
+	responses := replaceResponses(kitResponses(), queryResponse("aws.iam.GetAccountSummary", kitIAMURL, "<SummaryMap>"+
+		"<entry><key>AccountMFAEnabled</key><value>1</value></entry>"+
+		"<entry><key>AccountPasswordPresent</key><value>1</value></entry>"+
+		"<entry><key>AccountAccessKeysPresent</key><value>0</value></entry>"+
+		"<entry><key>AccountSigningCertificatesPresent</key><value>0</value></entry>"+
+		"<entry><key>Users</key><value>3</value></entry></SummaryMap>"))
+	res := runKit(t, kitConfig(), kitSecrets(), responses)
+	var doc struct {
+		Accounts []struct {
+			IAM struct {
+				RootPasswordPresent *bool `json:"root_password_present"`
+				CredentialReport    struct {
+					Users []struct {
+						UserName        string `json:"user_name"`
+						PasswordEnabled *bool  `json:"password_enabled"`
+					} `json:"users"`
+				} `json:"credential_report"`
+			} `json:"iam"`
+		} `json:"accounts"`
+	}
+	decodeArtifact(t, res, awsPath, &doc)
+	if len(doc.Accounts) != 1 {
+		t.Fatalf("accounts = %d, want 1", len(doc.Accounts))
+	}
+	iam := doc.Accounts[0].IAM
+	if !samePtr(iam.RootPasswordPresent, boolPtr(true)) {
+		t.Errorf("root_password_present = %s, want true from the account summary", showBool(iam.RootPasswordPresent))
+	}
+	want := map[string]*bool{"<root_account>": nil, "alice": boolPtr(true), "bob": boolPtr(true), "carol": boolPtr(false)}
+	if len(iam.CredentialReport.Users) != len(want) {
+		t.Fatalf("credential report rows = %d, want %d", len(iam.CredentialReport.Users), len(want))
+	}
+	for _, u := range iam.CredentialReport.Users {
+		if w, ok := want[u.UserName]; !ok || !samePtr(u.PasswordEnabled, w) {
+			t.Errorf("%s password_enabled = %s, want %s", u.UserName, showBool(u.PasswordEnabled), showBool(w))
+		}
+	}
 }

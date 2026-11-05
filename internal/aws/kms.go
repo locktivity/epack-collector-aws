@@ -17,16 +17,20 @@ import (
 //
 // Per key, this issues DescribeKey (always) and GetKeyRotationStatus (for a
 // key KMS can rotate, as KMSKey.Rotatable says; other keys reject the call).
-// Aliases are sourced from a single per-region ListAliases call and joined
-// into each row.
-func (c *AWSClient) ListKMSCustomerKeys(ctx context.Context, region string) ([]KMSKey, error) {
+// With withAliases, aliases are sourced from a single per-region ListAliases
+// call and joined into each row. Only the key rows carry aliases, so a run
+// without them does not need kms:ListAliases.
+func (c *AWSClient) ListKMSCustomerKeys(ctx context.Context, region string, withAliases bool) ([]KMSKey, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	client := kms.NewFromConfig(cfg)
 
-	aliasesByKey, err := listKMSAliasesByKey(ctx, client)
-	if err != nil {
-		return nil, err
+	var aliasesByKey map[string][]string
+	if withAliases {
+		var err error
+		if aliasesByKey, err = listKMSAliasesByKey(ctx, client); err != nil {
+			return nil, err
+		}
 	}
 
 	var keys []KMSKey

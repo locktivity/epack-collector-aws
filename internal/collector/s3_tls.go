@@ -206,7 +206,10 @@ func actionsCoverAllS3(actions flexibleStrings) bool {
 }
 
 // resourcesCoverWholeBucket requires both the bucket itself and its objects,
-// matched by suffix so every partition (aws, aws-cn, aws-us-gov) passes.
+// matched by suffix so every partition (aws, aws-cn, aws-us-gov) passes. A
+// trailing * in the ARN matches any characters, / included, so
+// arn:aws:s3:::* and arn:aws:s3:::intake* cover the bucket intake and every
+// object in it.
 func resourcesCoverWholeBucket(resources flexibleStrings, bucket string) bool {
 	bucketARN := ":s3:::" + bucket
 	objectsARN := ":s3:::" + bucket + "/*"
@@ -214,6 +217,10 @@ func resourcesCoverWholeBucket(resources flexibleStrings, bucket string) bool {
 	coversBucket, coversObjects := false, false
 	for _, r := range resources {
 		if r == "*" {
+			return true
+		}
+		if _, name, ok := strings.Cut(r, ":s3:::"); ok && strings.HasPrefix(r, "arn:") && strings.HasSuffix(name, "*") &&
+			!strings.ContainsAny(strings.TrimSuffix(name, "*"), "*?") && strings.HasPrefix(bucket, strings.TrimSuffix(name, "*")) {
 			return true
 		}
 		if strings.HasSuffix(r, bucketARN) {

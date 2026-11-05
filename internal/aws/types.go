@@ -10,6 +10,9 @@ import (
 // CredentialReport represents a parsed IAM credential report.
 type CredentialReport struct {
 	Users []CredentialReportUser
+	// GeneratedTime is when IAM generated the report. IAM returns a report
+	// up to four hours old instead of generating a new one.
+	GeneratedTime *time.Time
 }
 
 // AccountSummary represents root-account credential presence from IAM
@@ -181,6 +184,7 @@ func (p PublicAccessBlockSettings) BlocksPublicAccess() bool {
 // DBInstance represents an RDS instance with security settings.
 type DBInstance struct {
 	DBInstanceIdentifier    string
+	DBClusterIdentifier     string // the cluster the instance belongs to, if any
 	Engine                  string
 	EngineVersion           string
 	PubliclyAccessible      bool
@@ -268,8 +272,27 @@ type BucketLifecycleRule struct {
 	// Structured expiration for classification: the display string above is
 	// for reading, these are for deciding. Days is zero when the rule expires
 	// by date or not at all; ExpirationIsDate distinguishes the two.
-	ExpirationDays   int32
-	ExpirationIsDate bool
+	// NoncurrentExpirationDays is how long a version is kept once it becomes
+	// noncurrent, zero when the rule does not expire noncurrent versions.
+	ExpirationDays           int32
+	ExpirationIsDate         bool
+	NoncurrentExpirationDays int32
+
+	// NewerNoncurrentVersions is how many of the newest noncurrent versions
+	// the noncurrent expiration keeps, zero when it keeps none.
+	NewerNoncurrentVersions int32
+
+	// Tags and the object size bounds narrow the rule beyond its prefix. A
+	// size bound is zero when the filter sets none.
+	Tags                  map[string]string
+	ObjectSizeGreaterThan int64
+	ObjectSizeLessThan    int64
+}
+
+// NarrowedBeyondPrefix reports whether the rule's filter also selects by tag
+// or object size, so it covers only some of the objects under its prefix.
+func (r BucketLifecycleRule) NarrowedBeyondPrefix() bool {
+	return len(r.Tags) > 0 || r.ObjectSizeGreaterThan > 0 || r.ObjectSizeLessThan > 0
 }
 
 // ObjectLockConfig is a bucket's object lock default retention. A locked
@@ -284,6 +307,7 @@ type ObjectLockConfig struct {
 // VPC represents a VPC with security settings.
 type VPC struct {
 	VPCID             string
+	OwnerID           string // the account that owns the VPC, another one's for a shared VPC
 	IsDefault         bool
 	FlowLogsEnabled   bool
 	FlowLogsEvaluated bool
@@ -306,16 +330,22 @@ type SecurityGroup struct {
 // SGs and tier-to-tier rules). A rule can have either, both, or neither
 // populated; an empty rule (both nil) is a degenerate config worth flagging.
 type SecurityGroupRule struct {
-	Protocol    string // "tcp", "udp", "icmp", "-1" (all)
-	FromPort    int
-	ToPort      int
-	CIDRBlocks  []string
-	SourceSGIDs []string
+	Protocol      string // "tcp", "udp", "icmp", "-1" (all)
+	FromPort      int
+	ToPort        int
+	CIDRBlocks    []string
+	SourceSGIDs   []string
+	PrefixListIDs []string // managed prefix lists the rule allows, by ID
 }
 
 // IsOpenToWorld returns true if the rule allows traffic from 0.0.0.0/0 or ::/0.
 func (r SecurityGroupRule) IsOpenToWorld() bool {
-	for _, cidr := range r.CIDRBlocks {
+	return AnyWorldCIDR(r.CIDRBlocks)
+}
+
+// AnyWorldCIDR reports whether cidrs include 0.0.0.0/0 or ::/0.
+func AnyWorldCIDR(cidrs []string) bool {
+	for _, cidr := range cidrs {
 		if cidr == "0.0.0.0/0" || cidr == "::/0" {
 			return true
 		}
@@ -359,15 +389,36 @@ type Trail struct {
 	IsOrganizationTrail       bool
 	LogFileValidationEnabled  bool
 	CloudWatchLogsLogGroupArn *string
-	KMSKeyId                  *string
-	IsLogging                 bool
-	TrailStatusEvaluated      bool
-	TrailStatusInferred       bool
-	TrailStatusErrorCode      string
+
+	// GlobalServiceEventsOff is true when DescribeTrails sets
+	// IncludeGlobalServiceEvents to false. The trail then records no IAM, STS
+	// or CloudFront events.
+	GlobalServiceEventsOff bool
+
+	KMSKeyId             *string
+	IsLogging            bool
+	TrailStatusEvaluated bool
+	TrailStatusInferred  bool
+	TrailStatusErrorCode string
 
 	// StatusErr is why the trail's status could not be read, when it was
 	// neither read nor inferred.
 	StatusErr error
+
+	// ManagementEvents is which management events the trail's event
+	// selectors record, one of the ManagementEvents constants, or "" when
+	// they could not be read. ManagementEventsInferred is true for an
+	// organization trail whose selectors a member account is denied, which
+	// counts as recording them. SelectorsErr is why the selectors could not
+	// be read.
+	ManagementEvents         string
+	ManagementEventsInferred bool
+	SelectorsErr             error
+
+	// ManagementEventSourcesExcluded is true when the selectors that record
+	// management writes leave out an event source, such as KMS or the RDS
+	// Data API.
+	ManagementEventSourcesExcluded bool
 }
 
 // ConfigRecorder represents an AWS Config recorder.
@@ -422,6 +473,8 @@ type GuardDutyFinding struct {
 	ResourceID   string
 	CreatedAt    *time.Time
 	UpdatedAt    *time.Time
+	// Sample is true for a generated sample finding.
+	Sample bool
 }
 
 // SecurityHubConfig represents Security Hub configuration.
@@ -477,6 +530,24 @@ type AccessAnalyzer struct {
 
 	// FindingsErr is why the findings could not be counted.
 	FindingsErr error
+
+	// RoleFindings holds the status of each IAM role finding the counts
+	// include, keyed by the role and the access it grants. A role is global,
+	// so the same finding appears in every enabled region's analyzer.
+	RoleFindings map[string]string
+
+	// UnusedFindings counts an unused access analyzer's findings with the
+	// same resource, finding type and status, keyed by unusedFindingKey.
+	// Unused access findings do not change by region, so analyzers in
+	// several regions report the same ones.
+	UnusedFindings map[string]UnusedFindingTally
+}
+
+// UnusedFindingTally is how many of an analyzer's unused access findings
+// share one key, and their status.
+type UnusedFindingTally struct {
+	Status string
+	Count  int
 }
 
 // IdentityCenterInstance is a single AWS IAM Identity Center (formerly AWS SSO)
@@ -555,6 +626,7 @@ type IdentityCenterAssignment struct {
 // For SecureString, an empty KMSKeyARN means the parameter uses the AWS-managed
 // `aws/ssm` key (still encrypted, but no customer key control).
 type SSMParameter struct {
+	ARN              string // "" when DescribeParameters leaves it out
 	Name             string
 	Type             string // String / StringList / SecureString
 	DataType         string // text / aws:ec2:image / aws:ssm:integration
@@ -710,4 +782,8 @@ type LambdaFunction struct {
 	HasVPCConfig  bool
 	DeadLetterARN string
 	EnvVarNames   []string
+
+	// EnvironmentErr is why the function's environment variables could not
+	// be read. The response then has no variable names.
+	EnvironmentErr error
 }

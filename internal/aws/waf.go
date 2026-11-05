@@ -43,6 +43,10 @@ type WebACL struct {
 
 	// LoggingErr is why the logging configuration could not be read.
 	LoggingErr error
+
+	// RuleGroupsErr is why a rule group the web ACL references could not be
+	// read, so whether its rules block by rate is unknown.
+	RuleGroupsErr error
 }
 
 // WebACLRule is one rule's enforcement posture.
@@ -60,6 +64,19 @@ type WebACLRule struct {
 	AggregateKeyType string // IP, FORWARDED_IP, CUSTOM_KEYS, CONSTANT
 
 	ManagedRuleGroupName string
+
+	// RuleGroupARN is the rule group a rule group reference runs.
+	// GroupRateBasedBlock is true when that group holds a rate-based rule
+	// whose action is Block once the web ACL's overrides apply.
+	RuleGroupARN        string
+	GroupRateBasedBlock bool
+
+	// GroupErr is why the referenced rule group could not be read.
+	GroupErr error
+
+	// groupOverrides are the web ACL's per-rule action overrides for the
+	// referenced group.
+	groupOverrides []wafv2types.RuleActionOverride
 }
 
 // ListWebACLs returns the web ACLs for one scope with their rules resolved.
@@ -73,8 +90,9 @@ func (c *AWSClient) ListWebACLs(ctx context.Context, scope, region string) ([]We
 	}
 
 	var out []WebACL
+	groups := map[string]ruleGroupRead{}
 	for _, summary := range summaries {
-		acl, err := buildWebACL(ctx, client, summary, scope, region)
+		acl, err := buildWebACL(ctx, client, summary, scope, region, groups)
 		if err != nil {
 			return nil, err
 		}
@@ -111,8 +129,12 @@ func listWebACLSummaries(ctx context.Context, client *wafv2.Client, scope string
 
 // buildWebACL resolves one summary into a full row. Unreadable rules or
 // associations fail the listing; the logging read degrades to unevaluated
-// instead, so a missing logging permission never fails the region.
-func buildWebACL(ctx context.Context, client *wafv2.Client, summary wafv2types.WebACLSummary, scope, region string) (WebACL, error) {
+// instead, so a missing logging permission never fails the region. A rule
+// group the web ACL references is read with GetRuleGroup once per listing,
+// in groups, and a failed read leaves RuleGroupsErr set. The rule groups
+// Firewall Manager adds, which the web ACL runs first and last, are rules
+// too.
+func buildWebACL(ctx context.Context, client *wafv2.Client, summary wafv2types.WebACLSummary, scope, region string, groups map[string]ruleGroupRead) (WebACL, error) {
 	acl := WebACL{
 		Name:  aws.ToString(summary.Name),
 		Arn:   aws.ToString(summary.ARN),
@@ -134,8 +156,33 @@ func buildWebACL(ctx context.Context, client *wafv2.Client, summary wafv2types.W
 		return WebACL{}, errMissing(detail.ResultMetadata, "reading web ACL "+acl.Name, "WebACL")
 	}
 	acl.DefaultAction = defaultActionName(detail.WebACL.DefaultAction)
+	for _, group := range detail.WebACL.PreProcessFirewallManagerRuleGroups {
+		acl.Rules = append(acl.Rules, firewallManagerRule(group))
+	}
 	for _, rule := range detail.WebACL.Rules {
 		acl.Rules = append(acl.Rules, webACLRule(rule))
+	}
+	for _, group := range detail.WebACL.PostProcessFirewallManagerRuleGroups {
+		acl.Rules = append(acl.Rules, firewallManagerRule(group))
+	}
+	for i := range acl.Rules {
+		rule := &acl.Rules[i]
+		if rule.RuleGroupARN == "" {
+			continue
+		}
+		read, ok := groups[rule.RuleGroupARN]
+		if !ok {
+			read = readRuleGroup(ctx, client, rule.RuleGroupARN)
+			groups[rule.RuleGroupARN] = read
+		}
+		if read.err != nil {
+			rule.GroupErr = read.err
+			if acl.RuleGroupsErr == nil {
+				acl.RuleGroupsErr = read.err
+			}
+			continue
+		}
+		rule.GroupRateBasedBlock = rule.Action == "managed" && groupBlocksByRate(read.rules, rule.groupOverrides)
 	}
 
 	if scope == WAFScopeRegional {
@@ -190,6 +237,65 @@ func loggingState(ctx context.Context, client *wafv2.Client, arn *string) (evalu
 	return false, false, "", fmt.Errorf("getting web ACL logging: %w", err)
 }
 
+// ruleGroupRead is a referenced rule group's rules, or why they could not
+// be read.
+type ruleGroupRead struct {
+	rules []wafv2types.Rule
+	err   error
+}
+
+func readRuleGroup(ctx context.Context, client *wafv2.Client, arn string) ruleGroupRead {
+	out, err := client.GetRuleGroup(ctx, &wafv2.GetRuleGroupInput{ARN: aws.String(arn)})
+	if err != nil {
+		return ruleGroupRead{err: fmt.Errorf("reading rule group %s: %w", arn, err)}
+	}
+	if out.RuleGroup == nil {
+		return ruleGroupRead{err: errMissing(out.ResultMetadata, "reading rule group "+arn, "RuleGroup")}
+	}
+	return ruleGroupRead{rules: out.RuleGroup.Rules}
+}
+
+// groupBlocksByRate reports whether a rule group holds a rate-based rule
+// that blocks once the web ACL's per-rule overrides apply. An override takes
+// the place of the rule's own action, so it can turn a Count rule into a
+// Block rule as well as the reverse.
+func groupBlocksByRate(rules []wafv2types.Rule, overrides []wafv2types.RuleActionOverride) bool {
+	for _, rule := range rules {
+		if rule.Statement == nil || rule.Statement.RateBasedStatement == nil {
+			continue
+		}
+		blocks := rule.Action != nil && rule.Action.Block != nil
+		for _, o := range overrides {
+			if aws.ToString(o.Name) == aws.ToString(rule.Name) {
+				blocks = o.ActionToUse != nil && o.ActionToUse.Block != nil
+			}
+		}
+		if blocks {
+			return true
+		}
+	}
+	return false
+}
+
+// firewallManagerRule is a rule group Firewall Manager adds to a web ACL, as
+// one of its rules.
+func firewallManagerRule(group wafv2types.FirewallManagerRuleGroup) WebACLRule {
+	return webACLRule(wafv2types.Rule{
+		Name:           group.Name,
+		Priority:       group.Priority,
+		OverrideAction: group.OverrideAction,
+		Statement: func() *wafv2types.Statement {
+			if group.FirewallManagerStatement == nil {
+				return nil
+			}
+			return &wafv2types.Statement{
+				ManagedRuleGroupStatement:   group.FirewallManagerStatement.ManagedRuleGroupStatement,
+				RuleGroupReferenceStatement: group.FirewallManagerStatement.RuleGroupReferenceStatement,
+			}
+		}(),
+	})
+}
+
 func webACLRule(rule wafv2types.Rule) WebACLRule {
 	out := WebACLRule{
 		Name:     aws.ToString(rule.Name),
@@ -227,6 +333,18 @@ func webACLRule(rule wafv2types.Rule) WebACLRule {
 		}
 		if managed := rule.Statement.ManagedRuleGroupStatement; managed != nil {
 			out.ManagedRuleGroupName = aws.ToString(managed.Name)
+		}
+		if ref := rule.Statement.RuleGroupReferenceStatement; ref != nil {
+			out.RuleGroupARN = aws.ToString(ref.ARN)
+			// ExcludedRules is the older way to set a group's rules to
+			// Count.
+			for _, excluded := range ref.ExcludedRules {
+				out.groupOverrides = append(out.groupOverrides, wafv2types.RuleActionOverride{
+					Name:        excluded.Name,
+					ActionToUse: &wafv2types.RuleAction{Count: &wafv2types.CountAction{}},
+				})
+			}
+			out.groupOverrides = append(out.groupOverrides, ref.RuleActionOverrides...)
 		}
 	}
 	return out

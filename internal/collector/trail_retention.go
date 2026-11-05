@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
@@ -28,6 +29,18 @@ type trailBucketVerdict struct {
 	expirationDays int32
 	objectLockMode string
 	publicAccess   string
+	// objectLockDays is the bucket's default object lock retention in days.
+	objectLockDays int32
+
+	// lifecycle is the bucket's lifecycle configuration when it was read,
+	// and lifecycleRead is true then. Each trail's retention comes from the
+	// rules that cover that trail's own prefix. versioned is whether the
+	// bucket keeps noncurrent versions, and versioningErr is why that could
+	// not be read.
+	lifecycle     *aws.BucketLifecycle
+	lifecycleRead bool
+	versioned     bool
+	versioningErr error
 
 	// missing holds the trail rows' bucket fields a failed read left
 	// unknown.
@@ -49,6 +62,12 @@ var (
 // organization trails delivering to a log archive account, classifies
 // not_in_account rather than anything about its rules: enrolling that account
 // is what makes it readable. A read that fails leaves its values unknown.
+//
+// Each trail's retention comes from the lifecycle rules that cover its own
+// key prefix. A bucket that several trails deliver to counts as expiring when
+// any of their objects expire, with the shortest expiration. Otherwise it
+// counts as unknown when any trail's retention is unknown. The counts do not
+// depend on the order DescribeTrails lists the trails in.
 func (c *Collector) resolveTrailBucketRetention(ctx context.Context, client *aws.AWSClient, accountID string, at at, trails []aws.Trail, s3 *S3Metrics, status *CloudTrailStatus) {
 	verdicts := map[string]*trailBucketVerdict{}
 	var order []string
@@ -86,7 +105,11 @@ func (c *Collector) resolveTrailBucketRetention(ctx context.Context, client *aws
 			v.missing.add(err, "bucket_retention", "bucket_expiration_days")
 			status.missing.addPartial(err, 1, trailRetentionCounts...)
 		} else {
-			v.state, v.expirationDays = classifyTrailRetention(lifecycle, trailObjectPrefix(trail))
+			v.lifecycle, v.lifecycleRead = lifecycle, true
+			v.versioned, v.versioningErr = client.GetBucketVersioning(ctx, region, name)
+			if v.versioningErr != nil {
+				c.warn("account %s: failed to read versioning for trail bucket %s; whether expired objects are deleted is unknown: %v", accountID, name, v.versioningErr)
+			}
 		}
 
 		lock, err := client.GetBucketObjectLock(ctx, region, name)
@@ -97,6 +120,7 @@ func (c *Collector) resolveTrailBucketRetention(ctx context.Context, client *aws
 			status.missing.addPartial(err, 1, trailObjectLockCounts...)
 		case lock != nil:
 			v.objectLockMode = lock.Mode
+			v.objectLockDays = lock.Days + 365*lock.Years
 		}
 
 		bucketPAB := client.GetBucketPublicAccessBlock(ctx, region, name)
@@ -111,6 +135,22 @@ func (c *Collector) resolveTrailBucketRetention(ctx context.Context, client *aws
 			}
 			v.missing.add(why, "bucket_public_access")
 			status.missing.addPartial(why, 1, trailPublicAccessCounts...)
+		}
+	}
+
+	// A bucket whose lifecycle was read takes its state from the trails that
+	// deliver to it, each judged by the rules covering its own prefix.
+	for _, trail := range trails {
+		v := verdicts[trail.S3BucketName]
+		if v == nil || !v.lifecycleRead {
+			continue
+		}
+		state, days := v.classify(trail)
+		v.state, v.expirationDays = combineTrailRetention(v.state, v.expirationDays, state, days)
+	}
+	for _, name := range order {
+		if v := verdicts[name]; v.lifecycleRead && v.versioningErr != nil && v.state == trailRetentionUnknown {
+			status.missing.addPartial(v.versioningErr, 1, trailRetentionCounts...)
 		}
 	}
 
@@ -145,14 +185,38 @@ func (c *Collector) resolveTrailBucketRetention(ctx context.Context, client *aws
 	status.TrailBucketMinExpirationDays = minExpiration
 
 	for i := range status.Trails {
-		if v, ok := verdicts[status.Trails[i].S3BucketName]; ok {
-			status.Trails[i].BucketRetention = v.state
-			status.Trails[i].BucketExpirationDays = v.expirationDays
-			status.Trails[i].BucketObjectLockMode = v.objectLockMode
-			status.Trails[i].BucketPublicAccess = v.publicAccess
-			status.Trails[i].missing.merge(v.missing)
+		row := &status.Trails[i]
+		v, ok := verdicts[row.S3BucketName]
+		if !ok {
+			continue
 		}
+		row.BucketRetention, row.BucketExpirationDays = v.state, v.expirationDays
+		if v.lifecycleRead {
+			row.BucketRetention, row.BucketExpirationDays = v.classify(aws.Trail{
+				S3KeyPrefix: row.S3KeyPrefix, TrailARN: row.TrailARN, IsOrganizationTrail: row.IsOrganizationTrail,
+			})
+			if row.BucketRetention == trailRetentionUnknown && v.versioningErr != nil {
+				row.missing.add(v.versioningErr, "bucket_retention", "bucket_expiration_days")
+			}
+		}
+		row.BucketObjectLockMode = v.objectLockMode
+		row.BucketPublicAccess = v.publicAccess
+		row.missing.merge(v.missing)
 	}
+}
+
+// combineTrailRetention folds one more trail's retention into a bucket's. A
+// bucket with no state yet takes the trail's. Expiring wins with the shorter
+// expiration, then unknown, then indefinite.
+func combineTrailRetention(state string, days int32, trailState string, trailDays int32) (string, int32) {
+	rank := map[string]int{"": 0, trailRetentionIndefinite: 1, trailRetentionUnknown: 2, trailRetentionExpiring: 3}
+	switch {
+	case rank[trailState] > rank[state]:
+		return trailState, trailDays
+	case trailState == trailRetentionExpiring && state == trailRetentionExpiring && trailDays < days:
+		return state, trailDays
+	}
+	return state, days
 }
 
 // trailBucketPublicAccess resolves a delivery bucket's block from the account
@@ -169,31 +233,80 @@ func trailBucketPublicAccess(account, bucket aws.PublicAccessBlockSettings) stri
 }
 
 // trailObjectPrefix is where the trail writes its objects, which is what a
-// lifecycle rule must cover to govern them.
+// lifecycle rule must cover to govern them. A trail that is not an
+// organization trail writes only under its own account's folder,
+// AWSLogs/<account ID>/. An organization trail writes a folder for each
+// account under AWSLogs/<organization ID>/.
 func trailObjectPrefix(trail aws.Trail) string {
-	if trail.S3KeyPrefix == "" {
-		return "AWSLogs/"
+	prefix := "AWSLogs/"
+	if trail.S3KeyPrefix != "" {
+		prefix = strings.TrimSuffix(trail.S3KeyPrefix, "/") + "/AWSLogs/"
 	}
-	return strings.TrimSuffix(trail.S3KeyPrefix, "/") + "/AWSLogs/"
+	if account := trailAccountID(trail.TrailARN); account != "" && !trail.IsOrganizationTrail {
+		prefix += account + "/"
+	}
+	return prefix
+}
+
+// trailAccountID is the account in a trail's ARN, arn:<partition>:cloudtrail:
+// <region>:<account>:trail/<name>, or "" when the ARN has none.
+func trailAccountID(arn string) string {
+	parts := strings.Split(arn, ":")
+	if len(parts) < 6 || parts[0] != "arn" || parts[2] != "cloudtrail" {
+		return ""
+	}
+	return parts[4]
+}
+
+// classify judges the trail's objects by the bucket's lifecycle and
+// versioning. When the versioning could not be read and the two answers
+// differ, the retention is unknown. A lifecycle expiration cannot delete an
+// object version while object lock retains it, so an expiring object is kept
+// for at least the bucket's default retention. A year of retention counts as
+// 365 days.
+func (v *trailBucketVerdict) classify(trail aws.Trail) (string, int32) {
+	trailPrefix, organization := trailObjectPrefix(trail), trail.IsOrganizationTrail
+	state, days := classifyTrailRetention(v.lifecycle, trailPrefix, organization, v.versioned)
+	if v.versioningErr != nil {
+		state, days = classifyTrailRetention(v.lifecycle, trailPrefix, organization, false)
+		if versionedState, versionedDays := classifyTrailRetention(v.lifecycle, trailPrefix, organization, true); versionedState != state || versionedDays != days {
+			return trailRetentionUnknown, 0
+		}
+	}
+	if state == trailRetentionExpiring && days < v.objectLockDays {
+		days = v.objectLockDays
+	}
+	return state, days
 }
 
 // classifyTrailRetention reduces a bucket's lifecycle rules to the fate of the
 // trail's objects. Only enabled rules whose prefix covers the trail path
 // count, and only expiration ends retention: a transition to colder storage
-// preserves the data and must never read as deletion.
-func classifyTrailRetention(lifecycle *aws.BucketLifecycle, trailPrefix string) (string, int32) {
+// preserves the data and must never read as deletion. A rule that also
+// filters by tag or object size covers only some objects, so it does not
+// count. CloudTrail log files carry no tags.
+//
+// In a versioned bucket an expiration only makes the object noncurrent, so
+// the object is deleted only when a covering rule also expires noncurrent
+// versions. It is then kept for the two periods together. A trail object is
+// written once and has at most one noncurrent version, so a rule that keeps
+// any newer noncurrent versions never deletes it.
+func classifyTrailRetention(lifecycle *aws.BucketLifecycle, trailPrefix string, organization, versioned bool) (string, int32) {
 	if lifecycle == nil {
 		return trailRetentionIndefinite, 0
 	}
 
-	minDays := int32(0)
+	minDays, minNoncurrentDays := int32(0), int32(0)
 	sawDateExpiration := false
 	for _, rule := range lifecycle.Rules {
 		if !strings.EqualFold(rule.Status, "Enabled") {
 			continue
 		}
-		if rule.Prefix != "" && !strings.HasPrefix(trailPrefix, rule.Prefix) {
+		if !ruleCoversTrailObjects(rule.Prefix, trailPrefix, organization) || rule.NarrowedBeyondPrefix() {
 			continue
+		}
+		if rule.NoncurrentExpirationDays > 0 && rule.NewerNoncurrentVersions == 0 && (minNoncurrentDays == 0 || rule.NoncurrentExpirationDays < minNoncurrentDays) {
+			minNoncurrentDays = rule.NoncurrentExpirationDays
 		}
 		if rule.ExpirationIsDate {
 			sawDateExpiration = true
@@ -206,8 +319,14 @@ func classifyTrailRetention(lifecycle *aws.BucketLifecycle, trailPrefix string) 
 			minDays = rule.ExpirationDays
 		}
 	}
+	if versioned && minNoncurrentDays == 0 {
+		return trailRetentionIndefinite, 0
+	}
 
 	if minDays > 0 {
+		if versioned {
+			return trailRetentionExpiring, minDays + minNoncurrentDays
+		}
 		return trailRetentionExpiring, minDays
 	}
 	if sawDateExpiration {
@@ -216,4 +335,20 @@ func classifyTrailRetention(lifecycle *aws.BucketLifecycle, trailPrefix string) 
 		return trailRetentionUnknown, 0
 	}
 	return trailRetentionIndefinite, 0
+}
+
+// organizationFolder is an organization ID, with or without a trailing slash.
+var organizationFolder = regexp.MustCompile(`^o-[a-z0-9]{10,32}/?$`)
+
+// ruleCoversTrailObjects reports whether a lifecycle rule's prefix covers
+// every object a trail writes under trailPrefix. An organization trail writes
+// under trailPrefix followed by its organization ID. DescribeTrails does not
+// return that ID, so a rule on one organization's folder counts as covering
+// the trail.
+func ruleCoversTrailObjects(rulePrefix, trailPrefix string, organization bool) bool {
+	if strings.HasPrefix(trailPrefix, rulePrefix) {
+		return true
+	}
+	folder, ok := strings.CutPrefix(rulePrefix, trailPrefix)
+	return organization && ok && organizationFolder.MatchString(folder)
 }

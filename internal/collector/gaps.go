@@ -12,9 +12,17 @@ import (
 )
 
 const (
-	awsPath            = "artifacts/aws.json"
-	cloudPosturePath   = "artifacts/aws.cloud-posture.json"
-	cloudPostureSchema = "evidencepack/cloud-posture@v1"
+	awsPath             = "artifacts/aws.details.json"
+	cloudPosturePath    = "artifacts/aws.cloud-posture.json"
+	cloudPostureSchema  = "evidencepack/cloud-posture@v1"
+	accessPostureSchema = "evidencepack/access-posture@v1"
+	vulnScanningSchema  = "evidencepack/vuln-scanning@v1"
+)
+
+// The paths of the access-posture and vuln-scanning artifacts.
+var (
+	accessPosturePath = componentsdk.ArtifactPath("aws", accessPostureSchema)
+	vulnScanningPath  = componentsdk.ArtifactPath("aws", vulnScanningSchema)
 )
 
 type gap struct {
@@ -67,19 +75,54 @@ func (l *gapLog) partial(unmeasured int, err error, pointers ...string) {
 // the detailed value it is derived from, if any. It reports whether there
 // was one.
 func (l *gapLog) mirror(fromPointer, toPointer string) bool {
+	return l.mirrorTo(cloudPosturePath, fromPointer, toPointer)
+}
+
+// mirrorTo records, at a value in the artifact at path, the gap covering the
+// detailed value it is derived from, if any. It reports whether there was
+// one.
+func (l *gapLog) mirrorTo(path, fromPointer, toPointer string) bool {
 	if !l.covered(fromPointer) {
 		return false
 	}
-	l.rec.Mirror(componentsdk.Location{Path: awsPath, Pointer: fromPointer}, componentsdk.Location{Path: cloudPosturePath, Pointer: toPointer})
+	l.rec.Mirror(componentsdk.Location{Path: awsPath, Pointer: fromPointer}, componentsdk.Location{Path: path, Pointer: toPointer})
 	return true
+}
+
+// copied records a value written in the normalized artifact as a copy of the
+// detailed value at fromPointer, so the test kit finds the method of the
+// value it copies. It records nothing when a gap covers the detailed value,
+// since Mirror would then carry that gap onto a value that was written.
+func (l *gapLog) copied(fromPointer, toPointer string) {
+	if fromPointer == "" || l.covered(fromPointer) {
+		return
+	}
+	l.rec.Mirror(componentsdk.Location{Path: awsPath, Pointer: fromPointer}, componentsdk.Location{Path: cloudPosturePath, Pointer: toPointer})
 }
 
 // leaveOutNormalized records a value in the normalized artifact as left out
 // because of err.
 func (l *gapLog) leaveOutNormalized(err error, pointers ...string) {
 	l.rec.Helper()
+	l.leaveOutIn(cloudPosturePath, err, pointers...)
+}
+
+// leaveOutIn records values in the artifact at path as left out because of
+// err.
+func (l *gapLog) leaveOutIn(path string, err error, pointers ...string) {
+	l.rec.Helper()
 	for _, pointer := range pointers {
-		l.add(gap{path: cloudPosturePath, pointer: pointer, err: err})
+		l.add(gap{path: path, pointer: pointer, err: err})
+	}
+}
+
+// partialIn records rollups in the artifact at path as left out because
+// unmeasured of the items they cover could not be read, err being one of
+// the failures.
+func (l *gapLog) partialIn(path string, unmeasured int, err error, pointers ...string) {
+	l.rec.Helper()
+	for _, pointer := range pointers {
+		l.add(gap{path: path, pointer: pointer, err: err, unmeasured: unmeasured})
 	}
 }
 

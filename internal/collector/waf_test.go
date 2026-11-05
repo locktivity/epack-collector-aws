@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -170,5 +171,24 @@ func TestMergeWAFScans(t *testing.T) {
 
 	if len(merged.acls) != 2 || len(merged.lbHeads) != 2 {
 		t.Errorf("merged = %d acls %d heads, want 2 and 2", len(merged.acls), len(merged.lbHeads))
+	}
+}
+
+// A rate-based rule that blocks inside a rule group an attached web ACL runs
+// enforces rate limiting. When none is found and such a group could not be
+// read, the answer is unknown.
+func TestRateLimitingEnforced_RuleGroups(t *testing.T) {
+	unread := errors.New("AccessDeniedException")
+	attached := func(rules []aws.WebACLRule, groupsErr error) []aclAssociation {
+		return []aclAssociation{{acl: aws.WebACL{Name: "edge", Rules: rules, RuleGroupsErr: groupsErr}, associated: 1}}
+	}
+	if got, err := rateLimitingEnforced(attached([]aws.WebACLRule{{Name: "throttle", Action: "managed", GroupRateBasedBlock: true}}, nil)); !got || err != nil {
+		t.Errorf("group with a rate-based block: %v, %v; want true", got, err)
+	}
+	if got, err := rateLimitingEnforced(attached([]aws.WebACLRule{{Name: "throttle", Action: "managed", GroupErr: unread}}, unread)); got || err == nil {
+		t.Errorf("unreadable group: %v, %v; want false and the read's error", got, err)
+	}
+	if got, err := rateLimitingEnforced(attached([]aws.WebACLRule{{Name: "rate", Action: "block", IsRateBased: true}, {Name: "throttle", GroupErr: unread}}, unread)); !got || err != nil {
+		t.Errorf("inline rate-based block beside an unreadable group: %v, %v; want true", got, err)
 	}
 }

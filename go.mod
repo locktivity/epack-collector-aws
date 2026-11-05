@@ -23,10 +23,11 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/guardduty v1.55.0
 	github.com/aws/aws-sdk-go-v2/service/iam v1.41.1
 	github.com/aws/aws-sdk-go-v2/service/identitystore v1.36.7
+	github.com/aws/aws-sdk-go-v2/service/inspector2 v1.61.4
 	github.com/aws/aws-sdk-go-v2/service/kms v1.51.1
 	github.com/aws/aws-sdk-go-v2/service/lambda v1.90.1
 	github.com/aws/aws-sdk-go-v2/service/organizations v1.53.0
-	github.com/aws/aws-sdk-go-v2/service/rds v1.97.2
+	github.com/aws/aws-sdk-go-v2/service/rds v1.116.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.2
 	github.com/aws/aws-sdk-go-v2/service/s3control v1.55.0
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.7
@@ -38,7 +39,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.4
 	github.com/aws/aws-sdk-go-v2/service/wafv2 v1.77.6
 	github.com/aws/smithy-go v1.28.5
-	github.com/locktivity/epack v0.9.7
+	github.com/locktivity/epack v0.10.0
 )
 
 require (

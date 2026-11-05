@@ -101,7 +101,8 @@ func TestDeniedGapsNameTheirCallAndPermission(t *testing.T) {
 	for _, at := range []struct{ path, pointer string }{
 		{awsPath, "/accounts/0/iam/mfa_enabled"},
 		{awsPath, "/accounts/0/iam/mfa_enabled_user_count"},
-		{cloudPosturePath, "/accounts/0/iam/mfa_coverage_pct"},
+		{accessPosturePath, "/members/local_mfa_coverage_pct"},
+		{accessPosturePath, "/scopes/0/members/local_mfa_coverage_pct"},
 	} {
 		g := gapAt(res, at.path, at.pointer)
 		switch {
@@ -123,16 +124,16 @@ func TestDeniedGapsNameTheirCallAndPermission(t *testing.T) {
 		t.Errorf("password_policy: missing permission %q, warning %q; want the deny named and no permission to grant", g.MissingPermission, g.Warning)
 	}
 	for _, g := range res.Result.Gaps {
-		if g.Operation == "" || g.Call == 0 {
+		if g.Code != componentsdk.CodeUnsupported && g.Code != componentsdk.CodeNotRead && (g.Operation == "" || g.Call == 0) {
 			t.Errorf("the gap at %s %s names no call", g.Path, g.Pointer)
 		}
 	}
 }
 
 // Without iam:ListSAMLProviders, the provider counts are left out with a gap
-// that names the permission, and the normalized artifact still says whether
-// Identity Center is in use.
-func TestSAMLProvidersDeniedLeavesInUseDecided(t *testing.T) {
+// that names the permission, and the access-posture artifact still says
+// whether SSO is configured.
+func TestSAMLProvidersDeniedLeavesSSODecided(t *testing.T) {
 	isolateAWSEnvironment(t)
 	res := runKit(t, kitConfig(), kitSecrets(), replaceResponses(kitResponses(),
 		iamDenied("aws.iam.ListSAMLProviders", "iam:ListSAMLProviders", "because no identity-based policy allows the iam:ListSAMLProviders action"),
@@ -143,7 +144,6 @@ func TestSAMLProvidersDeniedLeavesInUseDecided(t *testing.T) {
 	for _, at := range []struct{ path, pointer string }{
 		{awsPath, "/accounts/0/iam/saml_provider_count"},
 		{awsPath, "/accounts/0/iam/identity_center_saml_provider_count"},
-		{cloudPosturePath, "/accounts/0/iam/saml_provider_count"},
 	} {
 		g := gapAt(res, at.path, at.pointer)
 		switch {
@@ -155,12 +155,12 @@ func TestSAMLProvidersDeniedLeavesInUseDecided(t *testing.T) {
 			t.Errorf("%s %s: missing permission %q, want iam:ListSAMLProviders", at.path, at.pointer, g.MissingPermission)
 		}
 	}
-	if g := gapAt(res, cloudPosturePath, "/workforce_sign_in/in_use"); g != nil {
-		t.Errorf("in_use has a gap: %+v", g)
+	if g := gapAt(res, accessPosturePath, "/sign_in/sso_configured"); g != nil {
+		t.Errorf("sso_configured has a gap: %+v", g)
 	}
-	var posture CloudPosture
-	decodeArtifact(t, res, cloudPosturePath, &posture)
-	if posture.WorkforceSignIn.InUse == nil || !*posture.WorkforceSignIn.InUse {
-		t.Errorf("in_use = %s, want true from the organization instance", showBool(posture.WorkforceSignIn.InUse))
+	var access AccessPosture
+	decodeArtifact(t, res, accessPosturePath, &access)
+	if !samePtr(access.SignIn.SSOConfigured, boolPtr(true)) {
+		t.Errorf("sso_configured = %s, want true from the organization instance", showBool(access.SignIn.SSOConfigured))
 	}
 }

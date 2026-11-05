@@ -1,41 +1,46 @@
 // Package collector provides AWS account posture collection functionality.
 package collector
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/locktivity/epack/componentsdk"
+)
 
 // CloudPosture represents the normalized cloud infrastructure posture.
 // This follows the evidencepack/cloud-posture@v1 schema specification.
 // Fields are designed to be vendor-agnostic (works for AWS, GCP, Azure).
+// The schema marks the account IDs and the counts as audit-level, so they are
+// written from the audit level only. AllAccountsCollected and the present
+// flags are written at every level.
 type CloudPosture struct {
-	SchemaVersion    string                      `json:"schema_version"`
-	CollectedAt      string                      `json:"collected_at"`
-	Provider         string                      `json:"provider"`
-	AccountsExpected int                         `json:"accounts_expected"`
-	Accounts         []CloudPostureAccount       `json:"accounts"`
-	WorkforceSignIn  CloudPostureWorkforceSignIn `json:"workforce_sign_in,omitzero"`
+	SchemaVersion        string                `json:"schema_version"`
+	CollectedAt          string                `json:"collected_at"`
+	Provider             string                `json:"provider"`
+	AccountsExpected     *int                  `json:"accounts_expected,omitempty"`
+	AllAccountsCollected *bool                 `json:"all_accounts_collected,omitempty"`
+	Accounts             []CloudPostureAccount `json:"accounts"`
 }
 
-// CloudPostureWorkforceSignIn describes AWS IAM Identity Center, the
-// workforce sign-in service, across the accounts: whether it is in use, how
-// many users its directory has, and where their MFA is set. A value the
-// accounts' evidence cannot decide is left out.
-type CloudPostureWorkforceSignIn struct {
-	InUse     *bool  `json:"in_use,omitempty"`
-	UserCount *int   `json:"user_count,omitempty"`
-	MFASource string `json:"mfa_source,omitempty"`
+// Reading is a normalized value that may have no reading in the detailed
+// artifact. It is left out when Read is false. Otherwise it is written as
+// Value, which is nil for a percentage over no users.
+type Reading[T any] struct {
+	Value *T
+	Read  bool
 }
 
-// mfaSourceSignInService is the normalized mfa_source when Identity Center
-// sets its users' MFA itself, which the detailed mfa_evidence reports as
-// manual_required.
-const mfaSourceSignInService = "sign_in_service"
+// IsZero reports whether the value has no reading, for omitzero.
+func (r Reading[T]) IsZero() bool { return !r.Read }
 
-// mfaSource maps a detailed mfa_evidence value to the normalized mfa_source.
-func mfaSource(evidence string) string {
-	if evidence == mfaEvidenceManualRequired {
-		return mfaSourceSignInService
-	}
-	return evidence
+// MarshalJSON writes the value, or null.
+func (r Reading[T]) MarshalJSON() ([]byte, error) { return json.Marshal(r.Value) }
+
+// UnmarshalJSON reads a value or null as a reading.
+func (r *Reading[T]) UnmarshalJSON(data []byte) error {
+	r.Read = true
+	return json.Unmarshal(data, &r.Value)
 }
 
 // CloudPostureAccount contains normalized metrics for a single cloud account.
@@ -44,37 +49,44 @@ func mfaSource(evidence string) string {
 // groups, so a consumer can distinguish "account healthy with no findings"
 // from "account never answered".
 type CloudPostureAccount struct {
-	AccountID           string                   `json:"account_id,omitempty"`
-	AccountLabel        string                   `json:"account_label,omitempty"`
-	CollectionErrorCode string                   `json:"collection_error_code,omitempty"`
-	IAM                 CloudPostureIAM          `json:"iam,omitzero"`
-	Storage             CloudPostureStorage      `json:"storage,omitzero"`
-	Logging             CloudPostureLogging      `json:"logging,omitzero"`
-	Network             CloudPostureNetwork      `json:"network,omitzero"`
-	Backup              CloudPostureBackup       `json:"backup,omitzero"`
-	VulnScanning        CloudPostureVulnScanning `json:"vuln_scanning,omitzero"`
+	AccountID           string                      `json:"account_id,omitempty"`
+	AccountLabel        string                      `json:"account_label,omitempty"`
+	CollectionErrorCode string                      `json:"collection_error_code,omitempty"`
+	Storage             CloudPostureStorage         `json:"storage,omitzero"`
+	Database            CloudPostureDatabase        `json:"database,omitzero"`
+	Logging             CloudPostureLogging         `json:"logging,omitzero"`
+	Network             CloudPostureNetwork         `json:"network,omitzero"`
+	Backup              CloudPostureBackup          `json:"backup,omitzero"`
+	ThreatDetection     CloudPostureThreatDetection `json:"threat_detection,omitzero"`
 }
 
-// CloudPostureIAM contains normalized IAM metrics. Fields are pointers so an
-// uncollected metric (credential report or root state failed upstream) is
-// omitted from the artifact rather than serialized as a worst-case zero/false.
-// UserCount and AccessKeyUserCount are the users the two percentages are
-// over, and are 0 where a percentage is left out over no users.
-type CloudPostureIAM struct {
-	MFACoveragePct                *float64 `json:"mfa_coverage_pct,omitempty"`
-	RootMFAEnabled                *bool    `json:"root_mfa_enabled,omitempty"`
-	RootAccessProtected           *bool    `json:"root_access_protected,omitempty"`
-	AccessKeyRotationCompliantPct *float64 `json:"access_key_rotation_compliant_pct,omitempty"`
-	UserCount                     *int     `json:"user_count,omitempty"`
-	AccessKeyUserCount            *int     `json:"access_key_user_count,omitempty"`
-	SAMLProviderCount             *int     `json:"saml_provider_count,omitempty"`
-}
-
-// CloudPostureStorage contains normalized storage security metrics, omitted
-// when the bucket listing (or the specific metric's inputs) was not evaluated.
+// CloudPostureStorage contains normalized storage security metrics over the
+// S3 buckets, omitted when the bucket listing (or the specific metric's
+// inputs) was not evaluated. The counts are written from the audit level, and
+// the percentages are null when there are no buckets.
 type CloudPostureStorage struct {
-	EncryptionPct          *float64 `json:"encryption_pct,omitempty"`
-	PublicAccessBlockedPct *float64 `json:"public_access_blocked_pct,omitempty"`
+	StorageResourcesPresent                 *bool            `json:"storage_resources_present,omitempty"`
+	StorageResourceCount                    *int             `json:"storage_resource_count,omitempty"`
+	EncryptedStorageResourceCount           *int             `json:"encrypted_storage_resource_count,omitempty"`
+	PublicAccessBlockedStorageResourceCount *int             `json:"public_access_blocked_storage_resource_count,omitempty"`
+	EncryptionPct                           Reading[float64] `json:"encryption_pct,omitzero"`
+	PublicAccessBlockedPct                  Reading[float64] `json:"public_access_blocked_pct,omitzero"`
+}
+
+// CloudPostureDatabase contains normalized metrics over the RDS instances and
+// clusters, omitted unless every requested region evaluated. The counts and
+// multi_az_pct are written from the audit level, and the percentages are null
+// when there are no databases. public_access_blocked_pct is written only as
+// null over no databases, since a cluster has no public access setting of its
+// own to count.
+type CloudPostureDatabase struct {
+	DatabasesPresent       *bool            `json:"databases_present,omitempty"`
+	DatabaseCount          *int             `json:"database_count,omitempty"`
+	EncryptedDatabaseCount *int             `json:"encrypted_database_count,omitempty"`
+	EncryptionPct          Reading[float64] `json:"encryption_pct,omitzero"`
+	PublicAccessBlockedPct Reading[float64] `json:"public_access_blocked_pct,omitzero"`
+	MultiAZDatabaseCount   *int             `json:"multi_az_database_count,omitempty"`
+	MultiAZPct             Reading[float64] `json:"multi_az_pct,omitzero"`
 }
 
 // CloudPostureLogging contains normalized logging configuration, omitted when
@@ -90,12 +102,18 @@ type CloudPostureLogging struct {
 	CloudTrailMultiregion *bool `json:"cloudtrail_multiregion,omitempty"`
 }
 
-// CloudPostureNetwork contains normalized network exposure metrics, omitted
-// unless every requested region evaluated: partial coverage can only
-// understate exposure, which would fabricate a passing metric.
+// CloudPostureNetwork contains normalized network exposure metrics over the
+// security groups, omitted unless every requested region evaluated, since a
+// region that was not read could hold an exposed group. The counts are
+// written from the audit level, and the percentages are null when there are
+// no security groups.
 type CloudPostureNetwork struct {
-	SSHOpenToWorldPct *float64 `json:"ssh_open_to_world_pct,omitempty"`
-	RDPOpenToWorldPct *float64 `json:"rdp_open_to_world_pct,omitempty"`
+	SecurityGroupsPresent     *bool            `json:"security_groups_present,omitempty"`
+	SecurityGroupCount        *int             `json:"security_group_count,omitempty"`
+	SSHOpenSecurityGroupCount *int             `json:"ssh_open_security_group_count,omitempty"`
+	RDPOpenSecurityGroupCount *int             `json:"rdp_open_security_group_count,omitempty"`
+	SSHOpenToWorldPct         Reading[float64] `json:"ssh_open_to_world_pct,omitzero"`
+	RDPOpenToWorldPct         Reading[float64] `json:"rdp_open_to_world_pct,omitzero"`
 }
 
 // CloudPostureBackup contains normalized backup configuration, omitted unless
@@ -104,14 +122,15 @@ type CloudPostureBackup struct {
 	RetentionDaysMin *int `json:"retention_days_min,omitempty"`
 }
 
-// CloudPostureVulnScanning contains normalized vulnerability scanning status,
-// omitted when the Inspector status was not evaluated.
-type CloudPostureVulnScanning struct {
-	Enabled      *bool    `json:"enabled,omitempty"`
-	UnpatchedPct *float64 `json:"unpatched_pct,omitempty"`
+// CloudPostureThreatDetection contains whether GuardDuty is on in every
+// scanned region, omitted when a region's detectors could not be read and no
+// region showed it off.
+type CloudPostureThreatDetection struct {
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
-// ToCloudPosture transforms detailed AWS output to normalized cloud-posture format.
+// ToCloudPosture transforms detailed AWS output to normalized cloud-posture
+// format at the level o was collected at.
 func (o *Output) ToCloudPosture() *CloudPosture {
 	return toCloudPosture(o, nil)
 }
@@ -123,240 +142,125 @@ func (c *Collector) cloudPosture(o *Output) *CloudPosture {
 }
 
 // normalizedSources pairs each normalized metric with the detailed values it
-// is derived from, by pointer under the account's entry.
+// is derived from, by pointer under the account's entry. The first source is
+// the one the metric copies. audit is true for the counts the schema marks
+// audit-level, which are written from the audit level only.
 var normalizedSources = []struct {
 	field   string
 	sources []string
+	audit   bool
 }{
-	{"iam/mfa_coverage_pct", []string{"iam/mfa_enabled"}},
-	{"iam/root_mfa_enabled", []string{"iam/root_mfa_enabled", "iam/root_credentials_present"}},
-	{"iam/root_access_protected", []string{"iam/root_access_protected"}},
-	{"iam/access_key_rotation_compliant_pct", []string{"iam/access_keys_rotated"}},
-	{"iam/user_count", []string{"iam/iam_user_count"}},
-	{"iam/access_key_user_count", []string{"iam/access_key_user_count"}},
-	{"iam/saml_provider_count", []string{"iam/saml_provider_count"}},
-	{"storage/encryption_pct", []string{"s3/default_encryption_enabled"}},
-	{"storage/public_access_blocked_pct", []string{"s3/public_access_blocked"}},
-	{"logging/audit_log_enabled", []string{"account_security/cloudtrail/enabled"}},
-	{"logging/audit_log_all_regions", []string{"account_security/cloudtrail/multi_region_enabled"}},
-	{"logging/cloudtrail_enabled", []string{"account_security/cloudtrail/enabled"}},
-	{"logging/cloudtrail_multiregion", []string{"account_security/cloudtrail/multi_region_enabled"}},
-	{"network/ssh_open_to_world_pct", []string{"network/open_to_world_ssh"}},
-	{"network/rdp_open_to_world_pct", []string{"network/open_to_world_rdp"}},
-	{"backup/retention_days_min", []string{"rds/backup_retention_min"}},
-	{"vuln_scanning/enabled", []string{"account_security/inspector/enabled"}},
-	{"vuln_scanning/unpatched_pct", []string{"account_security/inspector/unpatched_server_percent"}},
+	{"storage/storage_resources_present", []string{"s3/bucket_count"}, false},
+	{"storage/storage_resource_count", []string{"s3/bucket_count"}, true},
+	{"storage/encrypted_storage_resource_count", []string{"s3/default_encryption_enabled_bucket_count"}, true},
+	{"storage/public_access_blocked_storage_resource_count", []string{"s3/public_access_blocked_bucket_count"}, true},
+	{"storage/encryption_pct", []string{"s3/default_encryption_enabled"}, false},
+	{"storage/public_access_blocked_pct", []string{"s3/public_access_blocked"}, false},
+	{"database/databases_present", []string{"rds/database_count"}, false},
+	{"database/database_count", []string{"rds/database_count"}, true},
+	{"database/encrypted_database_count", []string{"rds/encrypted_at_rest_database_count"}, true},
+	{"database/encryption_pct", []string{"rds/encrypted_at_rest"}, false},
+	{"database/public_access_blocked_pct", []string{"rds/database_count"}, false},
+	{"database/multi_az_database_count", []string{"rds/multi_az_enabled_database_count"}, true},
+	{"database/multi_az_pct", []string{"rds/multi_az_enabled"}, true},
+	{"logging/audit_log_enabled", []string{"account_security/cloudtrail/enabled"}, false},
+	{"logging/audit_log_all_regions", []string{"account_security/cloudtrail/multi_region_enabled"}, false},
+	{"logging/cloudtrail_enabled", []string{"account_security/cloudtrail/enabled"}, false},
+	{"logging/cloudtrail_multiregion", []string{"account_security/cloudtrail/multi_region_enabled"}, false},
+	{"network/security_groups_present", []string{"network/security_group_count"}, false},
+	{"network/security_group_count", []string{"network/security_group_count"}, true},
+	{"network/ssh_open_security_group_count", []string{"network/open_to_world_ssh_security_group_count"}, true},
+	{"network/rdp_open_security_group_count", []string{"network/open_to_world_rdp_security_group_count"}, true},
+	{"network/ssh_open_to_world_pct", []string{"network/open_to_world_ssh"}, false},
+	{"network/rdp_open_to_world_pct", []string{"network/open_to_world_rdp"}, false},
+	{"backup/retention_days_min", []string{"rds/backup_retention_min"}, false},
+	{"threat_detection/enabled", []string{"account_security/guardduty/enabled_in_all_regions"}, false},
 }
 
+// failedAccountsPointer is the detailed list the account totals come from.
+const failedAccountsPointer = "/failed_accounts"
+
 func toCloudPosture(o *Output, gaps *gapLog) *CloudPosture {
+	audit := componentsdk.Level(o.CollectedAtLevel).AtLeast(componentsdk.LevelAudit)
 	posture := &CloudPosture{
-		SchemaVersion:    "1.0.0",
-		CollectedAt:      o.CollectedAt,
-		Provider:         "aws",
-		AccountsExpected: len(o.Accounts) + len(o.FailedAccounts),
-		Accounts:         make([]CloudPostureAccount, 0, len(o.Accounts)+len(o.FailedAccounts)),
+		SchemaVersion:        "1.0.0",
+		CollectedAt:          o.CollectedAt,
+		Provider:             "aws",
+		AllAccountsCollected: boolPtr(len(o.FailedAccounts) == 0),
+		Accounts:             make([]CloudPostureAccount, 0, len(o.Accounts)+len(o.FailedAccounts)),
+	}
+	if gaps != nil {
+		gaps.copied(failedAccountsPointer, "/all_accounts_collected")
+	}
+	if audit {
+		posture.AccountsExpected = intPtr(len(o.Accounts) + len(o.FailedAccounts))
+		if gaps != nil {
+			gaps.copied(failedAccountsPointer, "/accounts_expected")
+		}
 	}
 
 	for i, acct := range o.Accounts {
 		normalized := CloudPostureAccount{
-			AccountID:    acct.AccountID,
-			AccountLabel: acct.AccountLabel,
-			IAM:          normalizedIAM(acct.IAM),
-			Storage:      normalizedStorage(acct.S3),
-			Logging:      normalizedLogging(acct.AccountSecurity.CloudTrail),
-			Network:      normalizedNetwork(acct.Network),
-			Backup:       normalizedBackup(acct.RDS),
-			VulnScanning: normalizedVulnScanning(acct.AccountSecurity.Inspector),
+			AccountLabel:    acct.AccountLabel,
+			Storage:         normalizedStorage(acct.S3, audit),
+			Database:        normalizedDatabase(acct.RDS, audit),
+			Logging:         normalizedLogging(acct.AccountSecurity.CloudTrail),
+			Network:         normalizedNetwork(acct.Network, audit),
+			Backup:          normalizedBackup(acct.RDS),
+			ThreatDetection: normalizedThreatDetection(acct.AccountSecurity.GuardDuty, acct.Regions),
+		}
+		if audit {
+			normalized.AccountID = acct.AccountID
 		}
 		if gaps != nil {
-			mirrorNormalizedGaps(gaps, i, &normalized)
+			mirrorNormalizedGaps(gaps, i, &normalized, audit)
 		}
 		posture.Accounts = append(posture.Accounts, normalized)
 	}
 
 	for _, failed := range o.FailedAccounts {
 		j := len(posture.Accounts)
-		posture.Accounts = append(posture.Accounts, CloudPostureAccount{
-			AccountID:           failed.AccountID,
+		stub := CloudPostureAccount{
 			AccountLabel:        failed.Label,
 			CollectionErrorCode: failed.ErrorCode,
-		})
+		}
+		if audit {
+			stub.AccountID = failed.AccountID
+		}
+		posture.Accounts = append(posture.Accounts, stub)
 		if gaps != nil {
 			for _, metric := range normalizedSources {
+				if metric.audit && !audit {
+					continue
+				}
 				gaps.leaveOutNormalized(failed.err, fmt.Sprintf("/accounts/%d/%s", j, metric.field))
 			}
 		}
 	}
 
-	posture.WorkforceSignIn = normalizedWorkforceSignIn(o, gaps)
 	return posture
 }
 
-// signal is what one account's evidence shows of a fact: that it holds, that
-// it does not, or neither, because a read failed.
-type signal int
-
-const (
-	signalNo signal = iota
-	signalYes
-	signalUnknown
-)
-
-// unknownBecause is why a value folded from several accounts is left out:
-// the gap of a detailed value, at pointer, or a failed account's error.
-type unknownBecause struct {
-	pointer string
-	err     error
-}
-
-// leaveOut leaves the normalized values at pointers out for u's reason.
-func (u unknownBecause) leaveOut(gaps *gapLog, pointers ...string) {
-	if gaps == nil {
-		return
-	}
-	gaps.rec.Helper()
-	for _, p := range pointers {
-		if u.err != nil {
-			gaps.leaveOutNormalized(u.err, p)
-		} else {
-			gaps.mirror(u.pointer, p)
-		}
-	}
-}
-
-// identityCenterInstanceSignal says whether an account's instance listing
-// found an active organization instance. An account instance or an instance
-// in another status does not count. It is unknown, with the detailed value
-// whose gap says why, when the instance's type could not be read or the
-// listing failed in a region an instance could be in.
-func identityCenterInstanceSignal(acct AccountPosture, at at) (signal, string) {
-	idc := acct.IdentityCenter
-	active := idc.Enabled && idc.InstanceStatus == identityCenterActive
-	switch {
-	case active && idc.InstanceType == identityCenterOrganizationInstance:
-		return signalYes, ""
-	case active && idc.InstanceType == "":
-		return signalUnknown, at.p("identity_center", "instance_type")
-	case len(acct.Regions) == 0 || len(idc.RegionsChecked) < len(acct.Regions):
-		return signalUnknown, at.p("identity_center", "enabled")
-	}
-	return signalNo, ""
-}
-
-// normalizedWorkforceSignIn folds the accounts' IAM Identity Center evidence
-// into the normalized workforce_sign_in block. Identity Center is in use when
-// any account shows an active organization instance, the roles Identity
-// Center provisions, or the SAML provider it creates. It is not in use when
-// the instance and role listings answered for every account and found
-// neither, so a policy that cannot list SAML providers still decides it.
-// Otherwise in_use is left out with the gap of a read that failed.
-//
-// The user count and where the users' MFA is set come from the directories
-// of the organization instances the accounts could see. A member account
-// cannot see its organization's instance, so when no account could see one,
-// the user count is left out and mfa_source is unknown, or both are left out
-// with a gap when a read that failed could have found the instance.
-func normalizedWorkforceSignIn(o *Output, gaps *gapLog) CloudPostureWorkforceSignIn {
-	type directory struct {
-		users, withExternalID int
-		read                  bool
-		unread                string
-	}
-	var (
-		inUse                         bool
-		instanceUnknown, rolesUnknown *unknownBecause
-		stores                        []string
-		directories                   = map[string]*directory{}
-	)
-	for i, acct := range o.Accounts {
-		at := accountAt(i)
-		idc := acct.IdentityCenter
-		switch instance, why := identityCenterInstanceSignal(acct, at); instance {
-		case signalYes:
-			inUse = true
-			d := directories[idc.IdentityStoreID]
-			if d == nil {
-				d = &directory{}
-				directories[idc.IdentityStoreID] = d
-				stores = append(stores, idc.IdentityStoreID)
-			}
-			switch {
-			case d.read:
-			case idc.MFAEvidence != "":
-				d.read, d.users, d.withExternalID = true, idc.UserCount, idc.ExternalIDUserCount
-			case d.unread == "":
-				d.unread = at.p("identity_center", "user_count")
-			}
-		case signalUnknown:
-			if instanceUnknown == nil {
-				instanceUnknown = &unknownBecause{pointer: why}
-			}
-		}
-		switch roles := acct.IAM.IdentityCenterRoleCount; {
-		case roles == nil:
-			if rolesUnknown == nil {
-				rolesUnknown = &unknownBecause{pointer: at.p("iam", "identity_center_role_count")}
-			}
-		case *roles > 0:
-			inUse = true
-		}
-		if providers := acct.IAM.IdentityCenterSAMLProviderCount; providers != nil && *providers > 0 {
-			inUse = true
-		}
-	}
-	for _, failed := range o.FailedAccounts {
-		if instanceUnknown == nil {
-			instanceUnknown = &unknownBecause{err: failed.err}
-		}
-	}
-
-	var out CloudPostureWorkforceSignIn
-	if !inUse {
-		why := instanceUnknown
-		if why == nil {
-			why = rolesUnknown
-		}
-		if why == nil {
-			out.InUse = boolPtr(false)
-			return out
-		}
-		why.leaveOut(gaps, "/workforce_sign_in/in_use", "/workforce_sign_in/user_count", "/workforce_sign_in/mfa_source")
-		return out
-	}
-
-	out.InUse = boolPtr(true)
-	users, withExternalID := 0, 0
-	for _, store := range stores {
-		d := directories[store]
-		if !d.read {
-			unknownBecause{pointer: d.unread}.leaveOut(gaps, "/workforce_sign_in/user_count", "/workforce_sign_in/mfa_source")
-			return out
-		}
-		users += d.users
-		withExternalID += d.withExternalID
-	}
-	switch {
-	case len(stores) > 0:
-		out.UserCount = intPtr(users)
-		out.MFASource = mfaSource(identityCenterMFAEvidence(users, withExternalID))
-	case instanceUnknown != nil:
-		instanceUnknown.leaveOut(gaps, "/workforce_sign_in/user_count", "/workforce_sign_in/mfa_source")
-	default:
-		out.MFASource = mfaSource(mfaEvidenceUnknown)
-	}
-	return out
-}
-
 // mirrorNormalizedGaps leaves out each of account i's normalized metrics
-// whose detailed source a gap covers, recording the source's gap at it.
-func mirrorNormalizedGaps(gaps *gapLog, i int, account *CloudPostureAccount) {
+// whose detailed source a gap covers, recording the source's gap at it. A
+// metric no gap covers is recorded as a copy of its first source. The counts
+// are passed over below the audit level, where they are not written.
+func mirrorNormalizedGaps(gaps *gapLog, i int, account *CloudPostureAccount, audit bool) {
 	for _, metric := range normalizedSources {
+		if metric.audit && !audit {
+			continue
+		}
+		to := fmt.Sprintf("/accounts/%d/%s", i, metric.field)
+		covered := false
 		for _, source := range metric.sources {
-			from := fmt.Sprintf("/accounts/%d/%s", i, source)
-			if gaps.mirror(from, fmt.Sprintf("/accounts/%d/%s", i, metric.field)) {
+			if gaps.mirror(fmt.Sprintf("/accounts/%d/%s", i, source), to) {
 				clearNormalized(account, metric.field)
+				covered = true
 				break
 			}
+		}
+		if !covered {
+			gaps.copied(fmt.Sprintf("/accounts/%d/%s", i, metric.sources[0]), to)
 		}
 	}
 }
@@ -364,24 +268,32 @@ func mirrorNormalizedGaps(gaps *gapLog, i int, account *CloudPostureAccount) {
 // clearNormalized leaves one normalized metric out of account.
 func clearNormalized(account *CloudPostureAccount, field string) {
 	switch field {
-	case "iam/mfa_coverage_pct":
-		account.IAM.MFACoveragePct = nil
-	case "iam/root_mfa_enabled":
-		account.IAM.RootMFAEnabled = nil
-	case "iam/root_access_protected":
-		account.IAM.RootAccessProtected = nil
-	case "iam/access_key_rotation_compliant_pct":
-		account.IAM.AccessKeyRotationCompliantPct = nil
-	case "iam/user_count":
-		account.IAM.UserCount = nil
-	case "iam/access_key_user_count":
-		account.IAM.AccessKeyUserCount = nil
-	case "iam/saml_provider_count":
-		account.IAM.SAMLProviderCount = nil
+	case "storage/storage_resources_present":
+		account.Storage.StorageResourcesPresent = nil
+	case "storage/storage_resource_count":
+		account.Storage.StorageResourceCount = nil
+	case "storage/encrypted_storage_resource_count":
+		account.Storage.EncryptedStorageResourceCount = nil
+	case "storage/public_access_blocked_storage_resource_count":
+		account.Storage.PublicAccessBlockedStorageResourceCount = nil
 	case "storage/encryption_pct":
-		account.Storage.EncryptionPct = nil
+		account.Storage.EncryptionPct = Reading[float64]{}
 	case "storage/public_access_blocked_pct":
-		account.Storage.PublicAccessBlockedPct = nil
+		account.Storage.PublicAccessBlockedPct = Reading[float64]{}
+	case "database/databases_present":
+		account.Database.DatabasesPresent = nil
+	case "database/database_count":
+		account.Database.DatabaseCount = nil
+	case "database/encrypted_database_count":
+		account.Database.EncryptedDatabaseCount = nil
+	case "database/encryption_pct":
+		account.Database.EncryptionPct = Reading[float64]{}
+	case "database/public_access_blocked_pct":
+		account.Database.PublicAccessBlockedPct = Reading[float64]{}
+	case "database/multi_az_database_count":
+		account.Database.MultiAZDatabaseCount = nil
+	case "database/multi_az_pct":
+		account.Database.MultiAZPct = Reading[float64]{}
 	case "logging/audit_log_enabled":
 		account.Logging.AuditLogEnabled = nil
 	case "logging/audit_log_all_regions":
@@ -390,56 +302,73 @@ func clearNormalized(account *CloudPostureAccount, field string) {
 		account.Logging.CloudTrailEnabled = nil
 	case "logging/cloudtrail_multiregion":
 		account.Logging.CloudTrailMultiregion = nil
+	case "network/security_groups_present":
+		account.Network.SecurityGroupsPresent = nil
+	case "network/security_group_count":
+		account.Network.SecurityGroupCount = nil
+	case "network/ssh_open_security_group_count":
+		account.Network.SSHOpenSecurityGroupCount = nil
+	case "network/rdp_open_security_group_count":
+		account.Network.RDPOpenSecurityGroupCount = nil
 	case "network/ssh_open_to_world_pct":
-		account.Network.SSHOpenToWorldPct = nil
+		account.Network.SSHOpenToWorldPct = Reading[float64]{}
 	case "network/rdp_open_to_world_pct":
-		account.Network.RDPOpenToWorldPct = nil
+		account.Network.RDPOpenToWorldPct = Reading[float64]{}
 	case "backup/retention_days_min":
 		account.Backup.RetentionDaysMin = nil
-	case "vuln_scanning/enabled":
-		account.VulnScanning.Enabled = nil
-	case "vuln_scanning/unpatched_pct":
-		account.VulnScanning.UnpatchedPct = nil
+	case "threat_detection/enabled":
+		account.ThreatDetection.Enabled = nil
 	}
 }
 
-// normalizedIAM projects IAM metrics into the normalized artifact, emitting
-// only the metrics whose upstream source was actually evaluated.
-func normalizedIAM(iam IAMMetrics) CloudPostureIAM {
-	out := CloudPostureIAM{}
-	if iam.CredentialReportEvaluated {
-		out.MFACoveragePct = pctFloat(iam.MFAEnabled)
-		out.AccessKeyRotationCompliantPct = pctFloat(iam.AccessKeysRotated)
-		out.UserCount = intPtr(iam.IAMUserCount)
-		out.AccessKeyUserCount = intPtr(iam.AccessKeyUserCount)
-	}
-	if iam.SAMLProviderCount != nil {
-		out.SAMLProviderCount = intPtr(*iam.SAMLProviderCount)
-	}
-	if iam.RootCredentialStateEvaluated {
-		// An account whose root credentials were removed through centralized
-		// root access has no root login to protect, so the normalized MFA
-		// answer is yes. The raw aws.json field stays literal.
-		out.RootMFAEnabled = boolPtr(iam.RootMFAEnabled || !iam.RootCredentialsPresent)
-		out.RootAccessProtected = boolPtr(iam.RootAccessProtected)
-	}
-	return out
-}
-
-// normalizedStorage emits the storage percentages only when their inputs were
-// evaluated: every bucket's encryption setting and effective public access
+// normalizedStorage emits the storage metrics only when their inputs were
+// evaluated. Every bucket's encryption setting and effective public access
 // block must be known, since unknowns otherwise drag a percentage toward
-// failure. Neither is emitted for an account with no buckets.
-func normalizedStorage(s3 S3Metrics) CloudPostureStorage {
+// failure. Both percentages are null for an account with no buckets. The
+// counts are written when audit is true.
+func normalizedStorage(s3 S3Metrics, audit bool) CloudPostureStorage {
 	out := CloudPostureStorage{}
 	if !s3.BucketListingEvaluated {
 		return out
 	}
+	out.StorageResourcesPresent = boolPtr(s3.BucketCount > 0)
+	if audit {
+		out.StorageResourceCount = intPtr(s3.BucketCount)
+	}
 	if s3.DefaultEncryptionUnknownCount == 0 {
-		out.EncryptionPct = pctFloat(s3.DefaultEncryptionEnabled)
+		out.EncryptionPct = percentOf(s3.DefaultEncryptionEnabledBucketCount, s3.BucketCount, componentsdk.RoundDown)
+		if audit {
+			out.EncryptedStorageResourceCount = intPtr(s3.DefaultEncryptionEnabledBucketCount)
+		}
 	}
 	if s3.PublicAccessBlockUnknownCount == 0 {
-		out.PublicAccessBlockedPct = pctFloat(s3.PublicAccessBlocked)
+		out.PublicAccessBlockedPct = percentOf(s3.PublicAccessBlockedBucketCount, s3.BucketCount, componentsdk.RoundDown)
+		if audit {
+			out.PublicAccessBlockedStorageResourceCount = intPtr(s3.PublicAccessBlockedBucketCount)
+		}
+	}
+	return out
+}
+
+// normalizedDatabase emits the database metrics only when every requested
+// region evaluated, since a region that was not read could hold a database.
+// The percentages are null for an account with no databases. The counts and
+// multi_az_pct are written when audit is true.
+func normalizedDatabase(rds RDSMetrics, audit bool) CloudPostureDatabase {
+	out := CloudPostureDatabase{}
+	if rds.RegionsEvaluatedCount == 0 || len(rds.RegionsFailed) > 0 {
+		return out
+	}
+	out.DatabasesPresent = boolPtr(rds.DatabaseCount > 0)
+	out.EncryptionPct = percentOf(rds.EncryptedAtRestDatabaseCount, rds.DatabaseCount, componentsdk.RoundDown)
+	if rds.DatabaseCount == 0 {
+		out.PublicAccessBlockedPct = Reading[float64]{Read: true}
+	}
+	if audit {
+		out.DatabaseCount = intPtr(rds.DatabaseCount)
+		out.EncryptedDatabaseCount = intPtr(rds.EncryptedAtRestDatabaseCount)
+		out.MultiAZDatabaseCount = intPtr(rds.MultiAZEnabledDatabaseCount)
+		out.MultiAZPct = percentOf(rds.MultiAZEnabledDatabaseCount, rds.DatabaseCount, componentsdk.RoundDown)
 	}
 	return out
 }
@@ -464,16 +393,24 @@ func normalizedLogging(ct CloudTrailStatus) CloudPostureLogging {
 	return out
 }
 
-// normalizedNetwork emits the exposure percentages only when every requested
+// normalizedNetwork emits the exposure metrics only when every requested
 // region evaluated. A region that failed to answer could contain the exposed
-// security group; publishing a partial percentage would fabricate a pass.
-func normalizedNetwork(n NetworkMetrics) CloudPostureNetwork {
+// security group, so a partial percentage could read as a pass. The
+// percentages round up, so one exposed group never reads as 0. The counts are
+// written when audit is true.
+func normalizedNetwork(n NetworkMetrics, audit bool) CloudPostureNetwork {
 	out := CloudPostureNetwork{}
 	if n.RegionsEvaluatedCount == 0 || len(n.RegionsFailed) > 0 {
 		return out
 	}
-	out.SSHOpenToWorldPct = pctFloat(n.OpenToWorldSSH)
-	out.RDPOpenToWorldPct = pctFloat(n.OpenToWorldRDP)
+	out.SecurityGroupsPresent = boolPtr(n.SecurityGroupCount > 0)
+	out.SSHOpenToWorldPct = percentOf(n.OpenToWorldSSHSecurityGroupCount, n.SecurityGroupCount, componentsdk.RoundUp)
+	out.RDPOpenToWorldPct = percentOf(n.OpenToWorldRDPSecurityGroupCount, n.SecurityGroupCount, componentsdk.RoundUp)
+	if audit {
+		out.SecurityGroupCount = intPtr(n.SecurityGroupCount)
+		out.SSHOpenSecurityGroupCount = intPtr(n.OpenToWorldSSHSecurityGroupCount)
+		out.RDPOpenSecurityGroupCount = intPtr(n.OpenToWorldRDPSecurityGroupCount)
+	}
 	return out
 }
 
@@ -489,27 +426,28 @@ func normalizedBackup(rds RDSMetrics) CloudPostureBackup {
 	return out
 }
 
-// normalizedVulnScanning emits the Inspector status only when it was
-// evaluated. Evaluated with Enabled false is genuine evidence of absence.
-func normalizedVulnScanning(ins InspectorStatus) CloudPostureVulnScanning {
-	out := CloudPostureVulnScanning{}
-	if !ins.StatusEvaluated {
-		return out
+// normalizedThreatDetection emits whether GuardDuty is on in every scanned
+// region. A region whose detectors could not be read leaves it out unless
+// another region already shows it off, which the detailed value's gap
+// records. It is left out for an account with no region list.
+func normalizedThreatDetection(gd GuardDutyStatus, regions []string) CloudPostureThreatDetection {
+	if len(regions) == 0 {
+		return CloudPostureThreatDetection{}
 	}
-	out.Enabled = boolPtr(ins.Enabled)
-	out.UnpatchedPct = pctFloat(ins.UnpatchedServerPercent)
-	return out
+	return CloudPostureThreatDetection{Enabled: boolPtr(gd.EnabledInAllRegions)}
 }
 
 func float64Ptr(v float64) *float64 { return &v }
 
-// pctFloat carries a whole percentage into the normalized artifact, where a
-// percentage over an empty population is left out.
-func pctFloat(pct *int) *float64 {
-	if pct == nil {
-		return nil
+// percentOf is count as a whole percentage of total, rounded as the
+// normalized schema's x-epack-rounding says. It is read and null when total
+// is 0.
+func percentOf(count, total int, rounding componentsdk.Rounding) Reading[float64] {
+	p := componentsdk.Percent(count, total, rounding)
+	if p == nil {
+		return Reading[float64]{Read: true}
 	}
-	return float64Ptr(float64(*pct))
+	return Reading[float64]{Value: float64Ptr(float64(*p)), Read: true}
 }
 
 func intPtr(v int) *int { return &v }

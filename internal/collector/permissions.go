@@ -22,7 +22,7 @@ var allowIn = map[string]string{
 // to allow and where, and the IAM action as the missing permission, both from
 // AWS's message. An explicit deny overrides any allow, so its gap names no
 // permission to grant, and its warning says which policy denies the action.
-func permissionOptions(err error) []componentsdk.GapOption {
+func permissionOptions(err error) []componentsdk.AdviceOption {
 	if componentsdk.Classify(err) != componentsdk.CodePermissionDenied {
 		return nil
 	}
@@ -32,13 +32,13 @@ func permissionOptions(err error) []componentsdk.GapOption {
 	}
 	if denial.ExplicitIn != "" {
 		policy := strings.ToUpper(denial.ExplicitIn[:1]) + denial.ExplicitIn[1:]
-		return []componentsdk.GapOption{componentsdk.Warning(fmt.Sprintf("%s denies %s, and an explicit deny overrides any allow.", policy, denial.Action))}
+		return []componentsdk.AdviceOption{componentsdk.Warning(fmt.Sprintf("%s denies %s, and an explicit deny overrides any allow.", policy, denial.Action))}
 	}
 	where, ok := allowIn[denial.NotAllowedBy]
 	if !ok {
 		where = "the " + denial.NotAllowedBy
 	}
-	return []componentsdk.GapOption{
+	return []componentsdk.AdviceOption{
 		componentsdk.Warning(fmt.Sprintf("Allow %s in %s.", denial.Action, where)),
 		componentsdk.MissingPermission(denial.Action),
 	}
