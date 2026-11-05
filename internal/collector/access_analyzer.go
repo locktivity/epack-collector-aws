@@ -80,7 +80,13 @@ func (c *Collector) collectAccessAnalyzerStatus(ctx context.Context, client *aws
 }
 
 // aggregateAccessAnalyzers reduces per-region analyzers to coverage findings.
+// An IAM role is global, so the same role finding appears in every enabled
+// region. The account totals count it once for each analyzer type. Unused
+// access findings do not change by region, so the totals count each of them
+// once for each analyzer type too.
 func aggregateAccessAnalyzers(regions []string, byRegion map[string][]aws.AccessAnalyzer, status *AccessAnalyzerStatus) {
+	roleFindings := map[string]bool{}
+	unusedFindings := map[string]int{}
 	for _, region := range regions {
 		analyzers := byRegion[region]
 		regionActive := false
@@ -101,12 +107,34 @@ func aggregateAccessAnalyzers(regions []string, byRegion map[string][]aws.Access
 			}
 			status.ActiveFindingsCount += a.ActiveFindingsCount
 			status.ArchivedFindingsCount += a.ArchivedFindingsCount
+			for key, findingStatus := range a.RoleFindings {
+				if !roleFindings[a.Type+"|"+key] {
+					roleFindings[a.Type+"|"+key] = true
+					continue
+				}
+				status.uncountFindings(findingStatus, 1)
+			}
+			for key, tally := range a.UnusedFindings {
+				seen := unusedFindings[a.Type+"|"+key]
+				status.uncountFindings(tally.Status, min(seen, tally.Count))
+				unusedFindings[a.Type+"|"+key] = max(seen, tally.Count)
+			}
 		}
 		if regionActive {
 			status.RegionsWithActiveAnalyzerCount++
 		}
 	}
 	status.Enabled = status.RegionsWithActiveAnalyzerCount > 0
+}
+
+// uncountFindings takes n findings of findingStatus back out of the totals.
+func (s *AccessAnalyzerStatus) uncountFindings(findingStatus string, n int) {
+	switch findingStatus {
+	case "ACTIVE":
+		s.ActiveFindingsCount -= n
+	case "ARCHIVED":
+		s.ArchivedFindingsCount -= n
+	}
 }
 
 func (s *AccessAnalyzerStatus) analyzersUnresolved(regions []string, byRegion map[string][]aws.AccessAnalyzer) []string {

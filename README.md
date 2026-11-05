@@ -11,7 +11,7 @@ Collects AWS account security posture metrics for the epack ecosystem.
 - **RDS**: encryption, public accessibility, deletion protection, backups, Multi-AZ; per-instance / per-cluster rows.
 - **Network**: security-group analysis; per-VPC inventory with internal-level flow log status and per-SG-rule inventory.
 - **WAF**: web ACL coverage of internet-facing entry points (application load balancers, CloudFront distributions) and rate-limiting enforcement; per-ACL rule inventory at higher levels.
-- **Account security services**: CloudTrail, AWS Config (with per-rule compliance), GuardDuty (with finding notification and per-finding triage), Security Hub, Inspector.
+- **Account security services**: CloudTrail, AWS Config (with per-rule compliance), GuardDuty (with finding notification and per-finding triage), Security Hub, Inspector (with its coverage and open findings in each scanned region).
 - **Identity Center (IAM Identity Center / AWS SSO)**: the instance in any scanned region, whether users' MFA is set at an external identity provider, and user / group / permission-set inventory.
 - **Lambda**: deprecated runtime detection, public Function URL detection, per-function metadata (env var KEYS only — values never collected).
 - **EC2**: IMDSv2 enforcement, public-IP exposure, default-VPC residency, unencrypted-volume detection.
@@ -324,10 +324,21 @@ Each percentage is a whole number rounded down, with the count it is taken of
 beside it, such as `mfa_enabled_user_count` for `mfa_enabled`, and the count it
 is over, such as `iam_user_count`.
 
-The collector also writes `artifacts/aws.cloud-posture.json` in the shared
-`evidencepack/cloud-posture@v1` format, with the counts behind its percentages
-and whether IAM Identity Center is in use. See
-[docs/overview.md](docs/overview.md#normalized-artifact).
+The collector also writes three files in shared formats. See
+[docs/overview.md](docs/overview.md#normalized-artifacts).
+
+- `artifacts/aws.cloud-posture.json`, in the `evidencepack/cloud-posture@v1`
+  format, has storage, database, network, logging, backup, and threat
+  detection for each account.
+- `artifacts/aws.access-posture.json`, in the `evidencepack/access-posture@v1`
+  format, has how people sign in, the IAM users and admins, the root users,
+  and the IAM users' access keys.
+- `artifacts/aws.vuln-scanning.json`, in the `evidencepack/vuln-scanning@v1`
+  format, has Amazon Inspector's coverage and open findings for EC2
+  instances, ECR images, and Lambda functions.
+
+From the audit level these files also hold the account IDs and the counts
+behind their percentages.
 
 A value the collector could not read, such as a percentage whose source call
 was denied, is null. The run's result artifact

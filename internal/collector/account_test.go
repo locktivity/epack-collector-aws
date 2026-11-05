@@ -133,6 +133,10 @@ func TestCISStandardHelpers(t *testing.T) {
 		t.Fatalf("expected standard id %q, got %q", wantID, gotID)
 	}
 
+	if got := standardIDFromARN("arn:aws:securityhub:::ruleset/cis-aws-foundations-benchmark/v/1.2.0"); got != "ruleset/cis-aws-foundations-benchmark/v/1.2.0" {
+		t.Fatalf("expected the v1.2.0 ruleset id, got %q", got)
+	}
+
 	if standardIDFromARN("invalid-arn") != "" {
 		t.Fatalf("expected empty standard id for invalid ARN")
 	}
@@ -146,6 +150,7 @@ func TestSummarizeCloudTrailStatus_OrganizationTrailCountsAsCoverage(t *testing.
 			IsLogging:           true,
 			IsMultiRegionTrail:  true,
 			IsOrganizationTrail: true,
+			ManagementEvents:    aws.ManagementEventsReadWrite,
 		},
 	})
 
@@ -189,6 +194,7 @@ func TestSummarizeCloudTrailStatus_InferredOrganizationTrailCountsAsCoverage(t *
 			IsOrganizationTrail:  true,
 			TrailStatusInferred:  true,
 			TrailStatusErrorCode: "AccessDeniedException",
+			ManagementEvents:     aws.ManagementEventsReadWrite,
 		},
 	})
 
@@ -432,7 +438,7 @@ type fakeTrailDescriber struct {
 	err    error
 }
 
-func (f fakeTrailDescriber) DescribeTrails(_ context.Context) ([]aws.Trail, error) {
+func (f fakeTrailDescriber) DescribeTrails(_ context.Context, _ []string, _ string) ([]aws.Trail, error) {
 	return f.trails, f.err
 }
 
@@ -440,7 +446,7 @@ func TestCollectCloudTrailStatus_ListingFailureSetsSentinels(t *testing.T) {
 	c := newTestCollector(Config{})
 	status := &CloudTrailStatus{}
 
-	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{err: errors.New("Throttling")}, "111111111111", accountAt(0).sub("account_security", "cloudtrail"), status, componentsdk.LevelTrust)
+	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{err: errors.New("Throttling")}, nil, nil, "111111111111", accountAt(0).sub("account_security", "cloudtrail"), status, componentsdk.LevelTrust)
 
 	if status.TrailListingEvaluated {
 		t.Error("expected TrailListingEvaluated false on listing failure")
@@ -461,9 +467,9 @@ func TestCollectCloudTrailStatus_ListingFailureSetsSentinels(t *testing.T) {
 func TestCollectCloudTrailStatus_SuccessSetsEvaluated(t *testing.T) {
 	c := newTestCollector(Config{})
 	status := &CloudTrailStatus{}
-	trails := []aws.Trail{{Name: "main", IsLogging: true, TrailStatusEvaluated: true}}
+	trails := []aws.Trail{{Name: "main", IsLogging: true, TrailStatusEvaluated: true, ManagementEvents: aws.ManagementEventsReadWrite}}
 
-	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{trails: trails}, "111111111111", accountAt(0).sub("account_security", "cloudtrail"), status, componentsdk.LevelTrust)
+	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{trails: trails}, nil, nil, "111111111111", accountAt(0).sub("account_security", "cloudtrail"), status, componentsdk.LevelTrust)
 
 	if !status.TrailListingEvaluated {
 		t.Error("expected TrailListingEvaluated true on success")
@@ -476,10 +482,10 @@ func TestCollectCloudTrailStatus_SuccessSetsEvaluated(t *testing.T) {
 func TestCollectCloudTrailStatus_PartialStatusStillEvaluated(t *testing.T) {
 	c := newTestCollector(Config{})
 	status := &CloudTrailStatus{}
-	trails := []aws.Trail{{Name: "main", IsLogging: true, TrailStatusEvaluated: true}}
+	trails := []aws.Trail{{Name: "main", IsLogging: true, TrailStatusEvaluated: true, ManagementEvents: aws.ManagementEventsReadWrite}}
 	err := &aws.TrailStatusUnavailableError{}
 
-	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{trails: trails, err: err}, "111111111111", accountAt(0).sub("account_security", "cloudtrail"), status, componentsdk.LevelTrust)
+	c.collectCloudTrailStatus(context.Background(), fakeTrailDescriber{trails: trails, err: err}, nil, nil, "111111111111", accountAt(0).sub("account_security", "cloudtrail"), status, componentsdk.LevelTrust)
 
 	if !status.TrailListingEvaluated {
 		t.Error("expected TrailListingEvaluated true when only per-trail statuses failed")
@@ -494,7 +500,7 @@ type fakeInspectorSummarizer struct {
 	err     error
 }
 
-func (f fakeInspectorSummarizer) GetInspectorSummaryFromSecurityHub(_ context.Context, _ string) (*aws.InspectorSummary, error) {
+func (f fakeInspectorSummarizer) GetInspectorSummaryFromSecurityHub(_ context.Context, _, _ string) (*aws.InspectorSummary, error) {
 	return f.summary, f.err
 }
 

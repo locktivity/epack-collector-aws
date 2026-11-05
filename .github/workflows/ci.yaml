@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   collector:
-    uses: locktivity/epack/.github/workflows/collector-ci.yaml@417b9cd23368033b4e7d803b35289e544db7d2a4 # v0.9.7
+    uses: locktivity/epack/.github/workflows/collector-ci.yaml@cf4107a5798b6b442e821e7ddcff50ceaa82e8a0 # v0.10.0
     with:
       name: aws
       profile-url: ${{ vars.EVIDENCE_PROFILE_URL }}

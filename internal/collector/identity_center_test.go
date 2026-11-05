@@ -280,16 +280,19 @@ func TestAccountInstancePermissionSetsAreNotLicensed(t *testing.T) {
 	}
 
 	// An account instance cannot sign people in to AWS accounts, so with no
-	// Identity Center roles here it does not count as in use.
+	// Identity Center roles or SAML provider here SSO is not configured.
 	var detailed Output
 	decodeArtifact(t, res, awsPath, &detailed)
 	if got := detailed.Accounts[0].IdentityCenter.InstanceType; got != "account" {
 		t.Errorf("instance_type = %q, want account", got)
 	}
-	var posture CloudPosture
-	decodeArtifact(t, res, cloudPosturePath, &posture)
-	if !samePtr(posture.WorkforceSignIn.InUse, boolPtr(false)) {
-		t.Errorf("in_use = %s, want false", showBool(posture.WorkforceSignIn.InUse))
+	var access AccessPosture
+	decodeArtifact(t, res, accessPosturePath, &access)
+	if !samePtr(access.SignIn.SSOConfigured, boolPtr(false)) {
+		t.Errorf("sso_configured = %s, want false", showBool(access.SignIn.SSOConfigured))
+	}
+	if !sameInt(access.Members.SSOMemberCount, intPtr(0)) {
+		t.Errorf("sso_member_count = %s, want 0", showPct(access.Members.SSOMemberCount))
 	}
 }
 
@@ -357,6 +360,110 @@ func TestCollectIdentityCenter_InstanceFoundDespiteAFailedRegion(t *testing.T) {
 		t.Errorf("enabled %v with %d users, want the instance in us-east-1", status.Enabled, status.UserCount)
 	}
 	requireNoGaps(t, c)
+}
+
+// An instance is listed in the region where Identity Center was enabled.
+// With the regions in the config and that region left out, whether SSO is
+// configured is unknown. The values an instance sets are left out as not
+// read.
+func TestIdentityCenterOutsideTheConfiguredRegions(t *testing.T) {
+	isolateAWSEnvironment(t)
+	for _, tc := range []struct {
+		name          string
+		regions       []any
+		wantSSO       *bool
+		wantSSOMember *int
+	}{
+		{"instance region left out", []any{kitRegion}, nil, nil},
+		{"instance region listed", []any{kitRegion, "us-west-2"}, boolPtr(true), intPtr(2)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := kitConfig()
+			config["regions"] = tc.regions
+			res := runKit(t, config, kitSecrets(), secondRegionInstanceResponses())
+			if res.ExitCode != 0 || res.Result == nil {
+				t.Fatalf("run failed with exit %d: %s", res.ExitCode, res.Stderr)
+			}
+			var access AccessPosture
+			decodeArtifact(t, res, accessPosturePath, &access)
+			if !samePtr(access.SignIn.SSOConfigured, tc.wantSSO) {
+				t.Errorf("sso_configured = %s, want %s", showBool(access.SignIn.SSOConfigured), showBool(tc.wantSSO))
+			}
+			if !sameInt(access.Members.SSOMemberCount, tc.wantSSOMember) {
+				t.Errorf("sso_member_count = %s, want %s", showPct(access.Members.SSOMemberCount), showPct(tc.wantSSOMember))
+			}
+			if tc.wantSSO != nil {
+				return
+			}
+			for path, pointers := range map[string][]string{
+				awsPath:           {"/accounts/0/identity_center/enabled", "/accounts/0/identity_center/user_count"},
+				accessPosturePath: {"/sign_in/sso_configured", "/members/sso_member_count"},
+			} {
+				for _, pointer := range pointers {
+					if g := gapAt(res, path, pointer); g == nil || g.Code != componentsdk.CodeNotRead {
+						t.Errorf("%s %s: gap %+v, want not_read", path, pointer, g)
+					}
+				}
+			}
+		})
+	}
+}
+
+// accountInstanceClient refuses the permission set listing for the account
+// instance's ARN with a ValidationException, as AWS does, and answers it for
+// any other instance.
+type accountInstanceClient struct {
+	fakeIdcClient
+	accountInstanceARN string
+}
+
+func (c accountInstanceClient) ListIdentityCenterPermissionSetARNs(ctx context.Context, region, instanceARN string) ([]string, error) {
+	if instanceARN == c.accountInstanceARN {
+		return nil, &smithy.GenericAPIError{Code: "ValidationException", Message: "Value of input 'instanceArn' failed to satisfy constraint"}
+	}
+	return c.fakeIdcClient.ListIdentityCenterPermissionSetARNs(ctx, region, instanceARN)
+}
+
+// A delegated administrator can hold an account instance of its own beside
+// the organization instance. Only the organization instance signs people in
+// to AWS accounts, so it is the one reported whichever region it is listed in
+// first.
+func TestCollectIdentityCenter_PrefersTheOrganizationInstance(t *testing.T) {
+	const self = "222222222222"
+	for _, tc := range []struct {
+		name                     string
+		accountRegion, orgRegion string
+	}{
+		{"account instance listed first", "us-east-1", "us-west-2"},
+		{"organization instance listed first", "us-west-2", "us-east-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			accountInstance := aws.IdentityCenterInstance{InstanceARN: "arn:aws:sso:::instance/ssoins-acct", IdentityStoreID: "d-acct", Region: tc.accountRegion, Status: "ACTIVE", OwnerAccountID: self}
+			orgInstance := aws.IdentityCenterInstance{InstanceARN: "arn:aws:sso:::instance/ssoins-org", IdentityStoreID: "d-org", Region: tc.orgRegion, Status: "ACTIVE", OwnerAccountID: "111111111111"}
+			client := accountInstanceClient{fakeIdcClient: rbacFakeClient(), accountInstanceARN: accountInstance.InstanceARN}
+			client.regionInstances = map[string][]aws.IdentityCenterInstance{
+				tc.accountRegion: {accountInstance},
+				tc.orgRegion:     {orgInstance},
+			}
+			regions := []string{"us-east-1", "us-west-2"}
+			c := newTestCollector(Config{})
+
+			status := c.collectIdentityCenter(context.Background(), client, regions, self, accountAt(0), componentsdk.LevelTrust)
+
+			if status.InstanceARN != orgInstance.InstanceARN || status.InstanceType != "organization" {
+				t.Errorf("instance %s of type %q, want the organization instance", status.InstanceARN, status.InstanceType)
+			}
+			acct := AccountPosture{
+				AccountID:      self,
+				Regions:        regions,
+				IAM:            IAMMetrics{SAMLProviderCount: intPtr(0), IdentityCenterRoleCount: intPtr(0), IdentityCenterSAMLProviderCount: intPtr(0)},
+				IdentityCenter: status,
+			}
+			if got := ssoConfiguredOf(acct, accountAt(0), c.gaps); got.why != nil || !got.v {
+				t.Errorf("sso_configured = %t (unknown %t), want true", got.v, got.why != nil)
+			}
+		})
+	}
 }
 
 func TestCollectIdentityCenter_EveryRegionFailingLeavesStatusOut(t *testing.T) {
@@ -514,10 +621,10 @@ func TestIdentityCenterExternalIDsFromMixedIssuers(t *testing.T) {
 	if len(idc.Users) != 2 || !idc.Users[0].HasExternalID || idc.Users[1].HasExternalID {
 		t.Errorf("users = %+v, want only dana's external ID from SCIM provisioning", idc.Users)
 	}
-	var posture CloudPosture
-	decodeArtifact(t, res, cloudPosturePath, &posture)
-	if got := posture.WorkforceSignIn; !samePtr(got.InUse, boolPtr(true)) || got.MFASource != "unknown" {
-		t.Errorf("in_use %s, mfa_source %q; want true and unknown", showBool(got.InUse), got.MFASource)
+	var access AccessPosture
+	decodeArtifact(t, res, accessPosturePath, &access)
+	if got := access.Members.SSOMemberCount; !samePtr(access.SignIn.SSOConfigured, boolPtr(true)) || !sameInt(got, intPtr(2)) {
+		t.Errorf("sso_configured %s, sso_member_count %s; want true and 2", showBool(access.SignIn.SSOConfigured), showPct(got))
 	}
 
 	for _, a := range res.Artifacts {
@@ -525,6 +632,38 @@ func TestIdentityCenterExternalIDsFromMixedIssuers(t *testing.T) {
 			if strings.Contains(string(a.Data), secret) {
 				t.Errorf("%s carries %q", a.Path, secret)
 			}
+		}
+	}
+}
+
+// ListManagedPoliciesInPermissionSet returns AWS managed policies, and a
+// permission set's customer managed policies are listed apart, so both count.
+func TestPermissionSetManagedPoliciesCountBothKinds(t *testing.T) {
+	sso := regional("sso")
+	run := func(awsManaged, customerManaged []any) IdentityCenterPermissionSetRow {
+		t.Helper()
+		sets := runOutput(t, replaceResponses(kitResponses(),
+			jsonItemResponse("aws.ssoadmin.ListManagedPoliciesInPermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"AttachedManagedPolicies": awsManaged}),
+			jsonItemResponse("aws.ssoadmin.ListCustomerManagedPolicyReferencesInPermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"CustomerManagedPolicyReferences": customerManaged}),
+		)).Accounts[0].IdentityCenter.PermissionSets
+		if len(sets) != 1 {
+			t.Fatalf("permission sets = %+v, want the kit's one", sets)
+		}
+		return sets[0]
+	}
+	readOnly := map[string]any{"Arn": "arn:aws:iam::aws:policy/ReadOnlyAccess", "Name": "ReadOnlyAccess"}
+	billing := map[string]any{"Name": "NorthwindBillingAdmin", "Path": "/"}
+	for _, tc := range []struct {
+		name              string
+		awsManaged, owned []any
+		want              int
+	}{
+		{"AWS managed only", []any{readOnly}, []any{}, 1},
+		{"customer managed only", []any{}, []any{billing}, 1},
+		{"both", []any{readOnly}, []any{billing}, 2},
+	} {
+		if row := run(tc.awsManaged, tc.owned); row.ManagedPoliciesCount != tc.want {
+			t.Errorf("%s: managed_policies_count = %d, want %d", tc.name, row.ManagedPoliciesCount, tc.want)
 		}
 	}
 }

@@ -50,6 +50,7 @@ const (
 	kitImportedKey  = "abcd1234-ab12-cd34-ef56-abcdef123456"
 	kitWebACLARN    = "arn:aws:wafv2:us-east-1:111122223333:regional/webacl/northwind-edge/a1b2c3d4-5678-90ab-cdef-EXAMPLE11111"
 	kitCDNWebACLARN = "arn:aws:wafv2:us-east-1:111122223333:global/webacl/northwind-cdn/b2c3d4e5-6789-01ab-cdef-EXAMPLE22222"
+	kitRuleGroupARN = "arn:aws:wafv2:us-east-1:111122223333:regional/rulegroup/throttle/c3d4e5f6-7890-12ab-cdef-EXAMPLE33333"
 	kitClusterARN   = "arn:aws:ecs:us-east-1:111122223333:cluster/northwind"
 	kitServiceARN   = "arn:aws:ecs:us-east-1:111122223333:service/northwind/api"
 	kitFunctionName = "northwind-api"
@@ -215,6 +216,7 @@ func kitResponsesWithReport(report string) []collectortest.Response {
 		kitCloudFrontResponses(),
 		kitRegionalResponses(),
 		kitSecurityResponses(),
+		kitInspectorResponses(),
 		kitIdentityCenterResponses(),
 	} {
 		out = append(out, part...)
@@ -386,6 +388,15 @@ func kitIAMResponses(report string) []collectortest.Response {
 				"<EnableDate>2024-06-01T00:00:00Z</EnableDate></member></MFADevices><IsTruncated>false</IsTruncated>"),
 		queryResponse("aws.iam.ListRoles", kitIAMURL, "<Roles>"+roleXML.String()+"</Roles><IsTruncated>false</IsTruncated>"),
 		samlProvidersResponse(),
+		// alice has AdministratorAccess attached, and carol has it through
+		// the platform-admins group. bob's developers group can only read.
+		attachedUserPolicies("alice", kitAdminPolicy),
+		attachedUserPolicies("bob"),
+		attachedUserPolicies("carol", kitReadOnlyPolicy),
+		groupsForUser("bob", "developers"),
+		groupsForUser("carol", "platform-admins"),
+		attachedGroupPolicies("developers", kitReadOnlyPolicy),
+		attachedGroupPolicies("platform-admins", kitAdminPolicy),
 		jsonResponse("aws.organizations.ListAccounts", "https://organizations.us-east-1.amazonaws.com/", map[string]any{
 			"Accounts": []any{
 				map[string]any{"Id": kitAccountID, "Arn": "arn:aws:organizations::111122223333:account/o-kit12345678/111122223333", "Name": "Northwind Prod", "Email": "aws-prod@northwind.example", "Status": "ACTIVE"},
@@ -393,6 +404,45 @@ func kitIAMResponses(report string) []collectortest.Response {
 			},
 		}),
 	}
+}
+
+// The AWS managed policies the kit's IAM users and groups have attached.
+const (
+	kitAdminPolicy    = "arn:aws:iam::aws:policy/AdministratorAccess"
+	kitReadOnlyPolicy = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+)
+
+// policyMembers lists policy ARNs as IAM's AttachedPolicies members.
+func policyMembers(arns []string) string {
+	var b strings.Builder
+	b.WriteString("<AttachedPolicies>")
+	for _, arn := range arns {
+		fmt.Fprintf(&b, "<member><PolicyName>%s</PolicyName><PolicyArn>%s</PolicyArn></member>", arn[strings.LastIndex(arn, "/")+1:], arn)
+	}
+	b.WriteString("</AttachedPolicies><IsTruncated>false</IsTruncated>")
+	return b.String()
+}
+
+// attachedUserPolicies answers the listing of a user's attached policies.
+func attachedUserPolicies(user string, arns ...string) collectortest.Response {
+	return queryItemResponse("aws.iam.ListAttachedUserPolicies", kitIAMURL, map[string]string{"UserName": user}, policyMembers(arns))
+}
+
+// attachedGroupPolicies answers the listing of a group's attached policies.
+func attachedGroupPolicies(group string, arns ...string) collectortest.Response {
+	return queryItemResponse("aws.iam.ListAttachedGroupPolicies", kitIAMURL, map[string]string{"GroupName": group}, policyMembers(arns))
+}
+
+// groupsForUser answers the listing of the groups a user belongs to.
+func groupsForUser(user string, groups ...string) collectortest.Response {
+	var b strings.Builder
+	b.WriteString("<Groups>")
+	for i, g := range groups {
+		fmt.Fprintf(&b, "<member><Path>/</Path><GroupName>%s</GroupName><GroupId>AGPAKITGROUP%04d</GroupId><Arn>arn:aws:iam::111122223333:group/%s</Arn>"+
+			"<CreateDate>2024-01-01T00:00:00Z</CreateDate></member>", g, i, g)
+	}
+	b.WriteString("</Groups><IsTruncated>false</IsTruncated>")
+	return queryItemResponse("aws.iam.ListGroupsForUser", kitIAMURL, map[string]string{"UserName": user}, b.String())
 }
 
 // Public access block bodies: kitFullBlock sets all four flags, kitACLBlock
@@ -428,7 +478,7 @@ func kitS3Responses() []collectortest.Response {
 	}
 	const owner = "79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be"
 	return []collectortest.Response{
-		restResponse("aws.s3.ListBuckets", http.MethodGet, kitS3URL+"/?x-id=ListBuckets", 0,
+		restResponse("aws.s3.ListBuckets", http.MethodGet, kitS3URL+"/?max-buckets=10000&x-id=ListBuckets", 0,
 			"<ListAllMyBucketsResult><Owner><ID>"+owner+"</ID></Owner><Buckets>"+
 				"<Bucket><Name>"+kitAppBucket+"</Name><CreationDate>2024-01-01T00:00:00.000Z</CreationDate></Bucket>"+
 				"<Bucket><Name>"+kitLogsBucket+"</Name><CreationDate>2023-01-01T00:00:00.000Z</CreationDate></Bucket>"+
@@ -510,6 +560,7 @@ func kitRegionalResponses() []collectortest.Response {
 		"</ipPermissions></item>"
 	sgDB := "<item><groupId>sg-0db</groupId><groupName>database</groupName><groupDescription>database</groupDescription><vpcId>vpc-0kit</vpcId><ipPermissions>" +
 		"<item><ipProtocol>tcp</ipProtocol><fromPort>5432</fromPort><toPort>5432</toPort><groups><item><groupId>sg-0web</groupId></item></groups></item>" +
+		"<item><ipProtocol>tcp</ipProtocol><fromPort>22</fromPort><toPort>22</toPort><prefixListIds><item><prefixListId>pl-0office</prefixListId></item></prefixListIds></item>" +
 		"</ipPermissions></item>"
 	sgDefault := "<item><groupId>sg-0default</groupId><groupName>default</groupName><groupDescription>default</groupDescription><vpcId>vpc-0kit</vpcId><ipPermissions/></item>"
 	sgAllTraffic := "<item><groupId>sg-0all</groupId><groupName>allow-all</groupName><groupDescription>allow-all</groupDescription><vpcId>vpc-0kit</vpcId><ipPermissions>" +
@@ -555,6 +606,8 @@ func kitRegionalResponses() []collectortest.Response {
 			"<trafficType>ALL</trafficType><logDestinationType>cloud-watch-logs</logDestinationType></item></flowLogSet>"),
 		ec2ItemResponse("aws.ec2.DescribeSecurityGroups", map[string]string{"GroupId.1": "sg-0db"}, "<securityGroupInfo>"+sgDB+"</securityGroupInfo>"),
 		ec2Response("aws.ec2.DescribeSecurityGroups", "<securityGroupInfo>"+sgWeb+sgDB+sgDefault+sgAllTraffic+"</securityGroupInfo>"),
+		// The database group allows SSH from the office's prefix list.
+		ec2Response("aws.ec2.GetManagedPrefixListEntries", "<entrySet><item><cidr>10.20.0.0/16</cidr><description>office</description></item></entrySet>"),
 
 		// Lambda: one function with a resource policy and an IAM-authorized
 		// function URL.
@@ -569,8 +622,16 @@ func kitRegionalResponses() []collectortest.Response {
 				"Layers":      []any{map[string]any{"Arn": "arn:aws:lambda:us-east-1:111122223333:layer:otel:3", "CodeSize": 1000}},
 			}},
 		})),
-		restResponse("aws.lambda.GetPolicy", http.MethodGet, "https://lambda.us-east-1.amazonaws.com/2015-03-31/functions/"+kitFunctionName+"/policy", 0,
+		// The function's resource policy is on its prod alias. The replay
+		// answers with the first response a call matches, so the alias's
+		// policy comes before the function's own answer.
+		restResponse("aws.lambda.GetPolicy", http.MethodGet, "https://lambda.us-east-1.amazonaws.com/2015-03-31/functions/"+kitFunctionName+"/policy?Qualifier=prod", 0,
 			kitJSON(map[string]any{"Policy": `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"apigateway.amazonaws.com"},"Action":"lambda:InvokeFunction"}]}`, "RevisionId": "kit-revision"})),
+		lambdaNotFound("aws.lambda.GetPolicy", "https://lambda.us-east-1.amazonaws.com/2015-03-31/functions/"+kitFunctionName+"/policy"),
+		restResponse("aws.lambda.ListAliases", http.MethodGet, "https://lambda.us-east-1.amazonaws.com/2015-03-31/functions/"+kitFunctionName+"/aliases", 0,
+			kitJSON(map[string]any{"Aliases": []any{map[string]any{
+				"AliasArn": "arn:aws:lambda:us-east-1:111122223333:function:" + kitFunctionName + ":prod", "Name": "prod", "FunctionVersion": "7",
+			}}})),
 		restResponse("aws.lambda.ListFunctionUrlConfigs", http.MethodGet, "https://lambda.us-east-1.amazonaws.com/2021-10-31/functions/"+kitFunctionName+"/urls", 0,
 			kitJSON(map[string]any{"FunctionUrlConfigs": []any{map[string]any{"FunctionUrl": "https://kit.lambda-url.us-east-1.on.aws/", "FunctionArn": "arn:aws:lambda:us-east-1:111122223333:function:" + kitFunctionName, "AuthType": "AWS_IAM", "CreationTime": "2025-01-01T00:00:00Z", "LastModifiedTime": "2025-01-01T00:00:00Z"}}})),
 
@@ -714,7 +775,17 @@ func kitRegionalResponses() []collectortest.Response {
 				map[string]any{"Name": "common", "Priority": 1, "OverrideAction": map[string]any{"None": map[string]any{}},
 					"Statement":        map[string]any{"ManagedRuleGroupStatement": map[string]any{"VendorName": "AWS", "Name": "AWSManagedRulesCommonRuleSet"}},
 					"VisibilityConfig": map[string]any{"SampledRequestsEnabled": true, "CloudWatchMetricsEnabled": true, "MetricName": "common"}},
+				map[string]any{"Name": "throttle", "Priority": 2, "OverrideAction": map[string]any{"None": map[string]any{}},
+					"Statement":        map[string]any{"RuleGroupReferenceStatement": map[string]any{"ARN": kitRuleGroupARN}},
+					"VisibilityConfig": map[string]any{"SampledRequestsEnabled": true, "CloudWatchMetricsEnabled": true, "MetricName": "throttle"}},
 			},
+		}}),
+		jsonItemResponse("aws.wafv2.GetRuleGroup", regional("wafv2"), map[string]any{"ARN": kitRuleGroupARN}, map[string]any{"LockToken": "kit", "RuleGroup": map[string]any{
+			"Name": "throttle", "Id": "c3d4e5f6-7890-12ab-cdef-EXAMPLE33333", "ARN": kitRuleGroupARN, "Capacity": 20,
+			"VisibilityConfig": map[string]any{"SampledRequestsEnabled": true, "CloudWatchMetricsEnabled": true, "MetricName": "throttle"},
+			"Rules": []any{map[string]any{"Name": "per-ip", "Priority": 0, "Action": map[string]any{"Block": map[string]any{}},
+				"Statement":        map[string]any{"RateBasedStatement": map[string]any{"Limit": 5000, "AggregateKeyType": "IP"}},
+				"VisibilityConfig": map[string]any{"SampledRequestsEnabled": true, "CloudWatchMetricsEnabled": true, "MetricName": "per-ip"}}},
 		}}),
 		jsonItemResponse("aws.wafv2.GetWebACL", regional("wafv2"), map[string]any{"Scope": "CLOUDFRONT", "Name": "northwind-cdn", "Id": "b2c3d4e5-6789-01ab-cdef-EXAMPLE22222"}, map[string]any{"LockToken": "kit", "WebACL": map[string]any{
 			"Name": "northwind-cdn", "Id": "b2c3d4e5-6789-01ab-cdef-EXAMPLE22222", "ARN": kitCDNWebACLARN, "DefaultAction": map[string]any{"Allow": map[string]any{}},
@@ -766,12 +837,17 @@ func kitSecurityResponses() []collectortest.Response {
 				"S3BucketName": kitLogsBucket, "IsMultiRegionTrail": true, "IsOrganizationTrail": true, "LogFileValidationEnabled": true, "IncludeGlobalServiceEvents": true},
 			map[string]any{"Name": "northwind-trail", "TrailARN": "arn:aws:cloudtrail:us-east-1:111122223333:trail/northwind-trail", "HomeRegion": "us-east-1",
 				"S3BucketName": kitLogsBucket, "S3KeyPrefix": "local", "IsMultiRegionTrail": true, "IsOrganizationTrail": false, "LogFileValidationEnabled": true,
-				"KmsKeyId": "arn:aws:kms:us-east-1:111122223333:key/" + kitKMSKeyID, "CloudWatchLogsLogGroupArn": "arn:aws:logs:us-east-1:111122223333:log-group:trail:*", "IncludeGlobalServiceEvents": true},
+				"KmsKeyId": "arn:aws:kms:us-east-1:111122223333:key/" + kitKMSKeyID, "CloudWatchLogsLogGroupArn": "arn:aws:logs:us-east-1:111122223333:log-group:trail:*", "IncludeGlobalServiceEvents": true,
+				"HasCustomEventSelectors": true},
 		}}),
 		jsonItemResponse("aws.cloudtrail.GetTrailStatus", regional("cloudtrail"), map[string]any{"Name": "arn:aws:cloudtrail:us-east-1:999900001111:trail/org-trail"},
 			map[string]any{"IsLogging": true, "LatestDeliveryTime": 1767225000}),
 		jsonItemResponse("aws.cloudtrail.GetTrailStatus", regional("cloudtrail"), map[string]any{"Name": "arn:aws:cloudtrail:us-east-1:111122223333:trail/northwind-trail"},
 			map[string]any{"IsLogging": false, "LatestDeliveryTime": 1764547200, "StopLoggingTime": 1764547200}),
+		jsonItemResponse("aws.cloudtrail.GetEventSelectors", regional("cloudtrail"), map[string]any{"TrailName": "arn:aws:cloudtrail:us-east-1:111122223333:trail/northwind-trail"},
+			map[string]any{"TrailARN": "arn:aws:cloudtrail:us-east-1:111122223333:trail/northwind-trail", "EventSelectors": []any{
+				map[string]any{"ReadWriteType": "WriteOnly", "IncludeManagementEvents": true, "DataResources": []any{}},
+			}}),
 
 		jsonResponse("aws.configservice.DescribeConfigurationRecorders", regional("config"), map[string]any{"ConfigurationRecorders": []any{map[string]any{
 			"name": "default", "roleARN": "arn:aws:iam::111122223333:role/aws-config", "recordingGroup": map[string]any{"allSupported": true, "includeGlobalResourceTypes": true},
@@ -865,6 +941,97 @@ func kitSecurityResponses() []collectortest.Response {
 	}
 }
 
+// kitInspectorURL is Amazon Inspector's endpoint in the kit's region.
+const kitInspectorURL = "https://inspector2.us-east-1.amazonaws.com"
+
+// inspectorStatusResponse answers Inspector's status for the kit account,
+// with Inspector in the status account. The EC2, ECR, and Lambda standard
+// scan types are in the statuses ec2, ecr, and lambda.
+func inspectorStatusResponse(account, ec2, ecr, lambda string) collectortest.Response {
+	state := func(status string) map[string]any { return map[string]any{"status": status} }
+	return restResponse("aws.inspector2.BatchGetAccountStatus", http.MethodPost, kitInspectorURL+"/status/batch/get", 0, kitJSON(map[string]any{
+		"accounts": []any{map[string]any{
+			"accountId": kitAccountID,
+			"state":     state(account),
+			"resourceState": map[string]any{
+				"ec2": state(ec2), "ecr": state(ecr), "lambda": state(lambda),
+				"lambdaCode": state("DISABLED"), "codeRepository": state("DISABLED"),
+			},
+		}},
+		"failedAccounts": []any{},
+	}))
+}
+
+// coverageResponse answers a count of Inspector's coverage by resource type.
+// With active, it answers only the count of resources with an ACTIVE scan
+// status.
+func coverageResponse(active bool, counts map[string]int) collectortest.Response {
+	groups, total := []any{}, 0
+	for _, resourceType := range []string{"AWS_EC2_INSTANCE", "AWS_ECR_CONTAINER_IMAGE", "AWS_LAMBDA_FUNCTION"} {
+		if n, ok := counts[resourceType]; ok {
+			groups = append(groups, map[string]any{"groupKey": resourceType, "count": n})
+			total += n
+		}
+	}
+	r := restResponse("aws.inspector2.ListCoverageStatistics", http.MethodPost, kitInspectorURL+"/coverage/statistics/list", 0,
+		kitJSON(map[string]any{"countsByGroup": groups, "totalCounts": total}))
+	if active {
+		r = withRequestBody(r, map[string]any{"filterCriteria": map[string]any{"scanStatusCode": []any{map[string]any{"comparison": "EQUALS", "value": "ACTIVE"}}}})
+	}
+	return r
+}
+
+// inspector2Finding is one ACTIVE finding on a resource of resourceType,
+// first observed on the day given.
+func inspector2Finding(id, severity, resourceType, resourceID string, firstObserved time.Time) map[string]any {
+	return map[string]any{
+		"awsAccountId": kitAccountID, "findingArn": "arn:aws:inspector2:us-east-1:111122223333:finding/" + id,
+		"severity": severity, "status": "ACTIVE", "type": "PACKAGE_VULNERABILITY", "title": "CVE-2025-" + id,
+		"description": "kit", "remediation": map[string]any{},
+		"firstObservedAt": firstObserved.Unix(), "lastObservedAt": kitClock.Add(-time.Hour).Unix(), "updatedAt": kitClock.Add(-time.Hour).Unix(),
+		"resources": []any{map[string]any{"id": resourceID, "type": resourceType}},
+	}
+}
+
+// findingsResponse answers a page of Inspector findings. A page with next
+// offers the next page by that token. A page answering a request for token
+// matches only the request that carries it.
+func findingsResponse(token, next string, findings ...map[string]any) collectortest.Response {
+	body := map[string]any{"findings": findings}
+	if next != "" {
+		body["nextToken"] = next
+	}
+	r := restResponse("aws.inspector2.ListFindings", http.MethodPost, kitInspectorURL+"/findings/list", 0, kitJSON(body))
+	if token != "" {
+		r = withRequestBody(r, map[string]any{"nextToken": token})
+	}
+	return r
+}
+
+// kitInspectorResponses answer Amazon Inspector in the kit's region, with
+// every scan type on. The running instance, the function, and one of the two
+// ECR images are scanned. The instance has a critical finding open more than
+// 30 days and a high one open more than 90, both overdue, and a low one. The
+// function has a high finding open two weeks and an image a medium one. The
+// findings come in two pages.
+func kitInspectorResponses() []collectortest.Response {
+	day := func(month time.Month, d int) time.Time { return time.Date(2025, month, d, 0, 0, 0, 0, time.UTC) }
+	return []collectortest.Response{
+		inspectorStatusResponse("ENABLED", "ENABLED", "ENABLED", "ENABLED"),
+		coverageResponse(true, map[string]int{"AWS_EC2_INSTANCE": 1, "AWS_ECR_CONTAINER_IMAGE": 1, "AWS_LAMBDA_FUNCTION": 1}),
+		coverageResponse(false, map[string]int{"AWS_EC2_INSTANCE": 1, "AWS_ECR_CONTAINER_IMAGE": 2, "AWS_LAMBDA_FUNCTION": 1}),
+		findingsResponse("kit-findings-2", "",
+			inspector2Finding("0004", "MEDIUM", "AWS_ECR_CONTAINER_IMAGE", "arn:aws:ecr:us-east-1:111122223333:repository/northwind/sha256:kit", day(time.December, 1)),
+			inspector2Finding("0005", "LOW", "AWS_EC2_INSTANCE", "i-0kit00000000000001", day(time.June, 1)),
+		),
+		findingsResponse("", "kit-findings-2",
+			inspector2Finding("0001", "CRITICAL", "AWS_EC2_INSTANCE", "i-0kit00000000000001", day(time.November, 1)),
+			inspector2Finding("0002", "HIGH", "AWS_EC2_INSTANCE", "i-0kit00000000000001", day(time.September, 1)),
+			inspector2Finding("0003", "HIGH", "AWS_LAMBDA_FUNCTION", "arn:aws:lambda:us-east-1:111122223333:function:"+kitFunctionName, day(time.December, 18)),
+		),
+	}
+}
+
 // kitIdentityCenterResponses answer the organization's Identity Center
 // instance, which this account owns as the management account, with two
 // users, an admin group, and one permission set assigned in the deploy
@@ -883,6 +1050,7 @@ func kitIdentityCenterResponses() []collectortest.Response {
 		jsonItemResponse("aws.ssoadmin.DescribePermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"PermissionSet": map[string]any{"PermissionSetArn": kitPermSetARN, "Name": "AdministratorAccess", "Description": "Full access", "SessionDuration": "PT1H"}}),
 		jsonItemResponse("aws.ssoadmin.ListAccountsForProvisionedPermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"AccountIds": []string{"444455556666"}}),
 		jsonItemResponse("aws.ssoadmin.ListManagedPoliciesInPermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"AttachedManagedPolicies": []any{map[string]any{"Arn": "arn:aws:iam::aws:policy/AdministratorAccess", "Name": "AdministratorAccess"}}}),
+		jsonItemResponse("aws.ssoadmin.ListCustomerManagedPolicyReferencesInPermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"CustomerManagedPolicyReferences": []any{map[string]any{"Name": "NorthwindBillingAdmin", "Path": "/"}}}),
 		jsonItemResponse("aws.ssoadmin.GetInlinePolicyForPermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"InlinePolicy": `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"organizations:LeaveOrganization","Resource":"*"}]}`}),
 		jsonItemResponse("aws.ssoadmin.ListAccountAssignments", sso, map[string]any{"PermissionSetArn": kitPermSetARN, "AccountId": "444455556666"}, map[string]any{"AccountAssignments": []any{map[string]any{"AccountId": "444455556666", "PermissionSetArn": kitPermSetARN, "PrincipalType": "GROUP", "PrincipalId": "g-1111"}}}),
 	}
@@ -899,12 +1067,15 @@ func emptyAccountResponses() []collectortest.Response {
 		empty("aws.iam.ListRoles", kitIAMURL, "<Roles/><IsTruncated>false</IsTruncated>"),
 	)...)
 	responses = append(responses,
-		restResponse("aws.s3.ListBuckets", http.MethodGet, kitS3URL+"/?x-id=ListBuckets", 0, "<ListAllMyBucketsResult><Owner><ID>kit</ID></Owner><Buckets/></ListAllMyBucketsResult>"),
+		restResponse("aws.s3.ListBuckets", http.MethodGet, kitS3URL+"/?max-buckets=10000&x-id=ListBuckets", 0, "<ListAllMyBucketsResult><Owner><ID>kit</ID></Owner><Buckets/></ListAllMyBucketsResult>"),
 		accountBlockResponse(kitACLBlock),
 		restResponse("aws.cloudfront.ListDistributions", http.MethodGet, "https://cloudfront.amazonaws.com/2020-05-31/distribution", 0,
 			"<DistributionList><Marker></Marker><MaxItems>100</MaxItems><IsTruncated>false</IsTruncated><Quantity>0</Quantity></DistributionList>"),
 		jsonResponse("aws.cloudtrail.DescribeTrails", regional("cloudtrail"), map[string]any{"trailList": []any{}}),
 		jsonResponse("aws.configservice.DescribeConfigurationRecorders", regional("config"), map[string]any{"ConfigurationRecorders": []any{}}),
+		jsonResponse("aws.configservice.DescribeConfigRules", regional("config"), map[string]any{"ConfigRules": []any{}}),
+		jsonResponse("aws.configservice.DescribeComplianceByConfigRule", regional("config"), map[string]any{"ComplianceByConfigRules": []any{}}),
+		jsonResponse("aws.configservice.DescribeConfigRuleEvaluationStatus", regional("config"), map[string]any{"ConfigRulesEvaluationStatus": []any{}}),
 		restResponse("aws.securityhub.DescribeHub", http.MethodGet, "https://securityhub.us-east-1.amazonaws.com/accounts", http.StatusUnauthorized, shub),
 		restResponse("aws.securityhub.GetFindings", http.MethodPost, "https://securityhub.us-east-1.amazonaws.com/findings", http.StatusUnauthorized, shub),
 	)
@@ -948,6 +1119,8 @@ func emptyRegionResponses(region string) []collectortest.Response {
 		restResponse("aws.guardduty.ListDetectors", http.MethodGet, "https://guardduty.us-east-1.amazonaws.com/detector", 0, `{"detectorIds":[]}`),
 		restResponse("aws.accessanalyzer.ListAnalyzers", http.MethodGet, "https://access-analyzer.us-east-1.amazonaws.com/analyzer", 0, `{"analyzers":[]}`),
 		jsonResponse("aws.ssoadmin.ListInstances", regional("sso"), map[string]any{"Instances": []any{}}),
+		jsonResponse("aws.cloudtrail.DescribeTrails", regional("cloudtrail"), map[string]any{"trailList": []any{}}),
+		inspectorStatusResponse("DISABLED", "DISABLED", "DISABLED", "DISABLED"),
 	)
 }
 
@@ -1052,4 +1225,89 @@ func externalIDUsersResponses(report, danaIssuer, eliIssuer string) []collectort
 		user("u-1111", "dana@northwind.example", "Dana Ito", "dana@northwind.example", danaIssuer, kitDanaExternalID),
 		user("u-2222", "eli@northwind.example", "Eli Park", "eli@northwind.example", eliIssuer, kitEliExternalID),
 	}}))
+}
+
+// inspectorDenied answers an Inspector call at path with AWS's denial of
+// action.
+func inspectorDenied(op, path, action string) collectortest.Response {
+	return collectortest.Response{
+		Operation: op, Method: http.MethodPost, URL: kitInspectorURL + path, Status: http.StatusForbidden,
+		Header: http.Header{"Content-Type": []string{"application/json"}, "X-Amzn-Errortype": []string{"AccessDeniedException"}},
+		Body:   kitJSON(map[string]any{"message": kitCaller + action + " because no identity-based policy allows the " + action + " action"}),
+	}
+}
+
+// inspectorStatusDeniedResponses answer as the kit account, except that
+// Inspector's status cannot be read, so no other Inspector call is made.
+func inspectorStatusDeniedResponses() []collectortest.Response {
+	return replaceResponses(kitResponses(), inspectorDenied("aws.inspector2.BatchGetAccountStatus", "/status/batch/get", "inspector2:BatchGetAccountStatus"))
+}
+
+// inspectorFindingsDeniedResponses answer as the kit account, except that
+// Inspector's findings cannot be listed.
+func inspectorFindingsDeniedResponses() []collectortest.Response {
+	return replaceResponses(kitResponses(), inspectorDenied("aws.inspector2.ListFindings", "/findings/list", "inspector2:ListFindings"))
+}
+
+// adminPoliciesDeniedResponses answer as the kit account, except that no IAM
+// user's attached policies can be listed.
+func adminPoliciesDeniedResponses() []collectortest.Response {
+	var out []collectortest.Response
+	for _, r := range kitResponses() {
+		if r.Operation == "aws.iam.ListAttachedUserPolicies" {
+			r = iamDenied(r.Operation, "iam:ListAttachedUserPolicies", "because no identity-based policy allows the iam:ListAttachedUserPolicies action")
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// inspectorQuietResponses answer as the kit account where Inspector is on
+// and has no open finding. The instance is scanned and the function is not,
+// and the account has no ECR image.
+func inspectorQuietResponses() []collectortest.Response {
+	var out []collectortest.Response
+	for _, r := range kitResponses() {
+		if !strings.HasPrefix(r.Operation, "aws.inspector2.") {
+			out = append(out, r)
+		}
+	}
+	return append(out,
+		inspectorStatusResponse("ENABLED", "ENABLED", "ENABLED", "ENABLED"),
+		coverageResponse(true, map[string]int{"AWS_EC2_INSTANCE": 1}),
+		coverageResponse(false, map[string]int{"AWS_EC2_INSTANCE": 1, "AWS_LAMBDA_FUNCTION": 1}),
+		findingsResponse("", ""),
+	)
+}
+
+// coveragePagesResponses answer as the kit account, with the count of
+// scanned resources in two pages.
+func coveragePagesResponses() []collectortest.Response {
+	active := map[string]any{"scanStatusCode": []any{map[string]any{"comparison": "EQUALS", "value": "ACTIVE"}}}
+	page := func(token, next string, groups ...any) collectortest.Response {
+		body := map[string]any{"countsByGroup": groups, "totalCounts": len(groups)}
+		if next != "" {
+			body["nextToken"] = next
+		}
+		request := map[string]any{"filterCriteria": active}
+		if token != "" {
+			request["nextToken"] = token
+		}
+		return withRequestBody(restResponse("aws.inspector2.ListCoverageStatistics", http.MethodPost, kitInspectorURL+"/coverage/statistics/list", 0, kitJSON(body)), request)
+	}
+	group := func(resourceType string) any { return map[string]any{"groupKey": resourceType, "count": 1} }
+	return append([]collectortest.Response{
+		page("kit-coverage-2", "", group("AWS_ECR_CONTAINER_IMAGE"), group("AWS_LAMBDA_FUNCTION")),
+		page("", "kit-coverage-2", group("AWS_EC2_INSTANCE")),
+	}, kitResponses()...)
+}
+
+// adminPolicyPagesResponses answer as the kit account, with bob's attached
+// policies in two pages. AdministratorAccess is on the second page.
+func adminPolicyPagesResponses() []collectortest.Response {
+	first := strings.Replace(policyMembers([]string{kitReadOnlyPolicy}), "<IsTruncated>false</IsTruncated>", "<IsTruncated>true</IsTruncated><Marker>kit-policies-2</Marker>", 1)
+	return append([]collectortest.Response{
+		queryItemResponse("aws.iam.ListAttachedUserPolicies", kitIAMURL, map[string]string{"UserName": "bob", "Marker": "kit-policies-2"}, policyMembers([]string{kitAdminPolicy})),
+		queryItemResponse("aws.iam.ListAttachedUserPolicies", kitIAMURL, map[string]string{"UserName": "bob"}, first),
+	}, kitResponses()...)
 }

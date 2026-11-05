@@ -35,6 +35,10 @@ func (c *Collector) collectLambdaMetrics(ctx context.Context, client *aws.AWSCli
 	out.Functions = make([]LambdaFunctionRow, 0, len(functions))
 	for _, f := range functions {
 		row := lambdaFunctionToRow(f, region, level)
+		if level.AtLeast(componentsdk.LevelInternal) && f.EnvironmentErr != nil {
+			c.warn("account %s region %s lambda %s: failed to read environment variable names: %v", accountID, region, f.Name, f.EnvironmentErr)
+			row.missing.add(f.EnvironmentErr, "env_var_names")
+		}
 
 		hasPolicy, err := client.LambdaFunctionHasResourcePolicy(ctx, region, f.Name)
 		if err != nil {

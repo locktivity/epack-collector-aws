@@ -1,6 +1,9 @@
 package collector
 
 import (
+	"fmt"
+	"maps"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +107,33 @@ func TestTruncateTags(t *testing.T) {
 	}
 	if got := truncateTags(map[string]string{}, 5); len(got) != 0 {
 		t.Errorf("empty input should return empty map, got %d", len(got))
+	}
+}
+
+// Tags with the aws: prefix do not count against AWS's limit of 50, so a
+// resource can carry 50 tags of its own and more aws: tags. Past the cap, the
+// resource's own tags are kept, and every collection keeps the same ones.
+func TestTruncateTags_KeepsOwnTagsTheSameEveryTime(t *testing.T) {
+	in := map[string]string{"Name": "web-1"}
+	for i := 1; i < 50; i++ {
+		in[fmt.Sprintf("team-tag-%02d", i)] = "x"
+	}
+	for i := 0; i < 3; i++ {
+		in[fmt.Sprintf("aws:cloudformation:key-%d", i)] = "y"
+	}
+	first := truncateTags(in, EC2InstanceTagsCap)
+	for k := range first {
+		if strings.HasPrefix(k, "aws:") {
+			t.Errorf("kept %s in place of one of the instance's own tags", k)
+		}
+	}
+	if len(first) != 50 || first["Name"] != "web-1" {
+		t.Fatalf("kept %d tags, Name = %q; want 50 with Name", len(first), first["Name"])
+	}
+	for run := 0; run < 100; run++ {
+		if got := truncateTags(in, EC2InstanceTagsCap); !maps.Equal(got, first) {
+			t.Fatalf("run %d kept a different set of tags", run)
+		}
 	}
 }
 

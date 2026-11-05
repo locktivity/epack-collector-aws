@@ -8,13 +8,18 @@ import (
 	"github.com/locktivity/epack/componentsdk"
 )
 
-const kmsKeyStatePendingDeletion = "PendingDeletion"
+// The key states of a key scheduled for deletion. A multi-Region primary key
+// is PendingReplicaDeletion until its replicas are deleted.
+const (
+	kmsKeyStatePendingDeletion        = "PendingDeletion"
+	kmsKeyStatePendingReplicaDeletion = "PendingReplicaDeletion"
+)
 
 // collectKMSMetrics collects KMS posture for a single region, scoped to
 // customer-managed keys. The AWS client filters out AWS-managed keys; this
 // collector adds the trust aggregates + audit/internal row projection.
 func (c *Collector) collectKMSMetrics(ctx context.Context, client *aws.AWSClient, region, accountID string, level componentsdk.Level) (*KMSMetrics, error) {
-	keys, err := client.ListKMSCustomerKeys(ctx, region)
+	keys, err := client.ListKMSCustomerKeys(ctx, region, level.AtLeast(componentsdk.LevelAudit))
 	if err != nil {
 		return nil, err
 	}
@@ -23,14 +28,21 @@ func (c *Collector) collectKMSMetrics(ctx context.Context, client *aws.AWSClient
 		CustomerManagedKeyCount: len(keys),
 	}
 	for _, k := range keys {
-		if k.RotationErr != nil {
-			c.warn("account %s region %s: failed to read rotation status for KMS key %s: %v", accountID, region, k.KeyID, k.RotationErr)
-			out.missing.addPartial(k.RotationErr, 1, "cmks_with_rotation_disabled_count")
-		} else if k.Rotatable() && !k.RotationEnabled {
-			out.CMKsWithRotationDisabledCount++
-		}
-		if k.KeyState == kmsKeyStatePendingDeletion {
+		// KMS reports a key pending deletion with rotation off, and
+		// restores the setting if the deletion is canceled. Such a key is
+		// not counted as one with rotation off.
+		pendingDeletion := k.KeyState == kmsKeyStatePendingDeletion || k.KeyState == kmsKeyStatePendingReplicaDeletion
+		if pendingDeletion {
 			out.CMKsPendingDeletionCount++
+		}
+		switch {
+		case k.RotationErr != nil:
+			c.warn("account %s region %s: failed to read rotation status for KMS key %s: %v", accountID, region, k.KeyID, k.RotationErr)
+			if !pendingDeletion {
+				out.missing.addPartial(k.RotationErr, 1, "cmks_with_rotation_disabled_count")
+			}
+		case k.Rotatable() && !k.RotationEnabled && !pendingDeletion:
+			out.CMKsWithRotationDisabledCount++
 		}
 	}
 

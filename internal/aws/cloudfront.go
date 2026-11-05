@@ -1,11 +1,13 @@
 package aws
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudfront"
+	cloudfronttypes "github.com/aws/aws-sdk-go-v2/service/cloudfront/types"
 )
 
 // CloudFrontDistribution is one distribution's transport configuration, both
@@ -29,13 +31,17 @@ type CloudFrontDistribution struct {
 
 	MinimumProtocolVersion string
 
-	// Origin hops. Only custom origins declare a protocol policy; S3 REST
-	// origins carry no protocol field in config, so they are counted rather
-	// than classified.
+	// Origin hops. Custom origins declare a protocol policy, and a VPC
+	// origin's policy is on the VPC origin resource. S3 REST origins carry no
+	// protocol field in config, so they are counted rather than classified.
 	OriginsHTTPOnly    int
 	OriginsMatchViewer int
 	OriginsHTTPSOnly   int
 	S3OriginCount      int
+
+	// VPCOriginErr is why a VPC origin's protocol policy could not be read.
+	// That origin is in none of the origin counts.
+	VPCOriginErr error
 }
 
 // ListCloudFrontDistributions returns the account's distributions. CloudFront
@@ -44,6 +50,7 @@ func (c *AWSClient) ListCloudFrontDistributions(ctx context.Context) ([]CloudFro
 	client := cloudfront.NewFromConfig(c.cfg)
 
 	var out []CloudFrontDistribution
+	vpcOrigins := map[string]vpcOriginPolicy{}
 	paginator := cloudfront.NewListDistributionsPaginator(client, &cloudfront.ListDistributionsInput{})
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
@@ -85,14 +92,19 @@ func (c *AWSClient) ListCloudFrontDistributions(ctx context.Context) ([]CloudFro
 					case o.S3OriginConfig != nil:
 						dist.S3OriginCount++
 					case o.CustomOriginConfig != nil:
-						switch string(o.CustomOriginConfig.OriginProtocolPolicy) {
-						case "http-only":
-							dist.OriginsHTTPOnly++
-						case "match-viewer":
-							dist.OriginsMatchViewer++
-						case "https-only":
-							dist.OriginsHTTPSOnly++
+						dist.countOrigin(o.CustomOriginConfig.OriginProtocolPolicy)
+					case o.VpcOriginConfig != nil:
+						id := aws.ToString(o.VpcOriginConfig.VpcOriginId)
+						read, ok := vpcOrigins[id]
+						if !ok {
+							read.policy, read.err = getVPCOriginProtocolPolicy(ctx, client, id)
+							vpcOrigins[id] = read
 						}
+						if read.err != nil {
+							dist.VPCOriginErr = cmp.Or(dist.VPCOriginErr, read.err)
+							continue
+						}
+						dist.countOrigin(read.policy)
 					}
 				}
 			}
@@ -100,4 +112,37 @@ func (c *AWSClient) ListCloudFrontDistributions(ctx context.Context) ([]CloudFro
 		}
 	}
 	return out, nil
+}
+
+// countOrigin counts an origin fetched with policy.
+func (d *CloudFrontDistribution) countOrigin(policy cloudfronttypes.OriginProtocolPolicy) {
+	switch policy {
+	case cloudfronttypes.OriginProtocolPolicyHttpOnly:
+		d.OriginsHTTPOnly++
+	case cloudfronttypes.OriginProtocolPolicyMatchViewer:
+		d.OriginsMatchViewer++
+	case cloudfronttypes.OriginProtocolPolicyHttpsOnly:
+		d.OriginsHTTPSOnly++
+	}
+}
+
+// vpcOriginPolicy is a VPC origin's protocol policy, or why it could not be
+// read.
+type vpcOriginPolicy struct {
+	policy cloudfronttypes.OriginProtocolPolicy
+	err    error
+}
+
+// getVPCOriginProtocolPolicy reads the protocol policy CloudFront uses to
+// reach the VPC origin id. A distribution's VPC origin config holds only the
+// ID, and the policy is on the VPC origin resource.
+func getVPCOriginProtocolPolicy(ctx context.Context, client *cloudfront.Client, id string) (cloudfronttypes.OriginProtocolPolicy, error) {
+	out, err := client.GetVpcOrigin(ctx, &cloudfront.GetVpcOriginInput{Id: aws.String(id)})
+	if err != nil {
+		return "", fmt.Errorf("getting CloudFront VPC origin %s: %w", id, err)
+	}
+	if out.VpcOrigin == nil || out.VpcOrigin.VpcOriginEndpointConfig == nil || out.VpcOrigin.VpcOriginEndpointConfig.OriginProtocolPolicy == "" {
+		return "", errMissing(out.ResultMetadata, "getting CloudFront VPC origin "+id, "OriginProtocolPolicy")
+	}
+	return out.VpcOrigin.VpcOriginEndpointConfig.OriginProtocolPolicy, nil
 }

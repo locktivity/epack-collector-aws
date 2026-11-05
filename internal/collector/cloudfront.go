@@ -24,6 +24,11 @@ func (c *Collector) collectCloudFrontMetrics(ctx context.Context, client *aws.AW
 		return out
 	}
 
+	for _, d := range distributions {
+		if d.VPCOriginErr != nil {
+			c.warn("account %s: failed to read a VPC origin of CloudFront distribution %s, so its origin protocols are unknown: %v", accountID, d.ID, d.VPCOriginErr)
+		}
+	}
 	out := aggregateCloudFrontDistributions(distributions)
 	if level.AtLeast(componentsdk.LevelAudit) {
 		out.Distributions = make([]CloudFrontDistributionRow, 0, len(distributions))
@@ -37,7 +42,8 @@ func (c *Collector) collectCloudFrontMetrics(ctx context.Context, client *aws.AW
 // aggregateCloudFrontDistributions reduces distributions to the transport
 // findings. Disabled distributions serve nothing, so they are counted but
 // excluded from findings: a plaintext policy on a switched-off distribution is
-// latent, not live.
+// latent, not live. A distribution with a VPC origin whose protocol could not
+// be read leaves an origin count unknown unless a known origin settles it.
 func aggregateCloudFrontDistributions(distributions []aws.CloudFrontDistribution) *CloudFrontMetrics {
 	out := &CloudFrontMetrics{
 		DistributionsEvaluated: true,
@@ -55,9 +61,13 @@ func aggregateCloudFrontDistributions(distributions []aws.CloudFrontDistribution
 		}
 		if d.OriginsHTTPOnly > 0 {
 			out.DistributionsWithHTTPOnlyOriginCount++
+		} else {
+			out.missing.addPartial(d.VPCOriginErr, 1, "distributions_with_http_only_origin_count")
 		}
 		if d.OriginsMatchViewer > 0 {
 			out.DistributionsWithMatchViewerOriginCount++
+		} else {
+			out.missing.addPartial(d.VPCOriginErr, 1, "distributions_with_match_viewer_origin_count")
 		}
 
 		if d.MinimumProtocolVersion != "" {
@@ -83,7 +93,7 @@ func distributionAllowsPlaintextViewers(d aws.CloudFrontDistribution) bool {
 }
 
 func cloudFrontDistributionToRow(d aws.CloudFrontDistribution) CloudFrontDistributionRow {
-	return CloudFrontDistributionRow{
+	row := CloudFrontDistributionRow{
 		ID:                     d.ID,
 		Domain:                 d.Domain,
 		Aliases:                d.Aliases,
@@ -95,4 +105,6 @@ func cloudFrontDistributionToRow(d aws.CloudFrontDistribution) CloudFrontDistrib
 		HTTPSOnlyOriginCount:   d.OriginsHTTPSOnly,
 		S3OriginCount:          d.S3OriginCount,
 	}
+	row.missing.add(d.VPCOriginErr, "http_only_origin_count", "match_viewer_origin_count", "https_only_origin_count")
+	return row
 }

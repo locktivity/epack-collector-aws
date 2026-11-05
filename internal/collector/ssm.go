@@ -58,21 +58,24 @@ func isCustomerKMS(keyRef string) bool {
 // internal — no extra API calls; the data is already in the DescribeParameters
 // response.
 //
-// ARN is constructed from region + accountID + name. AWS doesn't return the
-// ARN on DescribeParameters; it follows the documented format
-// arn:aws:ssm:<region>:<account>:parameter<name> where name carries its
-// leading slash as part of the suffix.
+// ARN is the one DescribeParameters returns. When the response has none, it
+// is built from the region's partition, the region, accountID and the name in
+// the documented format arn:<partition>:ssm:<region>:<account>:parameter<name>,
+// where name carries its leading slash as part of the suffix.
 func ssmParameterToRow(p aws.SSMParameter, region, accountID string, level componentsdk.Level) SSMParameterRow {
 	row := SSMParameterRow{
 		Name:             p.Name,
 		Region:           region,
-		ARN:              ssmParameterARN(region, accountID, p.Name),
+		ARN:              p.ARN,
 		Type:             p.Type,
 		DataType:         p.DataType,
 		Version:          p.Version,
 		Tier:             p.Tier,
 		LastModifiedUser: p.LastModifiedUser,
 		HasCustomerKMS:   p.Type == SSMParameterTypeSecureString && isCustomerKMS(p.KMSKeyARN),
+	}
+	if row.ARN == "" {
+		row.ARN = ssmParameterARN(region, accountID, p.Name)
 	}
 	if p.LastModifiedDate != nil {
 		row.LastModifiedDate = p.LastModifiedDate.UTC().Format(time.RFC3339)
@@ -85,14 +88,27 @@ func ssmParameterToRow(p aws.SSMParameter, region, accountID string, level compo
 }
 
 func ssmParameterARN(region, accountID, name string) string {
-	// AWS docs say the ARN is `arn:aws:ssm:<region>:<account>:parameter<name>`
+	// AWS docs say the ARN is `arn:<partition>:ssm:<region>:<account>:parameter<name>`
 	// where <name> retains its leading slash. So a parameter named `/foo/bar`
 	// becomes `arn:aws:ssm:us-east-1:123:parameter/foo/bar`. A parameter named
 	// `foo` (no leading slash, the legacy form) becomes `parameter/foo`.
+	prefix := "arn:" + partitionForRegion(region) + ":ssm:" + region + ":" + accountID + ":parameter"
 	if strings.HasPrefix(name, "/") {
-		return "arn:aws:ssm:" + region + ":" + accountID + ":parameter" + name
+		return prefix + name
 	}
-	return "arn:aws:ssm:" + region + ":" + accountID + ":parameter/" + name
+	return prefix + "/" + name
+}
+
+// partitionForRegion returns the ARN partition a region belongs to:
+// aws-us-gov for GovCloud, aws-cn for China, and aws for the rest.
+func partitionForRegion(region string) string {
+	switch {
+	case strings.HasPrefix(region, "us-gov-"):
+		return "aws-us-gov"
+	case strings.HasPrefix(region, "cn-"):
+		return "aws-cn"
+	}
+	return "aws"
 }
 
 // mergeSSMParametersMetrics combines per-region results. The orchestrator's

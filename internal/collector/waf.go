@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
@@ -119,7 +120,9 @@ func assembleWAFMetrics(regional wafScanWithCounts, cloudfront cloudFrontScan, l
 
 	associations := aclAssociations(regional.acls, cloudfront.acls, byACL)
 	out.WebACLCount = len(associations)
-	out.RateLimitingEnforced = rateLimitingEnforced(associations)
+	var unknown error
+	out.RateLimitingEnforced, unknown = rateLimitingEnforced(associations)
+	out.missing.add(unknown, "rate_limiting_enforced")
 
 	if !level.AtLeast(componentsdk.LevelAudit) {
 		return out
@@ -181,18 +184,26 @@ func aclAssociations(regionalACLs, cfACLs []aws.WebACL, distributionsByACL map[s
 	return associations
 }
 
-func rateLimitingEnforced(associations []aclAssociation) bool {
+// rateLimitingEnforced reports whether a web ACL attached to a resource has
+// a rate-based rule that blocks, in the web ACL or in a rule group it runs.
+// When none is found and an attached web ACL's rule group could not be read,
+// it returns why the answer is unknown.
+func rateLimitingEnforced(associations []aclAssociation) (bool, error) {
+	var unknown error
 	for _, assoc := range associations {
 		if assoc.associated == 0 {
 			continue
 		}
 		for _, rule := range assoc.acl.Rules {
-			if rule.IsRateBased && rule.Action == "block" {
-				return true
+			if (rule.IsRateBased && rule.Action == "block") || rule.GroupRateBasedBlock {
+				return true, nil
 			}
 		}
+		if unknown == nil {
+			unknown = assoc.acl.RuleGroupsErr
+		}
 	}
-	return false
+	return false, unknown
 }
 
 // webACLRows orders the inventory so attached web ACLs survive the cap, then
@@ -232,16 +243,18 @@ func webACLToRow(acl aws.WebACL, associated int, level componentsdk.Level) WebAC
 		Rules:                   []WAFRuleRow{},
 	}
 	row.missing.add(acl.LoggingErr, "logging_enabled", "logging_destination_arn")
-	for _, rule := range acl.Rules {
+	for i, rule := range acl.Rules {
 		row.Rules = append(row.Rules, WAFRuleRow{
-			Name:                 rule.Name,
-			Priority:             rule.Priority,
-			Action:               rule.Action,
-			RateBased:            rule.IsRateBased,
-			RateLimit:            rule.RateLimit,
-			AggregateKeyType:     rule.AggregateKeyType,
-			ManagedRuleGroupName: rule.ManagedRuleGroupName,
+			Name:                  rule.Name,
+			Priority:              rule.Priority,
+			Action:                rule.Action,
+			RateBased:             rule.IsRateBased,
+			RateLimit:             rule.RateLimit,
+			AggregateKeyType:      rule.AggregateKeyType,
+			ManagedRuleGroupName:  rule.ManagedRuleGroupName,
+			RateBasedBlockInGroup: rule.GroupRateBasedBlock,
 		})
+		row.missing.add(rule.GroupErr, fmt.Sprintf("rules/%d/rate_based_block_in_group", i))
 	}
 	if level.AtLeast(componentsdk.LevelInternal) {
 		row.Arn = acl.Arn

@@ -6,14 +6,16 @@ import (
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 )
 
+func listenerPort(port int32) *int32 { return &port }
+
 func alb(scheme string, listeners ...aws.LoadBalancerListener) aws.LoadBalancer {
 	return aws.LoadBalancer{Type: "application", Scheme: scheme, Listeners: listeners}
 }
 
 func TestAggregateLoadBalancers(t *testing.T) {
-	httpForward := aws.LoadBalancerListener{Port: 80, Protocol: "HTTP"}
-	httpRedirect := aws.LoadBalancerListener{Port: 80, Protocol: "HTTP", RedirectsToHTTPS: true}
-	https := aws.LoadBalancerListener{Port: 443, Protocol: "HTTPS", SSLPolicy: "ELBSecurityPolicy-TLS13-1-2-2021-06"}
+	httpForward := aws.LoadBalancerListener{Port: listenerPort(80), Protocol: "HTTP"}
+	httpRedirect := aws.LoadBalancerListener{Port: listenerPort(80), Protocol: "HTTP", RedirectsToHTTPS: true}
+	https := aws.LoadBalancerListener{Port: listenerPort(443), Protocol: "HTTPS", SSLPolicy: "ELBSecurityPolicy-TLS13-1-2-2021-06"}
 
 	t.Run("redirecting ALB is clean, forwarding ALB is plaintext", func(t *testing.T) {
 		got := aggregateLoadBalancers([]aws.LoadBalancer{
@@ -118,5 +120,78 @@ func TestAggregateLoadBalancersCountsSingleZone(t *testing.T) {
 
 	if got.SingleZoneLoadBalancerCount != 1 {
 		t.Fatalf("SingleZoneLoadBalancerCount = %d, want 1", got.SingleZoneLoadBalancerCount)
+	}
+}
+
+// QUIC and TCP_QUIC listeners forward bytes untouched, as TCP, UDP and
+// TCP_UDP listeners do, and a TLS listener terminates.
+func TestAggregateLoadBalancers_NLBPassthroughListeners(t *testing.T) {
+	var listeners []aws.LoadBalancerListener
+	for _, p := range []string{"TCP", "UDP", "TCP_UDP", "QUIC", "TCP_QUIC", "TLS"} {
+		listeners = append(listeners, aws.LoadBalancerListener{Protocol: p})
+	}
+	got := aggregateLoadBalancers([]aws.LoadBalancer{{Type: "network", Listeners: listeners}})
+	if got.NLBTCPPassthroughListenerCount != 5 || got.NLBTLSListenerCount != 1 {
+		t.Errorf("pass-through = %d, TLS = %d, want 5 and 1", got.NLBTCPPassthroughListenerCount, got.NLBTLSListenerCount)
+	}
+}
+
+// A Gateway Load Balancer listener has no port, so its row has none.
+func TestLoadBalancerRows_GatewayListenerHasNoPort(t *testing.T) {
+	const gwARN = "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/gwy/kit-gwlb/50dc6c495c0c9188"
+	isolateAWSEnvironment(t)
+	res := runKit(t, kitConfig(), kitSecrets(), replaceResponses(kitResponses(),
+		queryResponse("aws.elasticloadbalancingv2.DescribeLoadBalancers", regional("elasticloadbalancing"), "<LoadBalancers><member>"+
+			"<LoadBalancerArn>"+gwARN+"</LoadBalancerArn><LoadBalancerName>kit-gwlb</LoadBalancerName><Scheme>internal</Scheme><Type>gateway</Type>"+
+			"<AvailabilityZones><member><ZoneName>us-east-1a</ZoneName><SubnetId>subnet-0kit</SubnetId></member><member><ZoneName>us-east-1b</ZoneName><SubnetId>subnet-1kit</SubnetId></member></AvailabilityZones>"+
+			"</member></LoadBalancers>"),
+		queryItemResponse("aws.elasticloadbalancingv2.DescribeListeners", regional("elasticloadbalancing"), map[string]string{"LoadBalancerArn": gwARN}, "<Listeners><member>"+
+			"<ListenerArn>"+gwARN+"/listener/1</ListenerArn><LoadBalancerArn>"+gwARN+"</LoadBalancerArn>"+
+			"<DefaultActions><member><Type>forward</Type><TargetGroupArn>arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/appliances/73e2d6bc24d8a067</TargetGroupArn></member></DefaultActions>"+
+			"</member></Listeners>"),
+	))
+	if res.ExitCode != 0 {
+		t.Fatalf("run failed with exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	var doc any
+	decodeArtifact(t, res, awsPath, &doc)
+	if port, present := valueAt(doc, "/accounts/0/load_balancers/load_balancers/0/listeners/0/port"); present {
+		t.Errorf("listener port = %v, want it absent for a Gateway Load Balancer listener", port)
+	}
+}
+
+// HealthCheckEnabled is not required in a DescribeTargetGroups answer.
+// Health checks are always on for target type instance, ip and alb, so a
+// group whose answer leaves the element out has them on. A Lambda group's
+// health checks are off by default.
+func TestCollectLoadBalancerMetrics_HealthCheckEnabledLeftOut(t *testing.T) {
+	for _, tc := range []struct {
+		targetType, protocol, enabled string
+		want                          bool
+	}{
+		{"instance", "HTTP", "", true},
+		{"ip", "HTTP", "", true},
+		{"alb", "TCP", "", true},
+		{"lambda", "", "", false},
+		{"instance", "HTTP", "<HealthCheckEnabled>true</HealthCheckEnabled>", true},
+		{"lambda", "", "<HealthCheckEnabled>false</HealthCheckEnabled>", false},
+	} {
+		t.Run(tc.targetType+" "+tc.enabled, func(t *testing.T) {
+			group := "<TargetGroupName>docs-sample</TargetGroupName><TargetType>" + tc.targetType + "</TargetType>" + tc.enabled +
+				"<HealthCheckIntervalSeconds>30</HealthCheckIntervalSeconds><HealthyThresholdCount>5</HealthyThresholdCount><UnhealthyThresholdCount>2</UnhealthyThresholdCount>"
+			if tc.protocol != "" {
+				group += "<Protocol>" + tc.protocol + "</Protocol><LoadBalancerArns><member>" + kitALBARN + "</member></LoadBalancerArns>"
+			}
+			doc := runDetailed(t, replaceResponses(kitResponses(), queryResponse("aws.elasticloadbalancingv2.DescribeTargetGroups", regional("elasticloadbalancing"),
+				"<TargetGroups><member>"+group+"</member></TargetGroups>")))
+			without := 0
+			if !tc.want {
+				without = 1
+			}
+			expectValues(t, doc, map[string]any{
+				"/accounts/0/load_balancers/target_groups_without_health_check_count": without,
+				"/accounts/0/load_balancers/target_groups/0/health_check_enabled":     tc.want,
+			})
+		})
 	}
 }

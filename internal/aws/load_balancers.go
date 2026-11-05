@@ -32,9 +32,10 @@ type LoadBalancer struct {
 	ListenersUnresolved bool
 }
 
-// LoadBalancerListener is one listener's transport configuration.
+// LoadBalancerListener is one listener's transport configuration. Port is nil
+// for a Gateway Load Balancer listener, which has none.
 type LoadBalancerListener struct {
-	Port             int32
+	Port             *int32
 	Protocol         string
 	SSLPolicy        string
 	RedirectsToHTTPS bool
@@ -121,7 +122,7 @@ func (c *AWSClient) listListeners(ctx context.Context, client *elbv2.Client, lbA
 		}
 		for _, l := range page.Listeners {
 			out = append(out, LoadBalancerListener{
-				Port:             aws.ToInt32(l.Port),
+				Port:             l.Port,
 				Protocol:         string(l.Protocol),
 				SSLPolicy:        aws.ToString(l.SslPolicy),
 				RedirectsToHTTPS: redirectsToHTTPS(l.DefaultActions),
@@ -179,7 +180,7 @@ func (c *AWSClient) ListTargetGroups(ctx context.Context, region string) ([]Targ
 				Name:                       aws.ToString(tg.TargetGroupName),
 				Protocol:                   string(tg.Protocol),
 				TargetType:                 string(tg.TargetType),
-				HealthCheckEnabled:         aws.ToBool(tg.HealthCheckEnabled),
+				HealthCheckEnabled:         healthCheckEnabled(tg),
 				HealthCheckIntervalSeconds: aws.ToInt32(tg.HealthCheckIntervalSeconds),
 				HealthyThresholdCount:      aws.ToInt32(tg.HealthyThresholdCount),
 				UnhealthyThresholdCount:    aws.ToInt32(tg.UnhealthyThresholdCount),
@@ -188,4 +189,14 @@ func (c *AWSClient) ListTargetGroups(ctx context.Context, region string) ([]Targ
 		}
 	}
 	return groups, nil
+}
+
+// healthCheckEnabled is a target group's HealthCheckEnabled. A response can
+// leave it out. Health checks are always on for target type instance, ip and
+// alb, and off by default for lambda.
+func healthCheckEnabled(tg elbv2types.TargetGroup) bool {
+	if tg.HealthCheckEnabled != nil {
+		return *tg.HealthCheckEnabled
+	}
+	return tg.TargetType != elbv2types.TargetTypeEnumLambda
 }

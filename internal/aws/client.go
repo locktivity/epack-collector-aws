@@ -2,6 +2,7 @@ package aws
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -10,6 +11,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/accessanalyzer"
+	accessanalyzertypes "github.com/aws/aws-sdk-go-v2/service/accessanalyzer/types"
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 	cloudtrailtypes "github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
 	configservice "github.com/aws/aws-sdk-go-v2/service/configservice"
@@ -28,6 +32,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
+	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
@@ -78,14 +83,14 @@ type Client interface {
 	ListSecurityGroupsByID(ctx context.Context, region string, groupIDs []string) ([]SecurityGroup, error)
 
 	// Account Security (regional for some)
-	DescribeTrails(ctx context.Context) ([]Trail, error)
+	DescribeTrails(ctx context.Context, regions []string, accountID string) ([]Trail, error)
 	DescribeConfigRecorders(ctx context.Context, region string) ([]ConfigRecorder, error)
 	ListConfigRules(ctx context.Context, region string) ([]ConfigRule, error)
 	ListGuardDutyDetectors(ctx context.Context, region string) ([]GuardDutyDetector, error)
 	ListGuardDutyFindings(ctx context.Context, region, detectorID string, maxFindings int) ([]GuardDutyFinding, bool, error)
 	GetSecurityHubConfig(ctx context.Context, region string) (*SecurityHubConfig, error)
-	GetSecurityHubCISComplianceByLevel(ctx context.Context, region, standardID string) (*SecurityHubCISComplianceByLevel, error)
-	GetInspectorSummaryFromSecurityHub(ctx context.Context, region string) (*InspectorSummary, error)
+	GetSecurityHubCISComplianceByLevel(ctx context.Context, region, accountID, standardID string) (*SecurityHubCISComplianceByLevel, error)
+	GetInspectorSummaryFromSecurityHub(ctx context.Context, region, accountID string) (*InspectorSummary, error)
 	ListAccessAnalyzers(ctx context.Context, region string) ([]AccessAnalyzer, error)
 
 	// IAM Identity Center (one instance per account, regional). The instance
@@ -116,9 +121,10 @@ type Client interface {
 	ListCloudWatchLogGroups(ctx context.Context, region string) ([]CloudWatchLogGroup, error)
 
 	// KMS (regional). Returns only CUSTOMER-managed keys; AWS-managed keys are
-	// filtered out (no customer posture lever). Aliases come from a single
-	// per-region ListAliases call, joined into the per-key metadata.
-	ListKMSCustomerKeys(ctx context.Context, region string) ([]KMSKey, error)
+	// filtered out (no customer posture lever). With withAliases, aliases come
+	// from a single per-region ListAliases call, joined into the per-key
+	// metadata.
+	ListKMSCustomerKeys(ctx context.Context, region string, withAliases bool) ([]KMSKey, error)
 
 	// Secrets Manager (regional). All posture-relevant metadata comes from
 	// the single paginated ListSecrets call; secret VALUES are never read.
@@ -420,7 +426,7 @@ func (g *GitHubOIDCTokenSource) fetch() (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx = componentsdk.WithOperation(ctx, componentsdk.Operation{Name: GitHubTokenOperation})
+	ctx = componentsdk.WithOperation(ctx, componentsdk.Operation{Name: GitHubTokenOperation, Permission: GitHubTokenPermission})
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsedURL.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("creating OIDC token request: %w", err)
@@ -459,6 +465,10 @@ func (g *GitHubOIDCTokenSource) fetch() (string, error) {
 
 // GitHubTokenOperation names the call to GitHub's identity token endpoint.
 const GitHubTokenOperation = "github.id_token.get"
+
+// GitHubTokenPermission is the workflow permission the identity token
+// endpoint needs.
+const GitHubTokenPermission = "id-token:write"
 
 // FileTokenSource reads an identity token from a file on every call, so a
 // job that refreshes the file during a long run is picked up.
@@ -594,7 +604,18 @@ func (c *AWSClient) GetEnabledRegions(ctx context.Context) ([]string, error) {
 		}
 		regions = append(regions, *r.RegionName)
 	}
-	return regions, nil
+	return orderRegions(regions, c.cfg.Region), nil
+}
+
+// orderRegions sorts regions with home, the client's own region, first when
+// it is enabled. DescribeRegions promises no order, and the first region is
+// the primary region the single-region services are read in.
+func orderRegions(regions []string, home string) []string {
+	slices.Sort(regions)
+	if i := slices.Index(regions, home); i > 0 {
+		regions = append([]string{home}, slices.Delete(regions, i, i+1)...)
+	}
+	return regions
 }
 
 // ErrCredentialReportTimeout is returned when the IAM credential report is
@@ -679,6 +700,7 @@ func getCredentialReport(ctx context.Context, api credentialReportAPI, waits []t
 		if err != nil {
 			return nil, inResponse(output.ResultMetadata, err)
 		}
+		report.GeneratedTime = output.GeneratedTime
 		return report, nil
 	}
 }
@@ -915,13 +937,20 @@ func (c *AWSClient) ListSAMLProviders(ctx context.Context) ([]SAMLProvider, erro
 // be read leaves only that setting out.
 func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 	s3Client := s3.NewFromConfig(c.cfg)
-	output, err := s3Client.ListBuckets(ctx, &s3.ListBucketsInput{})
-	if err != nil {
-		return nil, fmt.Errorf("listing buckets: %w", err)
+	// S3 rejects an unpaginated ListBuckets for an account whose bucket
+	// quota is above 10,000, so the listing always asks for pages.
+	var listed []s3types.Bucket
+	paginator := s3.NewListBucketsPaginator(s3Client, &s3.ListBucketsInput{MaxBuckets: aws.Int32(listBucketsPageSize)})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing buckets: %w", err)
+		}
+		listed = append(listed, page.Buckets...)
 	}
 
-	buckets := make([]Bucket, 0, len(output.Buckets))
-	for _, b := range output.Buckets {
+	buckets := make([]Bucket, 0, len(listed))
+	for _, b := range listed {
 		name := aws.ToString(b.Name)
 		bucket := Bucket{Name: name}
 
@@ -974,16 +1003,17 @@ func (c *AWSClient) ListBuckets(ctx context.Context) ([]Bucket, error) {
 
 // bucketRegion resolves a bucket's region from its location constraint,
 // which is empty for us-east-1.
+// listBucketsPageSize is the most buckets ListBuckets returns in one page.
+const listBucketsPageSize = 10000
+
 func bucketRegion(ctx context.Context, client *s3.Client, bucket string) (string, error) {
 	out, err := client.GetBucketLocation(ctx, &s3.GetBucketLocationInput{Bucket: aws.String(bucket)})
 	if err != nil {
 		return "", fmt.Errorf("locating bucket %s: %w", bucket, err)
 	}
-	region := string(out.LocationConstraint)
-	if region == "" {
-		region = DefaultRegionAWS
-	}
-	return region, nil
+	// GetBucketLocation returns no constraint for a us-east-1 bucket and EU
+	// for a legacy eu-west-1 bucket.
+	return normalizeBucketRegion(string(out.LocationConstraint)), nil
 }
 
 type s3DefaultEncryptionResult struct {
@@ -1115,9 +1145,26 @@ func toLifecycleRule(r s3types.LifecycleRule) BucketLifecycleRule {
 		ID:     aws.ToString(r.ID),
 		Status: string(r.Status),
 	}
-	if r.Filter != nil && r.Filter.Prefix != nil {
+	if f := r.Filter; f != nil {
+		rule.Tags = addLifecycleTag(rule.Tags, f.Tag)
+		rule.ObjectSizeGreaterThan = aws.ToInt64(f.ObjectSizeGreaterThan)
+		rule.ObjectSizeLessThan = aws.ToInt64(f.ObjectSizeLessThan)
+		if and := f.And; and != nil {
+			for i := range and.Tags {
+				rule.Tags = addLifecycleTag(rule.Tags, &and.Tags[i])
+			}
+			rule.ObjectSizeGreaterThan = aws.ToInt64(and.ObjectSizeGreaterThan)
+			rule.ObjectSizeLessThan = aws.ToInt64(and.ObjectSizeLessThan)
+		}
+	}
+	switch {
+	case r.Filter != nil && r.Filter.Prefix != nil:
 		rule.Prefix = aws.ToString(r.Filter.Prefix)
-	} else if r.Prefix != nil { //nolint:staticcheck // legacy rules still return this field
+	case r.Filter != nil && r.Filter.And != nil && r.Filter.And.Prefix != nil:
+		// A filter that combines a prefix with tags or object sizes holds
+		// its prefix in And.
+		rule.Prefix = aws.ToString(r.Filter.And.Prefix)
+	case r.Prefix != nil: //nolint:staticcheck // legacy rules still return this field
 		// Legacy rules carry the prefix at the top level, deprecated but still
 		// served. Dropping it would make a scoped rule read as covering the
 		// whole bucket.
@@ -1133,7 +1180,23 @@ func toLifecycleRule(r s3types.LifecycleRule) BucketLifecycleRule {
 		rule.ExpirationDays = aws.ToInt32(r.Expiration.Days)
 		rule.ExpirationIsDate = r.Expiration.Date != nil
 	}
+	if r.NoncurrentVersionExpiration != nil {
+		rule.NoncurrentExpirationDays = aws.ToInt32(r.NoncurrentVersionExpiration.NoncurrentDays)
+		rule.NewerNoncurrentVersions = aws.ToInt32(r.NoncurrentVersionExpiration.NewerNoncurrentVersions)
+	}
 	return rule
+}
+
+// addLifecycleTag adds a lifecycle filter tag to tags.
+func addLifecycleTag(tags map[string]string, tag *s3types.Tag) map[string]string {
+	if tag == nil {
+		return tags
+	}
+	if tags == nil {
+		tags = map[string]string{}
+	}
+	tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	return tags
 }
 
 // GetBucketRegion resolves a bucket's region. Fails for buckets outside the
@@ -1210,6 +1273,17 @@ func (c *AWSClient) GetAccountPublicAccessBlock(ctx context.Context, accountID s
 	})
 	pab := s3AccountPublicAccessBlockEvaluation(output, err)
 	return pab, pab.Err
+}
+
+// GetBucketVersioning reports whether versioning is enabled on a bucket. A
+// bucket whose versioning was never set, or is suspended, reads false.
+func (c *AWSClient) GetBucketVersioning(ctx context.Context, region, bucket string) (bool, error) {
+	s3Client := s3.NewFromConfig(c.s3ConfigForRegion(region))
+	out, err := s3Client.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{Bucket: aws.String(bucket)})
+	if err != nil {
+		return false, fmt.Errorf("getting versioning for %s: %w", bucket, err)
+	}
+	return out.Status == s3types.BucketVersioningStatusEnabled, nil
 }
 
 // GetBucketPublicAccessBlock returns one bucket's public access block, for
@@ -1292,10 +1366,11 @@ func (c *AWSClient) ListDBInstances(ctx context.Context, region string) ([]DBIns
 		for _, db := range output.DBInstances {
 			instance := DBInstance{
 				DBInstanceIdentifier:    aws.ToString(db.DBInstanceIdentifier),
+				DBClusterIdentifier:     aws.ToString(db.DBClusterIdentifier),
 				Engine:                  aws.ToString(db.Engine),
 				EngineVersion:           aws.ToString(db.EngineVersion),
 				PubliclyAccessible:      aws.ToBool(db.PubliclyAccessible),
-				StorageEncrypted:        aws.ToBool(db.StorageEncrypted),
+				StorageEncrypted:        storageEncrypted(db.StorageEncrypted, db.StorageEncryptionType),
 				DeletionProtection:      aws.ToBool(db.DeletionProtection),
 				BackupRetentionPeriod:   int(aws.ToInt32(db.BackupRetentionPeriod)),
 				MultiAZ:                 aws.ToBool(db.MultiAZ),
@@ -1347,7 +1422,7 @@ func (c *AWSClient) ListDBClusters(ctx context.Context, region string) ([]DBClus
 				DBClusterIdentifier:   aws.ToString(db.DBClusterIdentifier),
 				Engine:                aws.ToString(db.Engine),
 				EngineVersion:         aws.ToString(db.EngineVersion),
-				StorageEncrypted:      aws.ToBool(db.StorageEncrypted),
+				StorageEncrypted:      storageEncrypted(db.StorageEncrypted, db.StorageEncryptionType),
 				DeletionProtection:    aws.ToBool(db.DeletionProtection),
 				BackupRetentionPeriod: int(aws.ToInt32(db.BackupRetentionPeriod)),
 				MultiAZ:               aws.ToBool(db.MultiAZ),
@@ -1357,6 +1432,13 @@ func (c *AWSClient) ListDBClusters(ctx context.Context, region string) ([]DBClus
 	}
 
 	return clusters, nil
+}
+
+// storageEncrypted reports whether a DB instance's or cluster's storage is
+// encrypted at rest. Storage encrypted with an AWS owned key has
+// StorageEncrypted false and StorageEncryptionType sse-rds.
+func storageEncrypted(flag *bool, encryptionType rdstypes.StorageEncryptionType) bool {
+	return aws.ToBool(flag) || encryptionType == rdstypes.StorageEncryptionTypeSse
 }
 
 // ListVPCs lists VPCs in the specified region.
@@ -1386,7 +1468,8 @@ func (c *AWSClient) ListVPCs(ctx context.Context, region string, includeFlowLogs
 		} else {
 			flowLogsEvaluated = true
 			for _, fl := range flowLogsOutput.FlowLogs {
-				if fl.ResourceId != nil {
+				// A flow log whose delivery failed publishes nothing.
+				if fl.ResourceId != nil && aws.ToString(fl.DeliverLogsStatus) != "FAILED" {
 					flowLogVPCs[*fl.ResourceId] = true
 				}
 			}
@@ -1397,6 +1480,7 @@ func (c *AWSClient) ListVPCs(ctx context.Context, region string, includeFlowLogs
 	for _, v := range output.Vpcs {
 		vpc := VPC{
 			VPCID:             aws.ToString(v.VpcId),
+			OwnerID:           aws.ToString(v.OwnerId),
 			IsDefault:         aws.ToBool(v.IsDefault),
 			FlowLogsEnabled:   flowLogVPCs[aws.ToString(v.VpcId)],
 			FlowLogsEvaluated: flowLogsEvaluated,
@@ -1488,6 +1572,27 @@ func (c *AWSClient) ListSecurityGroupsByID(ctx context.Context, region string, g
 	return securityGroups, nil
 }
 
+// GetManagedPrefixListCIDRs returns the CIDR blocks a managed prefix list
+// holds. A security group rule whose source is the list allows each of them.
+func (c *AWSClient) GetManagedPrefixListCIDRs(ctx context.Context, region, prefixListID string) ([]string, error) {
+	cfg := c.cfg.Copy()
+	cfg.Region = region
+	ec2Client := ec2.NewFromConfig(cfg)
+
+	var cidrs []string
+	paginator := ec2.NewGetManagedPrefixListEntriesPaginator(ec2Client, &ec2.GetManagedPrefixListEntriesInput{PrefixListId: aws.String(prefixListID)})
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("getting entries of prefix list %s: %w", prefixListID, err)
+		}
+		for _, entry := range output.Entries {
+			cidrs = append(cidrs, aws.ToString(entry.Cidr))
+		}
+	}
+	return cidrs, nil
+}
+
 func securityGroupFromSDK(sg ec2types.SecurityGroup) SecurityGroup {
 	group := SecurityGroup{
 		GroupID:   aws.ToString(sg.GroupId),
@@ -1513,71 +1618,265 @@ func securityGroupFromSDK(sg ec2types.SecurityGroup) SecurityGroup {
 				rule.SourceSGIDs = append(rule.SourceSGIDs, aws.ToString(src.GroupId))
 			}
 		}
+		for _, pl := range perm.PrefixListIds {
+			if pl.PrefixListId != nil {
+				rule.PrefixListIDs = append(rule.PrefixListIDs, aws.ToString(pl.PrefixListId))
+			}
+		}
 		group.IngressRules = append(group.IngressRules, rule)
 	}
 
 	return group
 }
 
-// DescribeTrails returns CloudTrail trails.
-func (c *AWSClient) DescribeTrails(ctx context.Context) ([]Trail, error) {
-	ctClient := cloudtrail.NewFromConfig(c.cfg)
-	output, err := ctClient.DescribeTrails(ctx, &cloudtrail.DescribeTrailsInput{
-		IncludeShadowTrails: aws.Bool(true),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("describing trails: %w", err)
+// DescribeTrails returns the trails DescribeTrails lists in each of regions,
+// once per ARN. DescribeTrails lists the trails of the region it is called in
+// and the shadows of multi-region and organization trails, so a single-region
+// trail is found only in its own region. Each trail's status and event
+// selectors are read in its home region when that region lists it, and
+// otherwise in the first region that does. With no regions it reads the
+// client's own region. A region whose listing fails is skipped. When another
+// region's listing succeeded, the error is then a
+// *TrailListingIncompleteError, joined with any *TrailStatusUnavailableError
+// or *TrailSelectorsUnavailableError. accountID is the account being
+// collected.
+func (c *AWSClient) DescribeTrails(ctx context.Context, regions []string, accountID string) ([]Trail, error) {
+	if len(regions) == 0 {
+		regions = []string{c.cfg.Region}
 	}
-
-	sdkTrails := dedupeCloudTrailSDKTrails(output.TrailList)
-	trails := make([]Trail, 0, len(sdkTrails))
-	var statusErr error
-	for _, t := range sdkTrails {
-		trail := Trail{
-			Name:                      aws.ToString(t.Name),
-			TrailARN:                  aws.ToString(t.TrailARN),
-			HomeRegion:                aws.ToString(t.HomeRegion),
-			S3BucketName:              aws.ToString(t.S3BucketName),
-			S3KeyPrefix:               aws.ToString(t.S3KeyPrefix),
-			IsMultiRegionTrail:        aws.ToBool(t.IsMultiRegionTrail),
-			IsOrganizationTrail:       aws.ToBool(t.IsOrganizationTrail),
-			LogFileValidationEnabled:  aws.ToBool(t.LogFileValidationEnabled),
-			CloudWatchLogsLogGroupArn: t.CloudWatchLogsLogGroupArn,
-			KMSKeyId:                  t.KmsKeyId,
-		}
-
-		// Get trail status
-		status, err := ctClient.GetTrailStatus(ctx, &cloudtrail.GetTrailStatusInput{
-			Name: trailStatusIdentifier(t),
+	var listed []listedTrail
+	answered := map[string]bool{}
+	var failed []string
+	var firstListErr error
+	for _, region := range regions {
+		cfg := c.cfg.Copy()
+		cfg.Region = region
+		output, err := cloudtrail.NewFromConfig(cfg).DescribeTrails(ctx, &cloudtrail.DescribeTrailsInput{
+			IncludeShadowTrails: aws.Bool(true),
 		})
-		if err == nil && status.IsLogging == nil {
-			err = errMissing(status.ResultMetadata, "getting trail status for "+trail.Name, "IsLogging")
-		}
 		if err != nil {
-			trail.TrailStatusErrorCode = apiErrorCode(err)
-			if shouldInferOrganizationTrailLogging(t, err) {
-				trail.IsLogging = true
-				trail.TrailStatusInferred = true
-			} else {
-				trail.StatusErr = &TrailStatusUnavailableError{
-					TrailName: trail.Name,
-					Code:      apiErrorCode(err),
-					Err:       err,
-				}
-				if statusErr == nil {
-					statusErr = trail.StatusErr
-				}
+			failed = append(failed, region)
+			if firstListErr == nil {
+				firstListErr = err
 			}
-			trails = append(trails, trail)
 			continue
 		}
-		trail.IsLogging = aws.ToBool(status.IsLogging)
-		trail.TrailStatusEvaluated = true
-
-		trails = append(trails, trail)
+		answered[region] = true
+		for _, t := range output.TrailList {
+			listed = append(listed, listedTrail{trail: t, region: region})
+		}
+	}
+	if len(failed) == len(regions) {
+		return nil, fmt.Errorf("describing trails: %w", firstListErr)
 	}
 
-	return trails, statusErr
+	unique := uniqueListedTrails(listed)
+	trails := make([]Trail, 0, len(unique))
+	var statusErr, selectorsErr error
+	for _, l := range unique {
+		cfg := c.cfg.Copy()
+		cfg.Region = l.region
+		trail, err := c.describeTrail(ctx, cloudtrail.NewFromConfig(cfg), l.trail, accountID)
+		trails = append(trails, trail)
+		var status *TrailStatusUnavailableError
+		var selectors *TrailSelectorsUnavailableError
+		switch {
+		case errors.As(err, &status) && statusErr == nil:
+			statusErr = status
+		case errors.As(err, &selectors) && selectorsErr == nil:
+			selectorsErr = selectors
+		}
+	}
+
+	var listErr error
+	if len(failed) > 0 {
+		listErr = &TrailListingIncompleteError{Regions: failed, Err: firstListErr}
+	}
+	return trails, errors.Join(listErr, statusErr, selectorsErr)
+}
+
+// describeTrail reads one listed trail's status and the management events
+// its event selectors record. It returns a *TrailStatusUnavailableError or a
+// *TrailSelectorsUnavailableError for a read that failed.
+func (c *AWSClient) describeTrail(ctx context.Context, ctClient *cloudtrail.Client, t cloudtrailtypes.Trail, accountID string) (Trail, error) {
+	trail := Trail{
+		Name:                      aws.ToString(t.Name),
+		TrailARN:                  aws.ToString(t.TrailARN),
+		HomeRegion:                aws.ToString(t.HomeRegion),
+		S3BucketName:              aws.ToString(t.S3BucketName),
+		S3KeyPrefix:               aws.ToString(t.S3KeyPrefix),
+		IsMultiRegionTrail:        aws.ToBool(t.IsMultiRegionTrail),
+		GlobalServiceEventsOff:    t.IncludeGlobalServiceEvents != nil && !*t.IncludeGlobalServiceEvents,
+		IsOrganizationTrail:       aws.ToBool(t.IsOrganizationTrail),
+		LogFileValidationEnabled:  aws.ToBool(t.LogFileValidationEnabled),
+		CloudWatchLogsLogGroupArn: t.CloudWatchLogsLogGroupArn,
+		KMSKeyId:                  t.KmsKeyId,
+	}
+
+	var err error
+	status, statusErr := ctClient.GetTrailStatus(ctx, &cloudtrail.GetTrailStatusInput{
+		Name: trailStatusIdentifier(t),
+	})
+	if statusErr == nil && status.IsLogging == nil {
+		statusErr = errMissing(status.ResultMetadata, "getting trail status for "+trail.Name, "IsLogging")
+	}
+	switch {
+	case statusErr == nil:
+		trail.IsLogging = aws.ToBool(status.IsLogging)
+		trail.TrailStatusEvaluated = true
+	case shouldInferOrganizationTrailLogging(t, accountID, statusErr):
+		trail.TrailStatusErrorCode = apiErrorCode(statusErr)
+		trail.IsLogging = true
+		trail.TrailStatusInferred = true
+	default:
+		trail.TrailStatusErrorCode = apiErrorCode(statusErr)
+		trail.StatusErr = &TrailStatusUnavailableError{
+			TrailName: trail.Name,
+			Code:      apiErrorCode(statusErr),
+			Err:       statusErr,
+		}
+		err = trail.StatusErr
+	}
+
+	// A trail without custom event selectors records every management
+	// event, reads and writes, and no data events.
+	if !aws.ToBool(t.HasCustomEventSelectors) {
+		trail.ManagementEvents = ManagementEventsReadWrite
+		return trail, err
+	}
+	selectors, selectorsErr := ctClient.GetEventSelectors(ctx, &cloudtrail.GetEventSelectorsInput{
+		TrailName: trailStatusIdentifier(t),
+	})
+	if selectorsErr == nil && selectors.TrailARN == nil {
+		selectorsErr = errMissing(selectors.ResultMetadata, "getting event selectors for "+trail.Name, "TrailARN")
+	}
+	switch {
+	case selectorsErr == nil:
+		trail.ManagementEvents, trail.ManagementEventSourcesExcluded = managementEvents(selectors.EventSelectors, selectors.AdvancedEventSelectors)
+	case shouldInferOrganizationTrailLogging(t, accountID, selectorsErr):
+		trail.ManagementEventsInferred = true
+		trail.SelectorsErr = selectorsErr
+	default:
+		trail.SelectorsErr = &TrailSelectorsUnavailableError{
+			TrailName: trail.Name,
+			Err:       selectorsErr,
+		}
+		if err == nil {
+			err = trail.SelectorsErr
+		}
+	}
+	return trail, err
+}
+
+// Management events a trail's event selectors record.
+const (
+	ManagementEventsReadWrite = "read_write"
+	ManagementEventsWriteOnly = "write_only"
+	ManagementEventsReadOnly  = "read_only"
+	ManagementEventsNone      = "none"
+)
+
+// managementEvents returns which management events the selectors record. A
+// basic selector records them unless IncludeManagementEvents is false, and
+// its ReadWriteType says which. An advanced selector records them when its
+// eventCategory field equals Management, and its readOnly field says which.
+//
+// sourcesExcluded is true when every selector that records management writes
+// leaves out an event source. A basic selector does that with
+// ExcludeManagementEventSources, and an advanced one with an eventSource
+// field. Either can leave out KMS or RDS Data API events.
+func managementEvents(basic []cloudtrailtypes.EventSelector, advanced []cloudtrailtypes.AdvancedEventSelector) (events string, sourcesExcluded bool) {
+	reads, writes, allSourceWrites := false, false, false
+	for _, s := range basic {
+		if s.IncludeManagementEvents != nil && !*s.IncludeManagementEvents {
+			continue
+		}
+		w := true
+		switch s.ReadWriteType {
+		case cloudtrailtypes.ReadWriteTypeReadOnly:
+			reads, w = true, false
+		case cloudtrailtypes.ReadWriteTypeWriteOnly:
+			writes = true
+		default:
+			reads, writes = true, true
+		}
+		if w && len(s.ExcludeManagementEventSources) == 0 {
+			allSourceWrites = true
+		}
+	}
+	for _, s := range advanced {
+		r, w, excluded := advancedManagementEvents(s.FieldSelectors)
+		reads, writes = reads || r, writes || w
+		if w && !excluded {
+			allSourceWrites = true
+		}
+	}
+	sourcesExcluded = writes && !allSourceWrites
+	switch {
+	case reads && writes:
+		return ManagementEventsReadWrite, sourcesExcluded
+	case writes:
+		return ManagementEventsWriteOnly, sourcesExcluded
+	case reads:
+		return ManagementEventsReadOnly, false
+	}
+	return ManagementEventsNone, false
+}
+
+// advancedManagementEvents reports whether an advanced selector records
+// management reads and writes, and whether it leaves out an event source.
+func advancedManagementEvents(fields []cloudtrailtypes.AdvancedFieldSelector) (reads, writes, sourcesExcluded bool) {
+	management := false
+	reads, writes = true, true
+	for _, f := range fields {
+		switch aws.ToString(f.Field) {
+		case "eventCategory":
+			management = slices.Contains(f.Equals, "Management")
+		case "readOnly":
+			switch {
+			case slices.Contains(f.Equals, "true") || slices.Contains(f.NotEquals, "false"):
+				writes = false
+			case slices.Contains(f.Equals, "false") || slices.Contains(f.NotEquals, "true"):
+				reads = false
+			}
+		case "eventSource":
+			sourcesExcluded = true
+		}
+	}
+	if !management {
+		return false, false, false
+	}
+	return reads, writes, sourcesExcluded
+}
+
+// TrailListingIncompleteError is why the trails of some regions could not be
+// listed, when another region's could.
+type TrailListingIncompleteError struct {
+	Regions []string
+	Err     error
+}
+
+func (e *TrailListingIncompleteError) Error() string {
+	return fmt.Sprintf("describing trails in %s: %v", strings.Join(e.Regions, ", "), e.Err)
+}
+
+func (e *TrailListingIncompleteError) Unwrap() error {
+	return e.Err
+}
+
+// TrailSelectorsUnavailableError is why a trail's event selectors could not
+// be read.
+type TrailSelectorsUnavailableError struct {
+	TrailName string
+	Err       error
+}
+
+func (e *TrailSelectorsUnavailableError) Error() string {
+	return fmt.Sprintf("getting event selectors for %s: %v", e.TrailName, e.Err)
+}
+
+func (e *TrailSelectorsUnavailableError) Unwrap() error {
+	return e.Err
 }
 
 type TrailStatusUnavailableError struct {
@@ -1596,28 +1895,57 @@ func (e *TrailStatusUnavailableError) Unwrap() error {
 
 // shouldInferOrganizationTrailLogging reports whether a failed status read is
 // a member account being blocked from its organization's shadow trail, which
-// counts as coverage. Any other failure leaves the status unknown.
-func shouldInferOrganizationTrailLogging(t cloudtrailtypes.Trail, err error) bool {
+// counts as coverage. The trail's ARN holds the account that owns it, and a
+// failed read of a trail accountID owns leaves the status unknown. Any other
+// failure leaves the status unknown too.
+func shouldInferOrganizationTrailLogging(t cloudtrailtypes.Trail, accountID string, err error) bool {
 	if err == nil || !aws.ToBool(t.IsOrganizationTrail) {
+		return false
+	}
+	if owner := trailOwnerAccountID(aws.ToString(t.TrailARN)); owner == "" || owner == accountID {
 		return false
 	}
 	return componentsdk.Classify(err) == componentsdk.CodePermissionDenied || isAPIErrorCode(err, "TrailNotFoundException")
 }
 
-func dedupeCloudTrailSDKTrails(trails []cloudtrailtypes.Trail) []cloudtrailtypes.Trail {
-	out := make([]cloudtrailtypes.Trail, 0, len(trails))
-	seen := make(map[string]struct{}, len(trails))
-	for _, trail := range trails {
-		key := cloudTrailSDKTrailIdentity(trail)
+// trailOwnerAccountID is the account in a trail's ARN,
+// arn:<partition>:cloudtrail:<region>:<account>:trail/<name>, or "" when the
+// ARN has none.
+func trailOwnerAccountID(arn string) string {
+	parts := strings.Split(arn, ":")
+	if len(parts) < 6 || parts[0] != "arn" || parts[2] != "cloudtrail" {
+		return ""
+	}
+	return parts[4]
+}
+
+// listedTrail is a trail as one region's DescribeTrails listed it.
+type listedTrail struct {
+	trail  cloudtrailtypes.Trail
+	region string
+}
+
+// uniqueListedTrails keeps each trail once, in the order first listed. A
+// trail several regions list is kept as its home region listed it, and
+// otherwise as the first region did. A trail with neither ARN nor name is
+// kept as it is.
+func uniqueListedTrails(listed []listedTrail) []listedTrail {
+	out := make([]listedTrail, 0, len(listed))
+	seen := make(map[string]int, len(listed))
+	for _, l := range listed {
+		key := cloudTrailSDKTrailIdentity(l.trail)
 		if key == "" {
-			out = append(out, trail)
+			out = append(out, l)
 			continue
 		}
-		if _, ok := seen[key]; ok {
-			continue
+		i, ok := seen[key]
+		switch {
+		case !ok:
+			seen[key] = len(out)
+			out = append(out, l)
+		case out[i].region != aws.ToString(out[i].trail.HomeRegion) && l.region == aws.ToString(l.trail.HomeRegion):
+			out[i] = l
 		}
-		seen[key] = struct{}{}
-		out = append(out, trail)
 	}
 	return out
 }
@@ -1671,13 +1999,64 @@ func (c *AWSClient) DescribeConfigRecorders(ctx context.Context, region string) 
 		}
 		if r.RecordingGroup != nil {
 			recorder.AllSupported = r.RecordingGroup.AllSupported
-			recorder.IncludeGlobal = r.RecordingGroup.IncludeGlobalResourceTypes
+			recorder.IncludeGlobal = recordsGlobalIAMTypes(r.RecordingGroup) && slices.Contains(regionsWithGlobalIAMRecording, region)
 		}
 		recorder.Recording = statusMap[recorder.Name]
 		recorders = append(recorders, recorder)
 	}
 
 	return recorders, nil
+}
+
+// regionsWithGlobalIAMRecording are the regions where AWS Config was
+// available before February 2022. Only these can record the global IAM
+// resource types. A region Config reached later cannot, so no region is
+// ever added to this list.
+var regionsWithGlobalIAMRecording = []string{
+	"af-south-1", "ap-east-1", "ap-northeast-1", "ap-northeast-2", "ap-northeast-3",
+	"ap-south-1", "ap-southeast-1", "ap-southeast-2", "ap-southeast-3", "ca-central-1",
+	"cn-north-1", "cn-northwest-1", "eu-central-1", "eu-north-1", "eu-south-1",
+	"eu-west-1", "eu-west-2", "eu-west-3", "me-south-1", "sa-east-1",
+	"us-east-1", "us-east-2", "us-gov-east-1", "us-gov-west-1", "us-west-1", "us-west-2",
+}
+
+// globalIAMResourceTypes are the global resource types a Config recorder can
+// record: IAM users, groups, roles, and customer managed policies.
+var globalIAMResourceTypes = []configtypes.ResourceType{
+	configtypes.ResourceTypeUser, configtypes.ResourceTypeGroup,
+	configtypes.ResourceTypeRole, configtypes.ResourceTypePolicy,
+}
+
+// recordsGlobalIAMTypes reports whether a recording group records any of the
+// global IAM resource types. includeGlobalResourceTypes adds them to an
+// all-supported recorder only. An exclusion strategy records them unless it
+// excludes them, and an inclusion strategy records the ones it lists.
+func recordsGlobalIAMTypes(group *configtypes.RecordingGroup) bool {
+	strategy := configtypes.RecordingStrategyType("")
+	if group.RecordingStrategy != nil {
+		strategy = group.RecordingStrategy.UseOnly
+	}
+	switch {
+	case group.AllSupported || strategy == configtypes.RecordingStrategyTypeAllSupportedResourceTypes:
+		return group.IncludeGlobalResourceTypes
+	case strategy == configtypes.RecordingStrategyTypeExclusionByResourceTypes:
+		var excluded []configtypes.ResourceType
+		if group.ExclusionByResourceTypes != nil {
+			excluded = group.ExclusionByResourceTypes.ResourceTypes
+		}
+		for _, t := range globalIAMResourceTypes {
+			if !slices.Contains(excluded, t) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, t := range globalIAMResourceTypes {
+		if slices.Contains(group.ResourceTypes, t) {
+			return true
+		}
+	}
+	return false
 }
 
 // ListConfigRules returns AWS Config rules in the specified region paired with
@@ -1760,8 +2139,9 @@ func describeComplianceByConfigRule(ctx context.Context, client *configservice.C
 	}
 }
 
-// describeLastEvaluationByConfigRule returns the most recent evaluation
-// timestamp per rule, preferring success over failure when both exist.
+// describeLastEvaluationByConfigRule returns the time each rule last
+// evaluated successfully. A rule whose evaluations have only failed has
+// none.
 func describeLastEvaluationByConfigRule(ctx context.Context, client *configservice.Client) (map[string]*time.Time, error) {
 	out := map[string]*time.Time{}
 	var nextToken *string
@@ -1771,12 +2151,8 @@ func describeLastEvaluationByConfigRule(ctx context.Context, client *configservi
 			return nil, fmt.Errorf("describing config rule evaluation status: %w", err)
 		}
 		for _, s := range resp.ConfigRulesEvaluationStatus {
-			name := aws.ToString(s.ConfigRuleName)
-			switch {
-			case s.LastSuccessfulEvaluationTime != nil:
-				out[name] = s.LastSuccessfulEvaluationTime
-			case s.LastFailedEvaluationTime != nil:
-				out[name] = s.LastFailedEvaluationTime
+			if s.LastSuccessfulEvaluationTime != nil {
+				out[aws.ToString(s.ConfigRuleName)] = s.LastSuccessfulEvaluationTime
 			}
 		}
 		if resp.NextToken == nil || *resp.NextToken == "" {
@@ -1788,8 +2164,9 @@ func describeLastEvaluationByConfigRule(ctx context.Context, client *configservi
 
 // ListGuardDutyDetectors returns GuardDuty detectors in the specified region.
 // A region where GuardDuty is off answers with no detectors. A finding count
-// that could not be read keeps its error on the detector.
-func (c *AWSClient) ListGuardDutyDetectors(ctx context.Context, region string) ([]GuardDutyDetector, error) {
+// that could not be read keeps its error on the detector. The counts cover
+// accountID's own findings, as guardDutyFindingCriteria selects them.
+func (c *AWSClient) ListGuardDutyDetectors(ctx context.Context, region, accountID string) ([]GuardDutyDetector, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	gdClient := guardduty.NewFromConfig(cfg)
@@ -1828,27 +2205,11 @@ func (c *AWSClient) ListGuardDutyDetectors(ctx context.Context, region string) (
 			}
 		}
 
-		unarchivedHighSeverityCriteria := map[string]guarddutytypes.Condition{
-			"severity": {
-				GreaterThanOrEqual: aws.Int64(7),
-			},
-			"service.archived": {
-				Equals: []string{"false"},
-			},
-		}
-		detector.HighOrCriticalFindings, detector.FindingsErr = c.countGuardDutyFindings(ctx, gdClient, id, unarchivedHighSeverityCriteria)
+		detector.HighOrCriticalFindings, detector.FindingsErr = c.countGuardDutyFindings(ctx, gdClient, id, guardDutyFindingCriteria(accountID))
 
-		cutoffMillis := c.now().Add(-48 * time.Hour).UnixMilli()
-		staleHighSeverityCriteria := map[string]guarddutytypes.Condition{
-			"severity": {
-				GreaterThanOrEqual: aws.Int64(7),
-			},
-			"service.archived": {
-				Equals: []string{"false"},
-			},
-			"updatedAt": {
-				LessThanOrEqual: aws.Int64(cutoffMillis),
-			},
+		staleHighSeverityCriteria := guardDutyFindingCriteria(accountID)
+		staleHighSeverityCriteria["updatedAt"] = guarddutytypes.Condition{
+			LessThanOrEqual: aws.Int64(c.now().Add(-48 * time.Hour).UnixMilli()),
 		}
 		detector.HighOrCriticalFindingsOlderThan48Hours, detector.StaleFindingsErr = c.countGuardDutyFindings(ctx, gdClient, id, staleHighSeverityCriteria)
 
@@ -1856,6 +2217,21 @@ func (c *AWSClient) ListGuardDutyDetectors(ctx context.Context, region string) (
 	}
 
 	return detectors, nil
+}
+
+// guardDutyFindingCriteria selects accountID's unarchived findings of
+// severity 7 or more. An administrator's detector also holds its members'
+// findings, which carry their own accountId. ListFindings has no criterion
+// for sample findings, so they match too.
+func guardDutyFindingCriteria(accountID string) map[string]guarddutytypes.Condition {
+	criteria := map[string]guarddutytypes.Condition{
+		"severity":         {GreaterThanOrEqual: aws.Int64(7)},
+		"service.archived": {Equals: []string{"false"}},
+	}
+	if accountID != "" {
+		criteria["accountId"] = guarddutytypes.Condition{Equals: []string{accountID}}
+	}
+	return criteria
 }
 
 // GetGuardDutyAdministratorAccount returns the account ID administering this
@@ -1908,22 +2284,18 @@ func (c *AWSClient) countGuardDutyFindings(ctx context.Context, gdClient *guardd
 	return count, nil
 }
 
-// ListGuardDutyFindings returns up to maxFindings unarchived high-or-critical
-// (severity >= 7) findings for the given detector. The boolean return is true
-// when more findings exist than maxFindings (the caller should record a
-// truncation warning). Sorted by severity DESC then updatedAt DESC so a
-// truncated result keeps the most actionable findings.
-func (c *AWSClient) ListGuardDutyFindings(ctx context.Context, region, detectorID string, maxFindings int) ([]GuardDutyFinding, bool, error) {
+// ListGuardDutyFindings returns up to maxFindings of accountID's unarchived
+// high-or-critical (severity >= 7) findings for the given detector, with
+// sample findings marked. The boolean return is true when more findings exist
+// than maxFindings (the caller should record a truncation warning). Sorted by
+// severity DESC then updatedAt DESC so a truncated result keeps the most
+// actionable findings.
+func (c *AWSClient) ListGuardDutyFindings(ctx context.Context, region, detectorID, accountID string, maxFindings int) ([]GuardDutyFinding, bool, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	gdClient := guardduty.NewFromConfig(cfg)
 
-	criterion := map[string]guarddutytypes.Condition{
-		"severity":         {GreaterThanOrEqual: aws.Int64(7)},
-		"service.archived": {Equals: []string{"false"}},
-	}
-
-	ids, truncated, err := listGuardDutyFindingIDs(ctx, gdClient, detectorID, criterion, maxFindings)
+	ids, truncated, err := listGuardDutyFindingIDs(ctx, gdClient, detectorID, guardDutyFindingCriteria(accountID), maxFindings)
 	if err != nil {
 		return nil, false, err
 	}
@@ -2013,29 +2385,79 @@ func projectGuardDutyFinding(f guarddutytypes.Finding, detectorID string) GuardD
 	if ts := parseGuardDutyTime(aws.ToString(f.UpdatedAt)); ts != nil {
 		row.UpdatedAt = ts
 	}
+	if f.Service != nil && f.Service.AdditionalInfo != nil {
+		row.Sample = guardDutySampleInfo(aws.ToString(f.Service.AdditionalInfo.Value))
+	}
 	return row
 }
 
+// guardDutySampleInfo reports whether a finding's additionalInfo value holds
+// "sample": true. The value is a JSON object, and sample findings have that
+// key set.
+func guardDutySampleInfo(value string) bool {
+	var info struct {
+		Sample bool `json:"sample"`
+	}
+	return json.Unmarshal([]byte(value), &info) == nil && info.Sample
+}
+
 // guardDutyResourceID extracts the most identifying ID from a finding's
-// Resource block. GuardDuty's schema varies per resource type, so this picks
-// the field most operators expect to see in a triage row.
+// Resource block. A finding can carry the details of several resources, such
+// as an S3 finding with the caller's access key, and its resourceType names
+// the affected one. The ID of that resource comes first. Otherwise the ID is
+// taken from the first details block present.
 func guardDutyResourceID(r *guarddutytypes.Resource) string {
-	if r.InstanceDetails != nil && r.InstanceDetails.InstanceId != nil {
-		return aws.ToString(r.InstanceDetails.InstanceId)
+	var instance, accessKey, bucket, eks, workload, ecs, container, rdsInstance, rdsLimitless, lambda string
+	if r.InstanceDetails != nil {
+		instance = aws.ToString(r.InstanceDetails.InstanceId)
 	}
-	if r.AccessKeyDetails != nil && r.AccessKeyDetails.UserName != nil {
-		return aws.ToString(r.AccessKeyDetails.UserName)
+	if r.AccessKeyDetails != nil {
+		accessKey = aws.ToString(r.AccessKeyDetails.AccessKeyId)
 	}
-	if len(r.S3BucketDetails) > 0 && r.S3BucketDetails[0].Name != nil {
-		return aws.ToString(r.S3BucketDetails[0].Name)
+	if len(r.S3BucketDetails) > 0 {
+		bucket = aws.ToString(r.S3BucketDetails[0].Name)
 	}
-	if r.EksClusterDetails != nil && r.EksClusterDetails.Name != nil {
-		return aws.ToString(r.EksClusterDetails.Name)
+	if r.EksClusterDetails != nil {
+		eks = aws.ToString(r.EksClusterDetails.Name)
 	}
 	if r.KubernetesDetails != nil && r.KubernetesDetails.KubernetesWorkloadDetails != nil {
-		return aws.ToString(r.KubernetesDetails.KubernetesWorkloadDetails.Name)
+		workload = aws.ToString(r.KubernetesDetails.KubernetesWorkloadDetails.Name)
 	}
-	return ""
+	if r.EcsClusterDetails != nil {
+		ecs = aws.ToString(r.EcsClusterDetails.Name)
+	}
+	if r.ContainerDetails != nil {
+		container = cmp.Or(aws.ToString(r.ContainerDetails.Id), aws.ToString(r.ContainerDetails.Name))
+	}
+	if r.RdsDbInstanceDetails != nil {
+		rdsInstance = aws.ToString(r.RdsDbInstanceDetails.DbInstanceIdentifier)
+	}
+	if r.RdsLimitlessDbDetails != nil {
+		rdsLimitless = aws.ToString(r.RdsLimitlessDbDetails.DbShardGroupIdentifier)
+	}
+	if r.LambdaDetails != nil {
+		lambda = aws.ToString(r.LambdaDetails.FunctionName)
+	}
+	var affected string
+	switch aws.ToString(r.ResourceType) {
+	case "Instance":
+		affected = instance
+	case "AccessKey":
+		affected = accessKey
+	case "S3Bucket", "S3Object":
+		affected = bucket
+	case "ECSCluster":
+		affected = ecs
+	case "Container":
+		affected = container
+	case "RDSDBInstance":
+		affected = rdsInstance
+	case "RDSLimitlessDB":
+		affected = rdsLimitless
+	case "Lambda":
+		affected = lambda
+	}
+	return cmp.Or(affected, instance, accessKey, bucket, eks, workload, ecs, container, rdsInstance, rdsLimitless, lambda)
 }
 
 // parseGuardDutyTime parses the ISO8601 timestamps GuardDuty returns as
@@ -2077,40 +2499,65 @@ func (c *AWSClient) GetSecurityHubConfig(ctx context.Context, region string) (*S
 		AutoEnableControls: aws.ToBool(hubOutput.AutoEnableControls),
 	}
 
-	// Get enabled standards
-	standardsOutput, err := shClient.GetEnabledStandards(ctx, &securityhub.GetEnabledStandardsInput{})
-	if err != nil {
-		return nil, fmt.Errorf("getting enabled Security Hub standards: %w", err)
-	}
+	// Get enabled standards, every page.
 	config.StandardsARNs = []string{}
-	for _, s := range standardsOutput.StandardsSubscriptions {
-		config.StandardsARNs = append(config.StandardsARNs, aws.ToString(s.StandardsArn))
+	standards := securityhub.NewGetEnabledStandardsPaginator(shClient, &securityhub.GetEnabledStandardsInput{})
+	for standards.HasMorePages() {
+		page, err := standards.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("getting enabled Security Hub standards: %w", err)
+		}
+		for _, s := range page.StandardsSubscriptions {
+			config.StandardsARNs = append(config.StandardsARNs, aws.ToString(s.StandardsArn))
+		}
 	}
 
-	// Get integrations
-	integrationsOutput, err := shClient.ListEnabledProductsForImport(ctx, &securityhub.ListEnabledProductsForImportInput{})
-	if err != nil {
-		config.IntegrationsErr = fmt.Errorf("listing Security Hub integrations: %w", err)
-		return config, nil
+	// Get integrations, every page.
+	products := []string{}
+	integrations := securityhub.NewListEnabledProductsForImportPaginator(shClient, &securityhub.ListEnabledProductsForImportInput{})
+	for integrations.HasMorePages() {
+		page, err := integrations.NextPage(ctx)
+		if err != nil {
+			config.IntegrationsErr = fmt.Errorf("listing Security Hub integrations: %w", err)
+			return config, nil
+		}
+		products = append(products, page.ProductSubscriptions...)
 	}
-	config.IntegrationCount = len(integrationsOutput.ProductSubscriptions)
-	config.ProductSubscriptions = make([]string, 0, len(integrationsOutput.ProductSubscriptions))
-	config.ProductSubscriptions = append(config.ProductSubscriptions, integrationsOutput.ProductSubscriptions...)
+	config.IntegrationCount = len(products)
+	config.ProductSubscriptions = products
 
 	return config, nil
 }
 
-// GetSecurityHubCISComplianceByLevel returns control-level compliance counts for CIS levels 1, 2, and unknown.
-func (c *AWSClient) GetSecurityHubCISComplianceByLevel(ctx context.Context, region, standardID string) (*SecurityHubCISComplianceByLevel, error) {
+// GetSecurityHubCISComplianceByLevel returns control-level compliance counts
+// for CIS levels 1, 2, and unknown from accountID's findings. GetFindings in
+// an administrator account also returns its members' findings, which are not
+// the account's. Security Hub derives a control's status from
+// its active findings that are not suppressed, so archived and suppressed
+// findings are left out too.
+func (c *AWSClient) GetSecurityHubCISComplianceByLevel(ctx context.Context, region, accountID, standardID string) (*SecurityHubCISComplianceByLevel, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	shClient := securityhub.NewFromConfig(cfg)
 
 	filters := &securityhubtypes.AwsSecurityFindingFilters{
+		AwsAccountId: accountFilter(accountID),
 		ComplianceAssociatedStandardsId: []securityhubtypes.StringFilter{
 			{
 				Comparison: securityhubtypes.StringFilterComparisonEquals,
 				Value:      aws.String(standardID),
+			},
+		},
+		RecordState: []securityhubtypes.StringFilter{
+			{
+				Comparison: securityhubtypes.StringFilterComparisonEquals,
+				Value:      aws.String(string(securityhubtypes.RecordStateActive)),
+			},
+		},
+		WorkflowStatus: []securityhubtypes.StringFilter{
+			{
+				Comparison: securityhubtypes.StringFilterComparisonNotEquals,
+				Value:      aws.String(string(securityhubtypes.WorkflowStatusSuppressed)),
 			},
 		},
 	}
@@ -2134,6 +2581,9 @@ func (c *AWSClient) GetSecurityHubCISComplianceByLevel(ctx context.Context, regi
 		}
 
 		for _, finding := range output.Findings {
+			if !findingOfAccount(finding, accountID) || !findingDrivesControlStatus(finding) {
+				continue
+			}
 			if finding.Compliance == nil {
 				continue
 			}
@@ -2201,6 +2651,28 @@ func (c *AWSClient) GetSecurityHubCISComplianceByLevel(ctx context.Context, regi
 	return complianceByLevel, nil
 }
 
+// accountFilter limits GetFindings to the findings of accountID.
+func accountFilter(accountID string) []securityhubtypes.StringFilter {
+	return []securityhubtypes.StringFilter{{
+		Comparison: securityhubtypes.StringFilterComparisonEquals,
+		Value:      aws.String(accountID),
+	}}
+}
+
+// findingOfAccount reports whether a finding is accountID's own.
+func findingOfAccount(finding securityhubtypes.AwsSecurityFinding, accountID string) bool {
+	return aws.ToString(finding.AwsAccountId) == accountID
+}
+
+// findingDrivesControlStatus reports whether Security Hub counts a finding
+// toward its control's status: an active finding that is not suppressed.
+func findingDrivesControlStatus(finding securityhubtypes.AwsSecurityFinding) bool {
+	if finding.RecordState == securityhubtypes.RecordStateArchived {
+		return false
+	}
+	return finding.Workflow == nil || finding.Workflow.Status != securityhubtypes.WorkflowStatusSuppressed
+}
+
 func cisControlIDForFinding(finding securityhubtypes.AwsSecurityFinding) string {
 	if finding.Compliance != nil && finding.Compliance.SecurityControlId != nil {
 		id := strings.TrimSpace(aws.ToString(finding.Compliance.SecurityControlId))
@@ -2253,13 +2725,16 @@ func cisLevelsForFinding(relatedRequirements []string) []int {
 	return nil
 }
 
-// GetInspectorSummaryFromSecurityHub returns Inspector patching metrics based on Security Hub findings.
-func (c *AWSClient) GetInspectorSummaryFromSecurityHub(ctx context.Context, region string) (*InspectorSummary, error) {
+// GetInspectorSummaryFromSecurityHub returns Inspector patching metrics based
+// on accountID's Security Hub findings. GetFindings in an administrator
+// account also returns its members' findings, which are left out.
+func (c *AWSClient) GetInspectorSummaryFromSecurityHub(ctx context.Context, region, accountID string) (*InspectorSummary, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	shClient := securityhub.NewFromConfig(cfg)
 
 	filters := &securityhubtypes.AwsSecurityFindingFilters{
+		AwsAccountId: accountFilter(accountID),
 		ProductName: []securityhubtypes.StringFilter{
 			{
 				Comparison: securityhubtypes.StringFilterComparisonPrefix,
@@ -2287,6 +2762,9 @@ func (c *AWSClient) GetInspectorSummaryFromSecurityHub(ctx context.Context, regi
 		}
 
 		for _, finding := range output.Findings {
+			if !findingOfAccount(finding, accountID) {
+				continue
+			}
 			summary.TotalFindings++
 			summary.Enabled = true
 
@@ -2371,28 +2849,108 @@ func (c *AWSClient) ListAccessAnalyzers(ctx context.Context, region string) ([]A
 // countAnalyzerFindings buckets the analyzer's findings by triage state. A
 // failed listing marks the analyzer unresolved rather than reporting zero: an
 // AccessDenied here must never read as a clean analyzer.
+// countAnalyzerFindings counts an analyzer's active and archived findings.
+// ListFindings supports only external access analyzers, so an unused access
+// or internal access analyzer's findings are listed with ListFindingsV2.
 func (c *AWSClient) countAnalyzerFindings(ctx context.Context, client *accessanalyzer.Client, analyzer *AccessAnalyzer) {
-	paginator := accessanalyzer.NewListFindingsPaginator(client, &accessanalyzer.ListFindingsInput{
-		AnalyzerArn: aws.String(analyzer.ARN),
-	})
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
-		if err != nil {
-			analyzer.FindingsUnresolved = true
-			analyzer.FindingsErr = fmt.Errorf("listing findings for analyzer %s: %w", analyzer.Name, err)
-			analyzer.ActiveFindingsCount = 0
-			analyzer.ArchivedFindingsCount = 0
-			return
+	count := func(status accessanalyzertypes.FindingStatus) {
+		switch status {
+		case accessanalyzertypes.FindingStatusActive:
+			analyzer.ActiveFindingsCount++
+		case accessanalyzertypes.FindingStatusArchived:
+			analyzer.ArchivedFindingsCount++
 		}
-		for _, f := range page.Findings {
-			switch string(f.Status) {
-			case "ACTIVE":
-				analyzer.ActiveFindingsCount++
-			case "ARCHIVED":
-				analyzer.ArchivedFindingsCount++
+	}
+	fail := func(err error) {
+		analyzer.FindingsUnresolved = true
+		analyzer.FindingsErr = fmt.Errorf("listing findings for analyzer %s: %w", analyzer.Name, err)
+		analyzer.ActiveFindingsCount = 0
+		analyzer.ArchivedFindingsCount = 0
+		analyzer.RoleFindings = nil
+		analyzer.UnusedFindings = nil
+	}
+	switch accessanalyzertypes.Type(analyzer.Type) {
+	case accessanalyzertypes.TypeAccount, accessanalyzertypes.TypeOrganization:
+		paginator := accessanalyzer.NewListFindingsPaginator(client, &accessanalyzer.ListFindingsInput{
+			AnalyzerArn: aws.String(analyzer.ARN),
+		})
+		for paginator.HasMorePages() {
+			page, err := paginator.NextPage(ctx)
+			if err != nil {
+				fail(err)
+				return
+			}
+			for _, f := range page.Findings {
+				count(f.Status)
+				if f.ResourceType == accessanalyzertypes.ResourceTypeAwsIamRole {
+					if analyzer.RoleFindings == nil {
+						analyzer.RoleFindings = map[string]string{}
+					}
+					analyzer.RoleFindings[roleFindingKey(f)] = string(f.Status)
+				}
+			}
+		}
+	default:
+		paginator := accessanalyzer.NewListFindingsV2Paginator(client, &accessanalyzer.ListFindingsV2Input{
+			AnalyzerArn: aws.String(analyzer.ARN),
+		})
+		for paginator.HasMorePages() {
+			page, err := paginator.NextPage(ctx)
+			if err != nil {
+				fail(err)
+				return
+			}
+			for _, f := range page.Findings {
+				count(f.Status)
+				if isUnusedAccessAnalyzer(analyzer.Type) {
+					if analyzer.UnusedFindings == nil {
+						analyzer.UnusedFindings = map[string]UnusedFindingTally{}
+					}
+					key := unusedFindingKey(f)
+					analyzer.UnusedFindings[key] = UnusedFindingTally{Status: string(f.Status), Count: analyzer.UnusedFindings[key].Count + 1}
+				}
 			}
 		}
 	}
+}
+
+// isUnusedAccessAnalyzer reports whether analyzerType is an unused access
+// analyzer, for one account or for the organization.
+func isUnusedAccessAnalyzer(analyzerType string) bool {
+	switch accessanalyzertypes.Type(analyzerType) {
+	case accessanalyzertypes.TypeAccountUnusedAccess, accessanalyzertypes.TypeOrganizationUnusedAccess:
+		return true
+	}
+	return false
+}
+
+// unusedFindingKey identifies an unused access finding by the resource, its
+// owner account, the finding type and the status. A finding's ID differs
+// between analyzers, so the ID is left out.
+func unusedFindingKey(f accessanalyzertypes.FindingSummaryV2) string {
+	return strings.Join([]string{
+		aws.ToString(f.Resource), aws.ToString(f.ResourceOwnerAccount), string(f.FindingType), string(f.Status),
+	}, "|")
+}
+
+// roleFindingKey identifies an IAM role finding by the role, the access it
+// grants and its status. The same finding has a different ID in each region,
+// so the ID is left out.
+func roleFindingKey(f accessanalyzertypes.FindingSummary) string {
+	sortedPairs := func(m map[string]string) string {
+		pairs := make([]string, 0, len(m))
+		for k, v := range m {
+			pairs = append(pairs, k+"="+v)
+		}
+		slices.Sort(pairs)
+		return strings.Join(pairs, ",")
+	}
+	actions := slices.Clone(f.Action)
+	slices.Sort(actions)
+	return strings.Join([]string{
+		aws.ToString(f.Resource), string(f.Status), sortedPairs(f.Principal), sortedPairs(f.Condition),
+		strings.Join(actions, ","), strconv.FormatBool(aws.ToBool(f.IsPublic)),
+	}, "|")
 }
 
 // securityHubNotEnabled reports the error Security Hub answers with in a

@@ -113,45 +113,105 @@ func TestTrailStatusIdentifierFallsBackToName(t *testing.T) {
 
 func TestShouldInferOrganizationTrailLogging(t *testing.T) {
 	err := &apiError{code: componentsdk.CodePermissionDenied, vendor: "AccessDeniedException", err: &smithy.GenericAPIError{Code: "AccessDeniedException"}}
+	const member, management = "111122223333", "999988887777"
+	orgTrail := cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(true), TrailARN: aws.String("arn:aws:cloudtrail:us-east-1:" + management + ":trail/org")}
 
-	if !shouldInferOrganizationTrailLogging(cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(true)}, err) {
+	if !shouldInferOrganizationTrailLogging(orgTrail, member, err) {
 		t.Fatalf("expected organization trail status failure to be inferable")
 	}
-	if !shouldInferOrganizationTrailLogging(cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(true)}, &smithy.GenericAPIError{Code: "TrailNotFoundException"}) {
+	if !shouldInferOrganizationTrailLogging(orgTrail, member, &smithy.GenericAPIError{Code: "TrailNotFoundException"}) {
 		t.Fatalf("expected a member account's missing shadow trail to be inferable")
 	}
+	if shouldInferOrganizationTrailLogging(orgTrail, management, err) {
+		t.Fatalf("did not expect a denied read of the account's own organization trail to count as logging")
+	}
 	throttled := &apiError{code: componentsdk.CodeRateLimited, vendor: "ThrottlingException", err: &smithy.GenericAPIError{Code: "ThrottlingException"}}
-	if shouldInferOrganizationTrailLogging(cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(true)}, throttled) {
+	if shouldInferOrganizationTrailLogging(orgTrail, member, throttled) {
 		t.Fatalf("did not expect a throttled status read to count as logging")
 	}
-	if shouldInferOrganizationTrailLogging(cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(false)}, err) {
+	localTrail := orgTrail
+	localTrail.IsOrganizationTrail = aws.Bool(false)
+	if shouldInferOrganizationTrailLogging(localTrail, member, err) {
 		t.Fatalf("did not expect local trail status failure to be inferable")
 	}
-	if shouldInferOrganizationTrailLogging(cloudtrailtypes.Trail{IsOrganizationTrail: aws.Bool(true)}, nil) {
+	if shouldInferOrganizationTrailLogging(orgTrail, member, nil) {
 		t.Fatalf("did not expect nil error to be inferable")
 	}
 }
 
-func TestDedupeCloudTrailSDKTrails(t *testing.T) {
-	arn := "arn:aws:cloudtrail:us-east-1:111122223333:trail/org-trail"
+func TestUniqueListedTrails(t *testing.T) {
+	arn := "arn:aws:cloudtrail:us-west-2:111122223333:trail/org-trail"
 	name1 := "org-trail-shadow-1"
 	name2 := "org-trail-shadow-2"
 	local := "local-trail"
+	home := "us-west-2"
 
-	got := dedupeCloudTrailSDKTrails([]cloudtrailtypes.Trail{
-		{Name: &name1, TrailARN: &arn},
-		{Name: &name2, TrailARN: &arn},
-		{Name: &local},
+	got := uniqueListedTrails([]listedTrail{
+		{trail: cloudtrailtypes.Trail{Name: &name1, TrailARN: &arn, HomeRegion: &home}, region: "us-east-1"},
+		{trail: cloudtrailtypes.Trail{Name: &local}, region: "us-east-1"},
+		{trail: cloudtrailtypes.Trail{Name: &name2, TrailARN: &arn, HomeRegion: &home}, region: "us-west-2"},
 	})
 
 	if len(got) != 2 {
 		t.Fatalf("expected 2 deduped trails, got %d", len(got))
 	}
-	if aws.ToString(got[0].Name) != name1 {
-		t.Fatalf("expected first copy of duplicate trail to be retained, got %q", aws.ToString(got[0].Name))
+	if aws.ToString(got[0].trail.Name) != name2 || got[0].region != home {
+		t.Fatalf("expected the copy its home region listed, got %q from %s", aws.ToString(got[0].trail.Name), got[0].region)
 	}
-	if aws.ToString(got[1].Name) != local {
-		t.Fatalf("expected local trail to be retained, got %q", aws.ToString(got[1].Name))
+	if aws.ToString(got[1].trail.Name) != local {
+		t.Fatalf("expected local trail to be retained, got %q", aws.ToString(got[1].trail.Name))
+	}
+}
+
+func TestManagementEvents(t *testing.T) {
+	no, yes := aws.Bool(false), aws.Bool(true)
+	field := func(name string, equals ...string) cloudtrailtypes.AdvancedFieldSelector {
+		return cloudtrailtypes.AdvancedFieldSelector{Field: aws.String(name), Equals: equals}
+	}
+	management := field("eventCategory", "Management")
+	notKMS := cloudtrailtypes.AdvancedFieldSelector{Field: aws.String("eventSource"), NotEquals: []string{"kms.amazonaws.com"}}
+	tests := []struct {
+		name     string
+		basic    []cloudtrailtypes.EventSelector
+		advanced []cloudtrailtypes.AdvancedEventSelector
+		want     string
+		excluded bool
+	}{
+		{"default selector", []cloudtrailtypes.EventSelector{{}}, nil, ManagementEventsReadWrite, false},
+		{"data events only", []cloudtrailtypes.EventSelector{{IncludeManagementEvents: no, ReadWriteType: cloudtrailtypes.ReadWriteTypeAll}}, nil, ManagementEventsNone, false},
+		{"reads only", []cloudtrailtypes.EventSelector{{IncludeManagementEvents: yes, ReadWriteType: cloudtrailtypes.ReadWriteTypeReadOnly}}, nil, ManagementEventsReadOnly, false},
+		{"writes only", []cloudtrailtypes.EventSelector{{ReadWriteType: cloudtrailtypes.ReadWriteTypeWriteOnly}}, nil, ManagementEventsWriteOnly, false},
+		{"no selectors", nil, nil, ManagementEventsNone, false},
+		{"advanced management", nil, []cloudtrailtypes.AdvancedEventSelector{{FieldSelectors: []cloudtrailtypes.AdvancedFieldSelector{management}}}, ManagementEventsReadWrite, false},
+		{"advanced management writes", nil, []cloudtrailtypes.AdvancedEventSelector{{FieldSelectors: []cloudtrailtypes.AdvancedFieldSelector{management, field("readOnly", "false")}}}, ManagementEventsWriteOnly, false},
+		{"advanced management reads", nil, []cloudtrailtypes.AdvancedEventSelector{{FieldSelectors: []cloudtrailtypes.AdvancedFieldSelector{management, field("readOnly", "true")}}}, ManagementEventsReadOnly, false},
+		{"advanced data events", nil, []cloudtrailtypes.AdvancedEventSelector{{FieldSelectors: []cloudtrailtypes.AdvancedFieldSelector{field("eventCategory", "Data"), field("resources.type", "AWS::S3::Object")}}}, ManagementEventsNone, false},
+		{"basic selector leaving out KMS", []cloudtrailtypes.EventSelector{{ExcludeManagementEventSources: []string{"kms.amazonaws.com"}}}, nil, ManagementEventsReadWrite, true},
+		{"advanced selector leaving out KMS", nil, []cloudtrailtypes.AdvancedEventSelector{{FieldSelectors: []cloudtrailtypes.AdvancedFieldSelector{management, notKMS}}}, ManagementEventsReadWrite, true},
+		{"a second selector records every source", []cloudtrailtypes.EventSelector{{ExcludeManagementEventSources: []string{"rdsdata.amazonaws.com"}}, {ReadWriteType: cloudtrailtypes.ReadWriteTypeWriteOnly}}, nil, ManagementEventsReadWrite, false},
+		{"reads leaving out KMS", []cloudtrailtypes.EventSelector{{ReadWriteType: cloudtrailtypes.ReadWriteTypeReadOnly, ExcludeManagementEventSources: []string{"kms.amazonaws.com"}}}, nil, ManagementEventsReadOnly, false},
+	}
+	for _, tt := range tests {
+		got, excluded := managementEvents(tt.basic, tt.advanced)
+		if got != tt.want || excluded != tt.excluded {
+			t.Errorf("%s: managementEvents = %q, sources excluded %v, want %q and %v", tt.name, got, excluded, tt.want, tt.excluded)
+		}
+	}
+}
+
+// DescribeRegions promises no order, so the regions are sorted with the
+// client's own region first, whatever order they are listed in.
+func TestOrderRegions(t *testing.T) {
+	for _, listed := range [][]string{
+		{"us-west-2", "eu-west-1", "us-east-1"},
+		{"us-east-1", "us-west-2", "eu-west-1"},
+	} {
+		if got := orderRegions(append([]string{}, listed...), "us-east-1"); !reflect.DeepEqual(got, []string{"us-east-1", "eu-west-1", "us-west-2"}) {
+			t.Errorf("orderRegions(%v) = %v, want us-east-1 first and the rest sorted", listed, got)
+		}
+	}
+	if got := orderRegions([]string{"us-west-2", "eu-west-1"}, "us-east-1"); !reflect.DeepEqual(got, []string{"eu-west-1", "us-west-2"}) {
+		t.Errorf("home region not enabled: orderRegions = %v, want the regions sorted", got)
 	}
 }
 

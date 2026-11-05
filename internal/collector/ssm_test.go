@@ -140,3 +140,23 @@ func TestMergeSSMParametersMetrics_SumsAggregatesAndConcatsParameters(t *testing
 		t.Errorf("expected 3 parameters after merge, got %d", len(got.Parameters))
 	}
 }
+
+// A parameter's ARN names the partition of its region when DescribeParameters
+// leaves the ARN out, and is the one it returns when it does not.
+func TestSSMParameterToRow_ARNNamesItsPartition(t *testing.T) {
+	for _, tc := range []struct{ region, want string }{
+		{"us-east-1", "arn:aws:ssm:us-east-1:123456789012:parameter/prod/db/host"},
+		{"us-gov-west-1", "arn:aws-us-gov:ssm:us-gov-west-1:123456789012:parameter/prod/db/host"},
+		{"cn-north-1", "arn:aws-cn:ssm:cn-north-1:123456789012:parameter/prod/db/host"},
+	} {
+		row := ssmParameterToRow(aws.SSMParameter{Name: "/prod/db/host", Type: "String"}, tc.region, "123456789012", componentsdk.LevelAudit)
+		if row.ARN != tc.want {
+			t.Errorf("%s: arn = %q, want %q", tc.region, row.ARN, tc.want)
+		}
+	}
+	const listed = "arn:aws-us-gov:ssm:us-gov-east-1:123456789012:parameter/prod/db/host"
+	row := ssmParameterToRow(aws.SSMParameter{ARN: listed, Name: "/prod/db/host", Type: "String"}, "us-gov-east-1", "123456789012", componentsdk.LevelAudit)
+	if row.ARN != listed {
+		t.Errorf("arn = %q, want the one DescribeParameters returned, %q", row.ARN, listed)
+	}
+}

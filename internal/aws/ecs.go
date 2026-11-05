@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -23,7 +24,7 @@ type ECSService struct {
 	RunningCount           int32
 	CircuitBreakerEnabled  bool
 	CircuitBreakerRollback bool
-	MinimumHealthyPercent  int32
+	MinimumHealthyPercent  *int32 // nil when the service has no deployment configuration
 	MaximumPercent         int32
 	AssignsPublicIP        bool
 	SubnetCount            int
@@ -33,7 +34,9 @@ type ECSService struct {
 	// Exec, which opens an interactive shell in a running container.
 	EnableExecuteCommand bool
 
-	HealthCheckGracePeriodSeconds int32
+	// HealthCheckGracePeriodSeconds is nil when DescribeServices leaves it
+	// out.
+	HealthCheckGracePeriodSeconds *int32
 }
 
 // ECSServiceScaling is a service's Application Auto Scaling registration:
@@ -45,6 +48,18 @@ type ECSServiceScaling struct {
 	MaxCapacity int32
 	PolicyTypes []string
 	Metrics     []string
+
+	// PolicyScales is true when one of the policies can change the
+	// service's capacity. No policy scales when MinCapacity equals
+	// MaxCapacity. A predictive policy scales only in ForecastAndScale mode.
+	// A target tracking or step scaling policy does not scale while dynamic
+	// scaling in and out is suspended on the target. A step scaling policy
+	// also needs an alarm that invokes it.
+	PolicyScales bool
+
+	// dynamicScalingSuspended is true when the target's SuspendedState has
+	// dynamic scaling suspended in both directions.
+	dynamicScalingSuspended bool
 }
 
 // ListECSServices returns the region's services across every cluster.
@@ -105,10 +120,10 @@ func (c *AWSClient) ListECSServices(ctx context.Context, region string) ([]ECSSe
 					LoadBalanced:         len(s.LoadBalancers) > 0,
 					EnableExecuteCommand: s.EnableExecuteCommand,
 
-					HealthCheckGracePeriodSeconds: aws.ToInt32(s.HealthCheckGracePeriodSeconds),
+					HealthCheckGracePeriodSeconds: s.HealthCheckGracePeriodSeconds,
 				}
 				if s.DeploymentConfiguration != nil {
-					service.MinimumHealthyPercent = aws.ToInt32(s.DeploymentConfiguration.MinimumHealthyPercent)
+					service.MinimumHealthyPercent = s.DeploymentConfiguration.MinimumHealthyPercent
 					service.MaximumPercent = aws.ToInt32(s.DeploymentConfiguration.MaximumPercent)
 					if cb := s.DeploymentConfiguration.DeploymentCircuitBreaker; cb != nil {
 						service.CircuitBreakerEnabled = cb.Enable
@@ -149,11 +164,14 @@ func (c *AWSClient) ListECSServiceScaling(ctx context.Context, region string) ([
 			if !ok {
 				continue
 			}
+			suspended := target.SuspendedState
 			byResource[resource] = &ECSServiceScaling{
 				Cluster:     cluster,
 				Service:     service,
 				MinCapacity: aws.ToInt32(target.MinCapacity),
 				MaxCapacity: aws.ToInt32(target.MaxCapacity),
+				dynamicScalingSuspended: suspended != nil &&
+					aws.ToBool(suspended.DynamicScalingInSuspended) && aws.ToBool(suspended.DynamicScalingOutSuspended),
 			}
 		}
 	}
@@ -172,12 +190,38 @@ func (c *AWSClient) ListECSServiceScaling(ctx context.Context, region string) ([
 				continue
 			}
 			scaling.PolicyTypes = append(scaling.PolicyTypes, string(policy.PolicyType))
+			// A policy never scales outside the target's range, so on a
+			// range whose minimum equals its maximum no policy moves the
+			// service.
+			roomToScale := scaling.MinCapacity < scaling.MaxCapacity
+			switch policy.PolicyType {
+			case appautoscalingtypes.PolicyTypePredictiveScaling:
+				// The mode defaults to ForecastOnly, which forecasts and
+				// does not scale.
+				if p := policy.PredictiveScalingPolicyConfiguration; p != nil && p.Mode == appautoscalingtypes.PredictiveScalingModeForecastAndScale && roomToScale {
+					scaling.PolicyScales = true
+				}
+			case appautoscalingtypes.PolicyTypeTargetTrackingScaling:
+				if !scaling.dynamicScalingSuspended && roomToScale {
+					scaling.PolicyScales = true
+				}
+			case appautoscalingtypes.PolicyTypeStepScaling:
+				// A step scaling policy runs only when a CloudWatch alarm
+				// invokes it.
+				if !scaling.dynamicScalingSuspended && roomToScale && len(policy.Alarms) > 0 {
+					scaling.PolicyScales = true
+				}
+			default:
+				if roomToScale {
+					scaling.PolicyScales = true
+				}
+			}
 			if tt := policy.TargetTrackingScalingPolicyConfiguration; tt != nil {
 				if tt.PredefinedMetricSpecification != nil {
 					scaling.Metrics = append(scaling.Metrics, string(tt.PredefinedMetricSpecification.PredefinedMetricType))
 				}
 				if tt.CustomizedMetricSpecification != nil {
-					scaling.Metrics = append(scaling.Metrics, aws.ToString(tt.CustomizedMetricSpecification.MetricName))
+					scaling.Metrics = append(scaling.Metrics, customizedMetricNames(tt.CustomizedMetricSpecification)...)
 				}
 			}
 		}
@@ -204,4 +248,23 @@ func nameFromARN(arn string) string {
 		return arn[i+1:]
 	}
 	return arn
+}
+
+// customizedMetricNames names the metrics a customized target tracking metric
+// reads: its MetricName, or for one built with metric math, the metric of each
+// query that reads one.
+func customizedMetricNames(spec *appautoscalingtypes.CustomizedMetricSpecification) []string {
+	if name := aws.ToString(spec.MetricName); name != "" {
+		return []string{name}
+	}
+	var names []string
+	for _, q := range spec.Metrics {
+		if q.MetricStat == nil || q.MetricStat.Metric == nil {
+			continue
+		}
+		if name := aws.ToString(q.MetricStat.Metric.MetricName); name != "" && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names
 }

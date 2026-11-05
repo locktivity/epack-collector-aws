@@ -91,3 +91,43 @@ func TestHasXMLElement(t *testing.T) {
 		}
 	}
 }
+
+// Each operation declares the IAM action AWS's Service Authorization
+// Reference lists for it.
+func TestIAMAction(t *testing.T) {
+	for name, want := range map[string]string{
+		"aws.iam.ListRoles":                                  "iam:ListRoles",
+		"aws.s3.ListBuckets":                                 "s3:ListAllMyBuckets",
+		"aws.s3.GetBucketEncryption":                         "s3:GetEncryptionConfiguration",
+		"aws.s3control.GetPublicAccessBlock":                 "s3:GetAccountPublicAccessBlock",
+		"aws.cloudwatchlogs.DescribeLogGroups":               "logs:DescribeLogGroups",
+		"aws.elasticloadbalancingv2.DescribeListeners":       "elasticloadbalancing:DescribeListeners",
+		"aws.sesv2.GetEmailIdentity":                         "ses:GetEmailIdentity",
+		"aws.ssoadmin.ListAccountAssignments":                "sso:ListAccountAssignments",
+		"aws.applicationautoscaling.DescribeScalableTargets": "application-autoscaling:DescribeScalableTargets",
+		"aws.eventbridge.ListRules":                          "events:ListRules",
+		"aws.accessanalyzer.ListFindingsV2":                  "access-analyzer:ListFindingsV2",
+		"aws.configservice.DescribeConfigRules":              "config:DescribeConfigRules",
+		"aws.inspector2.ListFindings":                        "inspector2:ListFindings",
+		"aws.sts.GetCallerIdentity":                          "",
+		"github.id_token.get":                                "",
+	} {
+		if got := IAMAction(name); got != want {
+			t.Errorf("IAMAction(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// A denial names its declared action as the permission to grant only when
+// AWS's message says what it refused and no policy denies it explicitly.
+func TestNamesPermission(t *testing.T) {
+	for body, want := range map[string]bool{
+		`{"message":"User: arn:aws:sts::111122223333:assumed-role/r/s is not authorized to perform: inspector2:ListFindings because no identity-based policy allows the inspector2:ListFindings action"}`: true,
+		`<Error><Code>AccessDenied</Code><Message>User: x is not authorized to perform: iam:ListRoles with an explicit deny in a service control policy</Message></Error>`:                                false,
+		`<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>`:                                                                                                                        false,
+	} {
+		if got := NamesPermission(nil, []byte(body)); got != want {
+			t.Errorf("NamesPermission(%s) = %t, want %t", body, got, want)
+		}
+	}
+}

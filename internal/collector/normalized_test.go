@@ -30,24 +30,31 @@ func evaluatedAccountFixture() AccountPosture {
 		},
 		IdentityCenter: IdentityCenterStatus{RegionsChecked: []string{"us-east-1", "us-west-2"}},
 		S3: S3Metrics{
-			BucketListingEvaluated:          true,
-			BucketCount:                     20,
-			DefaultEncryptionEnabled:        intPtr(95),
-			DefaultEncryptionEvaluatedCount: 20,
-			PublicAccessBlocked:             intPtr(100),
-			VersioningEnabled:               intPtr(75),
+			BucketListingEvaluated:              true,
+			BucketCount:                         20,
+			DefaultEncryptionEnabled:            intPtr(95),
+			DefaultEncryptionEnabledBucketCount: 19,
+			DefaultEncryptionEvaluatedCount:     20,
+			PublicAccessBlocked:                 intPtr(100),
+			PublicAccessBlockedBucketCount:      20,
+			VersioningEnabled:                   intPtr(75),
 		},
 		RDS: RDSMetrics{
-			RegionsEvaluatedCount:   2,
-			DatabaseCount:           3,
-			EncryptedAtRest:         intPtr(100),
-			BackupRetentionAdequate: intPtr(100),
-			BackupRetentionMin:      intPtr(14),
+			RegionsEvaluatedCount:        2,
+			DatabaseCount:                3,
+			EncryptedAtRest:              intPtr(100),
+			EncryptedAtRestDatabaseCount: 3,
+			MultiAZEnabled:               intPtr(33),
+			MultiAZEnabledDatabaseCount:  1,
+			BackupRetentionAdequate:      intPtr(100),
+			BackupRetentionMin:           intPtr(14),
 		},
 		Network: NetworkMetrics{
-			RegionsEvaluatedCount: 2,
-			OpenToWorldSSH:        intPtr(5),
-			OpenToWorldRDP:        intPtr(0),
+			RegionsEvaluatedCount:            2,
+			SecurityGroupCount:               20,
+			OpenToWorldSSH:                   intPtr(5),
+			OpenToWorldSSHSecurityGroupCount: 1,
+			OpenToWorldRDP:                   intPtr(0),
 		},
 		AccountSecurity: AccountSecurity{
 			CloudTrail: CloudTrailStatus{
@@ -55,10 +62,13 @@ func evaluatedAccountFixture() AccountPosture {
 				Enabled:               true,
 				MultiRegionEnabled:    true,
 			},
+			GuardDuty: GuardDutyStatus{Enabled: true, EnabledInAllRegions: true},
 			Inspector: InspectorStatus{
 				StatusEvaluated:        true,
 				Enabled:                true,
 				UnpatchedServerPercent: intPtr(10),
+				TotalAffectedResources: 10,
+				UnpatchedResources:     1,
 			},
 		},
 	}
@@ -66,9 +76,10 @@ func evaluatedAccountFixture() AccountPosture {
 
 func TestToCloudPosture(t *testing.T) {
 	output := &Output{
-		SchemaVersion: "1.0.0",
-		CollectedAt:   "2024-01-15T10:00:00Z",
-		Accounts:      []AccountPosture{evaluatedAccountFixture()},
+		SchemaVersion:    "1.0.0",
+		CollectedAt:      "2024-01-15T10:00:00Z",
+		CollectedAtLevel: string(componentsdk.LevelAudit),
+		Accounts:         []AccountPosture{evaluatedAccountFixture()},
 	}
 
 	cloudPosture := output.ToCloudPosture()
@@ -79,8 +90,8 @@ func TestToCloudPosture(t *testing.T) {
 	if cloudPosture.Provider != "aws" {
 		t.Errorf("Provider = %q, want %q", cloudPosture.Provider, "aws")
 	}
-	if cloudPosture.AccountsExpected != 1 {
-		t.Errorf("AccountsExpected = %d, want 1", cloudPosture.AccountsExpected)
+	if !pctIs(cloudPosture.AccountsExpected, 1) {
+		t.Errorf("AccountsExpected = %s, want 1", showPct(cloudPosture.AccountsExpected))
 	}
 	if len(cloudPosture.Accounts) != 1 {
 		t.Fatalf("len(Accounts) = %d, want 1", len(cloudPosture.Accounts))
@@ -95,24 +106,20 @@ func TestToCloudPosture(t *testing.T) {
 		t.Errorf("CollectionErrorCode = %q, want empty", acct.CollectionErrorCode)
 	}
 
-	if acct.IAM.MFACoveragePct == nil || *acct.IAM.MFACoveragePct != 80 {
-		t.Errorf("IAM.MFACoveragePct = %v, want 80", acct.IAM.MFACoveragePct)
+	if v := acct.Storage.EncryptionPct.Value; v == nil || *v != 95 {
+		t.Errorf("Storage.EncryptionPct = %v, want 95", v)
 	}
-	if acct.IAM.RootMFAEnabled == nil || !*acct.IAM.RootMFAEnabled {
-		t.Error("IAM.RootMFAEnabled != true, want true")
+	if v := acct.Storage.PublicAccessBlockedPct.Value; v == nil || *v != 100 {
+		t.Errorf("Storage.PublicAccessBlockedPct = %v, want 100", v)
 	}
-	if acct.IAM.RootAccessProtected == nil || !*acct.IAM.RootAccessProtected {
-		t.Error("IAM.RootAccessProtected != true, want true")
+	if v := acct.Database.EncryptionPct.Value; v == nil || *v != 100 {
+		t.Errorf("Database.EncryptionPct = %v, want 100", v)
 	}
-	if acct.IAM.AccessKeyRotationCompliantPct == nil || *acct.IAM.AccessKeyRotationCompliantPct != 90 {
-		t.Errorf("IAM.AccessKeyRotationCompliantPct = %v, want 90", acct.IAM.AccessKeyRotationCompliantPct)
+	if v := acct.Database.MultiAZPct.Value; v == nil || *v != 33 {
+		t.Errorf("Database.MultiAZPct = %v, want 33", v)
 	}
-
-	if acct.Storage.EncryptionPct == nil || *acct.Storage.EncryptionPct != 95 {
-		t.Errorf("Storage.EncryptionPct = %v, want 95", acct.Storage.EncryptionPct)
-	}
-	if acct.Storage.PublicAccessBlockedPct == nil || *acct.Storage.PublicAccessBlockedPct != 100 {
-		t.Errorf("Storage.PublicAccessBlockedPct = %v, want 100", acct.Storage.PublicAccessBlockedPct)
+	if acct.ThreatDetection.Enabled == nil || !*acct.ThreatDetection.Enabled {
+		t.Error("ThreatDetection.Enabled != true, want true")
 	}
 
 	if acct.Logging.AuditLogEnabled == nil || !*acct.Logging.AuditLogEnabled {
@@ -128,36 +135,31 @@ func TestToCloudPosture(t *testing.T) {
 		t.Error("Logging.CloudTrailMultiregion != true, want true")
 	}
 
-	if acct.Network.SSHOpenToWorldPct == nil || *acct.Network.SSHOpenToWorldPct != 5 {
-		t.Errorf("Network.SSHOpenToWorldPct = %v, want 5", acct.Network.SSHOpenToWorldPct)
+	if v := acct.Network.SSHOpenToWorldPct.Value; v == nil || *v != 5 {
+		t.Errorf("Network.SSHOpenToWorldPct = %v, want 5", v)
 	}
-	if acct.Network.RDPOpenToWorldPct == nil || *acct.Network.RDPOpenToWorldPct != 0 {
-		t.Errorf("Network.RDPOpenToWorldPct = %v, want 0", acct.Network.RDPOpenToWorldPct)
+	if v := acct.Network.RDPOpenToWorldPct.Value; v == nil || *v != 0 {
+		t.Errorf("Network.RDPOpenToWorldPct = %v, want 0", v)
 	}
 
 	if acct.Backup.RetentionDaysMin == nil || *acct.Backup.RetentionDaysMin != 14 {
 		t.Errorf("Backup.RetentionDaysMin = %v, want 14", acct.Backup.RetentionDaysMin)
 	}
 
-	if acct.VulnScanning.Enabled == nil || !*acct.VulnScanning.Enabled {
-		t.Error("VulnScanning.Enabled != true, want true")
-	}
-	if acct.VulnScanning.UnpatchedPct == nil || *acct.VulnScanning.UnpatchedPct != 10 {
-		t.Errorf("VulnScanning.UnpatchedPct = %v, want 10", acct.VulnScanning.UnpatchedPct)
-	}
 }
 
 func TestToCloudPosture_MultipleAccounts(t *testing.T) {
 	output := &Output{
-		SchemaVersion: "1.0.0",
+		SchemaVersion:    "1.0.0",
+		CollectedAtLevel: string(componentsdk.LevelAudit),
 		Accounts: []AccountPosture{
 			{
 				AccountID: "111111111111",
-				IAM:       IAMMetrics{CredentialReportEvaluated: true, RootCredentialStateEvaluated: true, MFAEnabled: intPtr(100), RootMFAEnabled: true, RootAccessProtected: true},
+				S3:        S3Metrics{BucketListingEvaluated: true, BucketCount: 2, DefaultEncryptionEnabledBucketCount: 2},
 			},
 			{
 				AccountID: "222222222222",
-				IAM:       IAMMetrics{CredentialReportEvaluated: true, RootCredentialStateEvaluated: true, MFAEnabled: intPtr(50), RootMFAEnabled: false, RootAccessProtected: false},
+				S3:        S3Metrics{BucketListingEvaluated: true, BucketCount: 2, DefaultEncryptionEnabledBucketCount: 1},
 			},
 		},
 	}
@@ -167,104 +169,22 @@ func TestToCloudPosture_MultipleAccounts(t *testing.T) {
 	if len(cloudPosture.Accounts) != 2 {
 		t.Fatalf("len(Accounts) = %d, want 2", len(cloudPosture.Accounts))
 	}
-	if cloudPosture.AccountsExpected != 2 {
-		t.Errorf("AccountsExpected = %d, want 2", cloudPosture.AccountsExpected)
+	if !pctIs(cloudPosture.AccountsExpected, 2) {
+		t.Errorf("AccountsExpected = %s, want 2", showPct(cloudPosture.AccountsExpected))
 	}
 
 	if cloudPosture.Accounts[0].AccountID != "111111111111" {
 		t.Errorf("Accounts[0].AccountID = %q, want %q", cloudPosture.Accounts[0].AccountID, "111111111111")
 	}
-	if got := cloudPosture.Accounts[0].IAM.MFACoveragePct; got == nil || *got != 100 {
-		t.Errorf("Accounts[0].IAM.MFACoveragePct = %v, want 100", got)
+	if got := cloudPosture.Accounts[0].Storage.EncryptionPct.Value; got == nil || *got != 100 {
+		t.Errorf("Accounts[0].Storage.EncryptionPct = %v, want 100", got)
 	}
 
 	if cloudPosture.Accounts[1].AccountID != "222222222222" {
 		t.Errorf("Accounts[1].AccountID = %q, want %q", cloudPosture.Accounts[1].AccountID, "222222222222")
 	}
-	if got := cloudPosture.Accounts[1].IAM.MFACoveragePct; got == nil || *got != 50 {
-		t.Errorf("Accounts[1].IAM.MFACoveragePct = %v, want 50", got)
-	}
-}
-
-func TestToCloudPosture_UncollectedIAMOmitted(t *testing.T) {
-	// A credential-report failure (e.g. generation timeout) must not surface as
-	// worst-case metrics in the normalized artifact: the IAM fields are omitted
-	// entirely rather than emitted as 0% / false.
-	output := &Output{
-		SchemaVersion: "1.0.0",
-		Accounts: []AccountPosture{
-			{
-				AccountID: "123456789012",
-				IAM: IAMMetrics{
-					CredentialReportErrorCode: "CredentialReportTimeout",
-				},
-			},
-		},
-	}
-
-	cloudPosture := output.ToCloudPosture()
-
-	iam := cloudPosture.Accounts[0].IAM
-	if iam.MFACoveragePct != nil {
-		t.Errorf("MFACoveragePct = %v, want nil", *iam.MFACoveragePct)
-	}
-	if iam.AccessKeyRotationCompliantPct != nil {
-		t.Errorf("AccessKeyRotationCompliantPct = %v, want nil", *iam.AccessKeyRotationCompliantPct)
-	}
-	if iam.RootMFAEnabled != nil {
-		t.Errorf("RootMFAEnabled = %v, want nil", *iam.RootMFAEnabled)
-	}
-	if iam.RootAccessProtected != nil {
-		t.Errorf("RootAccessProtected = %v, want nil", *iam.RootAccessProtected)
-	}
-
-	jsonBytes, err := json.Marshal(cloudPosture)
-	if err != nil {
-		t.Fatalf("failed to marshal CloudPosture: %v", err)
-	}
-	var data map[string]any
-	if err := json.Unmarshal(jsonBytes, &data); err != nil {
-		t.Fatalf("failed to unmarshal JSON: %v", err)
-	}
-	// A metric group with nothing collected in it is left out whole.
-	if iamJSON, present := data["accounts"].([]any)[0].(map[string]any)["iam"]; present {
-		t.Errorf("iam group serialized with nothing collected: %v", iamJSON)
-	}
-	var iamJSON map[string]any
-	for _, field := range []string{"mfa_coverage_pct", "root_mfa_enabled", "root_access_protected", "access_key_rotation_compliant_pct"} {
-		if _, present := iamJSON[field]; present {
-			t.Errorf("uncollected iam field %s serialized; want omitted", field)
-		}
-	}
-}
-
-func TestToCloudPosture_RootStateFromSummarySurvivesReportFailure(t *testing.T) {
-	// Root state can be evaluated from the account summary even when the
-	// credential report failed; only the report-derived aggregates are omitted.
-	output := &Output{
-		SchemaVersion: "1.0.0",
-		Accounts: []AccountPosture{
-			{
-				AccountID: "123456789012",
-				IAM: IAMMetrics{
-					CredentialReportErrorCode:    "CredentialReportTimeout",
-					RootCredentialStateEvaluated: true,
-					RootMFAEnabled:               true,
-					RootAccessProtected:          true,
-				},
-			},
-		},
-	}
-
-	iam := output.ToCloudPosture().Accounts[0].IAM
-	if iam.MFACoveragePct != nil {
-		t.Errorf("MFACoveragePct = %v, want nil", *iam.MFACoveragePct)
-	}
-	if iam.RootMFAEnabled == nil || !*iam.RootMFAEnabled {
-		t.Error("RootMFAEnabled != true, want true")
-	}
-	if iam.RootAccessProtected == nil || !*iam.RootAccessProtected {
-		t.Error("RootAccessProtected != true, want true")
+	if got := cloudPosture.Accounts[1].Storage.EncryptionPct.Value; got == nil || *got != 50 {
+		t.Errorf("Accounts[1].Storage.EncryptionPct = %v, want 50", got)
 	}
 }
 
@@ -280,11 +200,11 @@ func TestToCloudPosture_UncollectedStorageOmitted(t *testing.T) {
 	}
 
 	storage := output.ToCloudPosture().Accounts[0].Storage
-	if storage.EncryptionPct != nil {
-		t.Errorf("EncryptionPct = %v, want nil", *storage.EncryptionPct)
+	if storage.EncryptionPct.Read {
+		t.Errorf("EncryptionPct = %v, want it left out", storage.EncryptionPct.Value)
 	}
-	if storage.PublicAccessBlockedPct != nil {
-		t.Errorf("PublicAccessBlockedPct = %v, want nil", *storage.PublicAccessBlockedPct)
+	if storage.PublicAccessBlockedPct.Read {
+		t.Errorf("PublicAccessBlockedPct = %v, want it left out", storage.PublicAccessBlockedPct.Value)
 	}
 }
 
@@ -296,22 +216,24 @@ func TestToCloudPosture_StoragePABOmittedWhenAnyBucketUnknown(t *testing.T) {
 		Accounts: []AccountPosture{{
 			AccountID: "123456789012",
 			S3: S3Metrics{
-				BucketListingEvaluated:          true,
-				BucketCount:                     10,
-				PublicAccessBlocked:             intPtr(90),
-				PublicAccessBlockUnknownCount:   1,
-				DefaultEncryptionEnabled:        intPtr(100),
-				DefaultEncryptionEvaluatedCount: 10,
+				BucketListingEvaluated:              true,
+				BucketCount:                         10,
+				PublicAccessBlocked:                 intPtr(90),
+				PublicAccessBlockedBucketCount:      9,
+				PublicAccessBlockUnknownCount:       1,
+				DefaultEncryptionEnabled:            intPtr(100),
+				DefaultEncryptionEnabledBucketCount: 10,
+				DefaultEncryptionEvaluatedCount:     10,
 			},
 		}},
 	}
 
 	storage := output.ToCloudPosture().Accounts[0].Storage
-	if storage.PublicAccessBlockedPct != nil {
-		t.Errorf("PublicAccessBlockedPct = %v, want nil with unknown buckets", *storage.PublicAccessBlockedPct)
+	if storage.PublicAccessBlockedPct.Read {
+		t.Errorf("PublicAccessBlockedPct = %v, want it left out with unknown buckets", storage.PublicAccessBlockedPct.Value)
 	}
-	if storage.EncryptionPct == nil || *storage.EncryptionPct != 100 {
-		t.Errorf("EncryptionPct = %v, want 100", storage.EncryptionPct)
+	if v := storage.EncryptionPct.Value; v == nil || *v != 100 {
+		t.Errorf("EncryptionPct = %v, want 100", v)
 	}
 }
 
@@ -330,8 +252,8 @@ func TestToCloudPosture_StorageEncryptionOmittedWhenNoBucketEvaluated(t *testing
 	}
 
 	storage := output.ToCloudPosture().Accounts[0].Storage
-	if storage.EncryptionPct != nil {
-		t.Errorf("EncryptionPct = %v, want nil with no evaluated buckets", *storage.EncryptionPct)
+	if storage.EncryptionPct.Read {
+		t.Errorf("EncryptionPct = %v, want it left out with no evaluated buckets", storage.EncryptionPct.Value)
 	}
 }
 
@@ -470,11 +392,11 @@ func TestToCloudPosture_NetworkOmittedOnPartialRegions(t *testing.T) {
 	}
 
 	network := output.ToCloudPosture().Accounts[0].Network
-	if network.SSHOpenToWorldPct != nil {
-		t.Errorf("SSHOpenToWorldPct = %v, want nil on partial regions", *network.SSHOpenToWorldPct)
+	if network.SSHOpenToWorldPct.Read {
+		t.Errorf("SSHOpenToWorldPct = %v, want it left out on partial regions", network.SSHOpenToWorldPct.Value)
 	}
-	if network.RDPOpenToWorldPct != nil {
-		t.Errorf("RDPOpenToWorldPct = %v, want nil on partial regions", *network.RDPOpenToWorldPct)
+	if network.RDPOpenToWorldPct.Read {
+		t.Errorf("RDPOpenToWorldPct = %v, want it left out on partial regions", network.RDPOpenToWorldPct.Value)
 	}
 }
 
@@ -484,7 +406,7 @@ func TestToCloudPosture_NetworkOmittedWhenNoRegionEvaluated(t *testing.T) {
 	}
 
 	network := output.ToCloudPosture().Accounts[0].Network
-	if network.SSHOpenToWorldPct != nil || network.RDPOpenToWorldPct != nil {
+	if network.SSHOpenToWorldPct.Read || network.RDPOpenToWorldPct.Read {
 		t.Error("expected network percentages omitted with zero evaluated regions")
 	}
 }
@@ -504,25 +426,6 @@ func TestToCloudPosture_BackupOmittedWithZeroDatabases(t *testing.T) {
 	backup := output.ToCloudPosture().Accounts[0].Backup
 	if backup.RetentionDaysMin != nil {
 		t.Errorf("RetentionDaysMin = %v, want nil with zero databases", *backup.RetentionDaysMin)
-	}
-}
-
-func TestToCloudPosture_UncollectedVulnScanningOmitted(t *testing.T) {
-	output := &Output{
-		Accounts: []AccountPosture{{
-			AccountID: "123456789012",
-			AccountSecurity: AccountSecurity{
-				Inspector: InspectorStatus{StatusErrorCode: "AccessDenied"},
-			},
-		}},
-	}
-
-	vuln := output.ToCloudPosture().Accounts[0].VulnScanning
-	if vuln.Enabled != nil {
-		t.Errorf("Enabled = %v, want nil", *vuln.Enabled)
-	}
-	if vuln.UnpatchedPct != nil {
-		t.Errorf("UnpatchedPct = %v, want nil", *vuln.UnpatchedPct)
 	}
 }
 
@@ -570,8 +473,9 @@ func TestToCloudPosture_ZeroRetention(t *testing.T) {
 func TestCloudPostureJSONStructure(t *testing.T) {
 	// A fully-evaluated account serializes every cloud-posture@v1 field.
 	output := &Output{
-		SchemaVersion: "1.0.0",
-		Accounts:      []AccountPosture{evaluatedAccountFixture()},
+		SchemaVersion:    "1.0.0",
+		CollectedAtLevel: string(componentsdk.LevelAudit),
+		Accounts:         []AccountPosture{evaluatedAccountFixture()},
 	}
 
 	cloudPosture := output.ToCloudPosture()
@@ -587,7 +491,7 @@ func TestCloudPostureJSONStructure(t *testing.T) {
 	}
 
 	topLevelRequired := []string{
-		"schema_version", "collected_at", "provider", "accounts", "accounts_expected", "workforce_sign_in",
+		"schema_version", "collected_at", "provider", "accounts", "accounts_expected", "all_accounts_collected",
 	}
 	for _, field := range topLevelRequired {
 		if _, ok := data[field]; !ok {
@@ -609,7 +513,7 @@ func TestCloudPostureJSONStructure(t *testing.T) {
 	}
 
 	acctRequired := []string{
-		"account_id", "iam", "storage", "logging", "network", "backup", "vuln_scanning",
+		"account_id", "storage", "database", "logging", "network", "backup", "threat_detection",
 	}
 	for _, field := range acctRequired {
 		if _, ok := acct[field]; !ok {
@@ -618,12 +522,15 @@ func TestCloudPostureJSONStructure(t *testing.T) {
 	}
 
 	groupFields := map[string][]string{
-		"iam":           {"mfa_coverage_pct", "root_mfa_enabled", "root_access_protected", "access_key_rotation_compliant_pct", "user_count", "access_key_user_count", "saml_provider_count"},
-		"storage":       {"encryption_pct", "public_access_blocked_pct"},
-		"logging":       {"audit_log_enabled", "audit_log_all_regions", "cloudtrail_enabled", "cloudtrail_multiregion"},
-		"network":       {"ssh_open_to_world_pct", "rdp_open_to_world_pct"},
-		"backup":        {"retention_days_min"},
-		"vuln_scanning": {"enabled", "unpatched_pct"},
+		"storage": {"storage_resources_present", "storage_resource_count", "encrypted_storage_resource_count",
+			"public_access_blocked_storage_resource_count", "encryption_pct", "public_access_blocked_pct"},
+		"database": {"databases_present", "database_count", "encrypted_database_count", "encryption_pct",
+			"multi_az_database_count", "multi_az_pct"},
+		"logging": {"audit_log_enabled", "audit_log_all_regions", "cloudtrail_enabled", "cloudtrail_multiregion"},
+		"network": {"security_groups_present", "security_group_count", "ssh_open_security_group_count",
+			"rdp_open_security_group_count", "ssh_open_to_world_pct", "rdp_open_to_world_pct"},
+		"backup":           {"retention_days_min"},
+		"threat_detection": {"enabled"},
 	}
 	for group, fields := range groupFields {
 		obj, ok := acct[group].(map[string]interface{})
@@ -643,8 +550,9 @@ func TestToCloudPosture_FailedAccountStub(t *testing.T) {
 	// collection_error_code and no metric groups, and counts toward
 	// accounts_expected, so cardinality-all rules cannot silently pass over it.
 	output := &Output{
-		SchemaVersion: "1.0.0",
-		Accounts:      []AccountPosture{evaluatedAccountFixture()},
+		SchemaVersion:    "1.0.0",
+		CollectedAtLevel: string(componentsdk.LevelAudit),
+		Accounts:         []AccountPosture{evaluatedAccountFixture()},
 		FailedAccounts: []FailedAccountRecord{
 			{AccountID: "222222222222", RoleARN: "arn:aws:iam::222222222222:role/collector", ErrorCode: "AccessDenied"},
 		},
@@ -652,8 +560,8 @@ func TestToCloudPosture_FailedAccountStub(t *testing.T) {
 
 	cloudPosture := output.ToCloudPosture()
 
-	if cloudPosture.AccountsExpected != 2 {
-		t.Errorf("AccountsExpected = %d, want 2", cloudPosture.AccountsExpected)
+	if !pctIs(cloudPosture.AccountsExpected, 2) {
+		t.Errorf("AccountsExpected = %s, want 2", showPct(cloudPosture.AccountsExpected))
 	}
 	if len(cloudPosture.Accounts) != 2 {
 		t.Fatalf("len(Accounts) = %d, want 2 (one healthy, one stub)", len(cloudPosture.Accounts))
@@ -666,7 +574,7 @@ func TestToCloudPosture_FailedAccountStub(t *testing.T) {
 	if stub.CollectionErrorCode != "AccessDenied" {
 		t.Errorf("stub CollectionErrorCode = %q, want AccessDenied", stub.CollectionErrorCode)
 	}
-	if stub.IAM.MFACoveragePct != nil || stub.Storage.EncryptionPct != nil || stub.Logging.AuditLogEnabled != nil || stub.Logging.CloudTrailEnabled != nil {
+	if stub.Storage.EncryptionPct.Read || stub.Logging.AuditLogEnabled != nil || stub.Logging.CloudTrailEnabled != nil {
 		t.Error("stub entry must carry no metric values")
 	}
 
@@ -679,7 +587,7 @@ func TestToCloudPosture_FailedAccountStub(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	stubJSON := data["accounts"].([]any)[1].(map[string]any)
-	for _, group := range []string{"iam", "storage", "logging", "network", "backup", "vuln_scanning"} {
+	for _, group := range []string{"storage", "database", "logging", "network", "backup", "threat_detection"} {
 		if value, present := stubJSON[group]; present {
 			t.Errorf("stub carries the %s group: %v", group, value)
 		}
@@ -765,63 +673,54 @@ func TestToCloudPosture_NoLabelOmitted(t *testing.T) {
 	}
 }
 
-func TestNormalizedIAM_RootWithoutCredentialsCountsAsMFAProtected(t *testing.T) {
-	removed := normalizedIAM(IAMMetrics{RootCredentialStateEvaluated: true, RootMFAEnabled: false, RootCredentialsPresent: false, RootAccessProtected: true})
-	if removed.RootMFAEnabled == nil || !*removed.RootMFAEnabled {
-		t.Errorf("root without credentials: root_mfa_enabled = %v, want true", removed.RootMFAEnabled)
-	}
-
-	unprotected := normalizedIAM(IAMMetrics{RootCredentialStateEvaluated: true, RootMFAEnabled: false, RootCredentialsPresent: true, RootAccessProtected: false})
-	if unprotected.RootMFAEnabled == nil || *unprotected.RootMFAEnabled {
-		t.Errorf("root password without MFA: root_mfa_enabled = %v, want false", unprotected.RootMFAEnabled)
-	}
-}
-
-// The counts behind the IAM percentages are 0 over an empty population,
-// where the percentage is left out, and left out where the credential
-// report was not read.
-func TestToCloudPosture_IAMCounts(t *testing.T) {
+// At the trust level the account IDs and counts are left out, and the
+// present flags say whether each population is empty.
+func TestToCloudPosture_TrustLeavesOutCounts(t *testing.T) {
 	account := evaluatedAccountFixture()
-	account.IAM.IAMUserCount, account.IAM.AccessKeyUserCount, account.IAM.SAMLProviderCount = 5, 2, intPtr(1)
-	noUsers := evaluatedAccountFixture()
-	noUsers.IAM.IAMUserCount, noUsers.IAM.AccessKeyUserCount = 0, 0
-	noUsers.IAM.MFAEnabled, noUsers.IAM.AccessKeysRotated = nil, nil
-	unread := evaluatedAccountFixture()
-	unread.IAM.CredentialReportEvaluated = false
-	unread.IAM.SAMLProviderCount = nil
-
-	posture := (&Output{Accounts: []AccountPosture{account, noUsers, unread}}).ToCloudPosture()
-
-	got := posture.Accounts[0].IAM
-	if !pctIs(got.UserCount, 5) || !pctIs(got.AccessKeyUserCount, 2) || !pctIs(got.SAMLProviderCount, 1) {
-		t.Errorf("counts %s, %s, %s; want 5, 2, 1", showPct(got.UserCount), showPct(got.AccessKeyUserCount), showPct(got.SAMLProviderCount))
+	output := &Output{
+		CollectedAtLevel: string(componentsdk.LevelTrust),
+		Accounts:         []AccountPosture{account, signInAccount(orgInstance("d-1", 2, 0), intPtr(0), intPtr(0))},
+		FailedAccounts:   []FailedAccountRecord{{AccountID: "222222222222", ErrorCode: "AccessDenied"}},
 	}
-	got = posture.Accounts[1].IAM
-	if !pctIs(got.UserCount, 0) || !pctIs(got.AccessKeyUserCount, 0) || got.MFACoveragePct != nil || got.AccessKeyRotationCompliantPct != nil {
-		t.Errorf("no IAM users: counts %s and %s, percentages %v and %v; want 0, 0, and both left out",
-			showPct(got.UserCount), showPct(got.AccessKeyUserCount), got.MFACoveragePct, got.AccessKeyRotationCompliantPct)
+
+	posture := output.ToCloudPosture()
+
+	if posture.AccountsExpected != nil || !samePtr(posture.AllAccountsCollected, boolPtr(false)) {
+		t.Errorf("accounts_expected %s, all_accounts_collected %s; want left out and false", showPct(posture.AccountsExpected), showBool(posture.AllAccountsCollected))
 	}
-	got = posture.Accounts[2].IAM
-	if got.UserCount != nil || got.AccessKeyUserCount != nil || got.SAMLProviderCount != nil {
-		t.Errorf("unread: counts %s, %s, %s; want all left out", showPct(got.UserCount), showPct(got.AccessKeyUserCount), showPct(got.SAMLProviderCount))
+	for i, acct := range posture.Accounts {
+		if acct.AccountID != "" {
+			t.Errorf("accounts[%d].account_id = %q, want it left out", i, acct.AccountID)
+		}
+	}
+	got := posture.Accounts[0].Storage
+	if got.StorageResourceCount != nil || got.EncryptedStorageResourceCount != nil {
+		t.Error("a trust-level storage count was written")
+	}
+	if !samePtr(got.StorageResourcesPresent, boolPtr(true)) {
+		t.Errorf("storage_resources_present = %s, want true", showBool(got.StorageResourcesPresent))
 	}
 }
+
+// nullReading reports whether r was read and is null.
+func nullReading(r Reading[float64]) bool { return r.Read && r.Value == nil }
 
 // A failed account's stub leaves the counts out with the account's failure.
 func TestCloudPosture_FailedAccountStubLeavesCountsOut(t *testing.T) {
 	c := newTestCollector(Config{})
 	failure := componentsdk.CodeError(componentsdk.CodePermissionDenied, errors.New("AccessDenied: not authorized to perform: sts:AssumeRoleWithWebIdentity"))
 	output := &Output{
-		Accounts:       []AccountPosture{evaluatedAccountFixture()},
-		FailedAccounts: []FailedAccountRecord{{AccountID: "222222222222", ErrorCode: "AccessDenied", err: failure}},
+		CollectedAtLevel: string(componentsdk.LevelAudit),
+		Accounts:         []AccountPosture{evaluatedAccountFixture()},
+		FailedAccounts:   []FailedAccountRecord{{AccountID: "222222222222", ErrorCode: "AccessDenied", err: failure}},
 	}
 
 	posture := c.cloudPosture(output)
 
-	if posture.Accounts[1].IAM.UserCount != nil {
-		t.Error("the stub carries a user count")
+	if posture.Accounts[1].Storage.StorageResourceCount != nil {
+		t.Error("the stub carries a storage count")
 	}
-	for _, pointer := range []string{"/accounts/1/iam/user_count", "/accounts/1/iam/access_key_user_count", "/accounts/1/iam/saml_provider_count", "/workforce_sign_in/in_use"} {
+	for _, pointer := range []string{"/accounts/1/storage/storage_resource_count", "/accounts/1/network/security_group_count", "/accounts/1/storage/storage_resources_present"} {
 		if g := normalizedGap(c, pointer); g == nil || g.Code != componentsdk.CodePermissionDenied {
 			t.Errorf("%s: gap %+v, want the account's permission_denied", pointer, g)
 		}
@@ -857,130 +756,6 @@ func orgInstance(store string, users, withExternalID int) IdentityCenterStatus {
 	}
 }
 
-func TestNormalizedWorkforceSignIn(t *testing.T) {
-	accountInstance := orgInstance("d-1", 2, 0)
-	accountInstance.InstanceType = "account"
-	creating := orgInstance("d-1", 2, 0)
-	creating.InstanceStatus = "CREATE_IN_PROGRESS"
-	typeUnread := orgInstance("d-1", 2, 0)
-	typeUnread.InstanceType = ""
-	directoryUnread := orgInstance("d-1", 0, 0)
-	directoryUnread.MFAEvidence = ""
-	listingIncomplete := signInAccount(noInstance(), intPtr(0), intPtr(0))
-	listingIncomplete.Regions = []string{"us-east-1", "us-west-2"}
-
-	cases := []struct {
-		name      string
-		accounts  []AccountPosture
-		failed    int
-		inUse     *bool
-		users     *int
-		mfaSource string
-	}{
-		{"an organization instance in one account, its roles in another",
-			[]AccountPosture{signInAccount(orgInstance("d-1", 3, 0), intPtr(0), intPtr(0)), signInAccount(noInstance(), intPtr(2), intPtr(1))},
-			0, boolPtr(true), intPtr(3), "sign_in_service"},
-		{"no Identity Center in any account",
-			[]AccountPosture{signInAccount(noInstance(), intPtr(0), intPtr(0)), signInAccount(noInstance(), intPtr(0), intPtr(0))},
-			0, boolPtr(false), nil, ""},
-		{"roles in a member account that cannot see the instance",
-			[]AccountPosture{signInAccount(noInstance(), intPtr(1), intPtr(0))},
-			0, boolPtr(true), nil, "unknown"},
-		{"Identity Center's SAML provider alone",
-			[]AccountPosture{signInAccount(noInstance(), intPtr(0), intPtr(1))},
-			0, boolPtr(true), nil, "unknown"},
-		{"SAML providers unread, the instance and role listings found neither",
-			[]AccountPosture{signInAccount(noInstance(), intPtr(0), nil)},
-			0, boolPtr(false), nil, ""},
-		{"an account instance",
-			[]AccountPosture{signInAccount(accountInstance, intPtr(0), intPtr(0))},
-			0, boolPtr(false), nil, ""},
-		{"an instance still being created",
-			[]AccountPosture{signInAccount(creating, intPtr(0), intPtr(0))},
-			0, boolPtr(false), nil, ""},
-		{"two accounts see the same directory",
-			[]AccountPosture{signInAccount(orgInstance("d-1", 2, 2), intPtr(0), intPtr(0)), signInAccount(orgInstance("d-1", 2, 2), intPtr(1), intPtr(1))},
-			0, boolPtr(true), intPtr(2), "external_idp"},
-		{"two directories",
-			[]AccountPosture{signInAccount(orgInstance("d-1", 2, 2), intPtr(0), intPtr(0)), signInAccount(orgInstance("d-2", 1, 0), intPtr(0), intPtr(0))},
-			0, boolPtr(true), intPtr(3), "unknown"},
-		{"a directory with no users",
-			[]AccountPosture{signInAccount(orgInstance("d-1", 0, 0), intPtr(0), intPtr(0))},
-			0, boolPtr(true), intPtr(0), "unknown"},
-		{"an instance listing that failed in a region",
-			[]AccountPosture{listingIncomplete},
-			0, nil, nil, ""},
-		{"roles unread",
-			[]AccountPosture{signInAccount(noInstance(), nil, intPtr(0))},
-			0, nil, nil, ""},
-		{"an instance whose type is unread",
-			[]AccountPosture{signInAccount(typeUnread, intPtr(0), intPtr(0))},
-			0, nil, nil, ""},
-		{"roles show it in use where another account's listing failed",
-			[]AccountPosture{signInAccount(noInstance(), intPtr(1), intPtr(1)), listingIncomplete},
-			0, boolPtr(true), nil, ""},
-		{"the directory unread",
-			[]AccountPosture{signInAccount(directoryUnread, intPtr(0), intPtr(0))},
-			0, boolPtr(true), nil, ""},
-		{"an account that failed, nothing elsewhere",
-			[]AccountPosture{signInAccount(noInstance(), intPtr(0), intPtr(0))},
-			1, nil, nil, ""},
-		{"an account that failed, roles elsewhere",
-			[]AccountPosture{signInAccount(noInstance(), intPtr(1), intPtr(0))},
-			1, boolPtr(true), nil, ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			output := &Output{Accounts: tc.accounts}
-			for i := 0; i < tc.failed; i++ {
-				output.FailedAccounts = append(output.FailedAccounts, FailedAccountRecord{ErrorCode: "AccessDenied"})
-			}
-			got := output.ToCloudPosture().WorkforceSignIn
-			if !samePtr(got.InUse, tc.inUse) || !sameInt(got.UserCount, tc.users) || got.MFASource != tc.mfaSource {
-				t.Errorf("in_use %v, user_count %s, mfa_source %q; want %v, %s, %q",
-					showBool(got.InUse), showPct(got.UserCount), got.MFASource, showBool(tc.inUse), showPct(tc.users), tc.mfaSource)
-			}
-		})
-	}
-}
-
-// A folded value left out carries the gap of the read that left it unknown.
-func TestNormalizedWorkforceSignIn_LeftOutValuesCarryTheirGap(t *testing.T) {
-	c := newTestCollector(Config{})
-	listing := componentsdk.CodeError(componentsdk.CodeRateLimited, errors.New("Throttling: Rate exceeded"))
-	c.gaps.leaveOut(listing, "/accounts/0/identity_center")
-	account := signInAccount(IdentityCenterStatus{}, intPtr(0), intPtr(0))
-
-	posture := c.cloudPosture(&Output{Accounts: []AccountPosture{account}})
-
-	if posture.WorkforceSignIn.InUse != nil {
-		t.Errorf("in_use = %v, want it left out", *posture.WorkforceSignIn.InUse)
-	}
-	for _, pointer := range []string{"/workforce_sign_in/in_use", "/workforce_sign_in/user_count", "/workforce_sign_in/mfa_source"} {
-		if g := normalizedGap(c, pointer); g == nil || g.Code != componentsdk.CodeRateLimited {
-			t.Errorf("%s: gap %+v, want the instance listing's rate_limited", pointer, g)
-		}
-	}
-
-	c = newTestCollector(Config{})
-	users := componentsdk.CodeError(componentsdk.CodePermissionDenied, errors.New("AccessDeniedException: not authorized to perform: identitystore:ListUsers"))
-	c.gaps.leaveOut(users, "/accounts/0/identity_center/user_count")
-	unread := orgInstance("d-1", 0, 0)
-	unread.MFAEvidence = ""
-	posture = c.cloudPosture(&Output{Accounts: []AccountPosture{signInAccount(unread, intPtr(0), intPtr(0))}})
-	if !samePtr(posture.WorkforceSignIn.InUse, boolPtr(true)) {
-		t.Errorf("in_use = %s, want true from the instance", showBool(posture.WorkforceSignIn.InUse))
-	}
-	if g := normalizedGap(c, "/workforce_sign_in/in_use"); g != nil {
-		t.Errorf("in_use has a gap: %+v", g)
-	}
-	for _, pointer := range []string{"/workforce_sign_in/user_count", "/workforce_sign_in/mfa_source"} {
-		if g := normalizedGap(c, pointer); g == nil || g.Code != componentsdk.CodePermissionDenied {
-			t.Errorf("%s: gap %+v, want the user listing's permission_denied", pointer, g)
-		}
-	}
-}
-
 // normalizedGap returns the gap c recorded at pointer in the normalized
 // artifact, or nil.
 func normalizedGap(c *Collector, pointer string) *componentsdk.Gap {
@@ -1002,4 +777,125 @@ func showBool(p *bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// A percentage over an empty population is null, with its present flag false
+// and its counts 0 at the audit level.
+func TestToCloudPosture_EmptyPopulationsWriteNull(t *testing.T) {
+	account := AccountPosture{
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+		S3:        S3Metrics{BucketListingEvaluated: true},
+		RDS:       RDSMetrics{RegionsEvaluatedCount: 1},
+		Network:   NetworkMetrics{RegionsEvaluatedCount: 1},
+	}
+	posture := (&Output{CollectedAtLevel: string(componentsdk.LevelAudit), Accounts: []AccountPosture{account}}).ToCloudPosture()
+	got := posture.Accounts[0]
+
+	for name, r := range map[string]Reading[float64]{
+		"storage.encryption_pct":             got.Storage.EncryptionPct,
+		"storage.public_access_blocked_pct":  got.Storage.PublicAccessBlockedPct,
+		"database.encryption_pct":            got.Database.EncryptionPct,
+		"database.public_access_blocked_pct": got.Database.PublicAccessBlockedPct,
+		"database.multi_az_pct":              got.Database.MultiAZPct,
+		"network.ssh_open_to_world_pct":      got.Network.SSHOpenToWorldPct,
+		"network.rdp_open_to_world_pct":      got.Network.RDPOpenToWorldPct,
+	} {
+		if !nullReading(r) {
+			t.Errorf("%s = %+v, want null", name, r)
+		}
+	}
+	for name, present := range map[string]*bool{
+		"storage_resources_present": got.Storage.StorageResourcesPresent,
+		"databases_present":         got.Database.DatabasesPresent,
+		"security_groups_present":   got.Network.SecurityGroupsPresent,
+	} {
+		if !samePtr(present, boolPtr(false)) {
+			t.Errorf("%s = %s, want false", name, showBool(present))
+		}
+	}
+	for name, count := range map[string]*int{
+		"storage_resource_count": got.Storage.StorageResourceCount,
+		"database_count":         got.Database.DatabaseCount,
+		"security_group_count":   got.Network.SecurityGroupCount,
+	} {
+		if !pctIs(count, 0) {
+			t.Errorf("%s = %s, want 0", name, showPct(count))
+		}
+	}
+}
+
+// Exposure percentages round up, so one open group in 150 reads 1, while
+// coverage percentages round down.
+func TestToCloudPosture_PercentagesRoundAsTheSchemaSays(t *testing.T) {
+	account := evaluatedAccountFixture()
+	account.Network.SecurityGroupCount = 150
+	account.Network.OpenToWorldSSHSecurityGroupCount = 1
+	account.Network.OpenToWorldRDPSecurityGroupCount = 0
+	account.S3.BucketCount, account.S3.DefaultEncryptionEnabledBucketCount = 3, 2
+
+	got := (&Output{CollectedAtLevel: string(componentsdk.LevelAudit), Accounts: []AccountPosture{account}}).ToCloudPosture().Accounts[0]
+
+	for name, c := range map[string]struct {
+		r    Reading[float64]
+		want float64
+	}{
+		"ssh_open_to_world_pct": {got.Network.SSHOpenToWorldPct, 1},
+		"rdp_open_to_world_pct": {got.Network.RDPOpenToWorldPct, 0},
+		"encryption_pct":        {got.Storage.EncryptionPct, 66},
+	} {
+		if c.r.Value == nil || *c.r.Value != c.want {
+			t.Errorf("%s = %+v, want %v", name, c.r, c.want)
+		}
+	}
+}
+
+// At the trust level the storage, database and network counts and
+// multi_az_pct are left out, and the present flags are written.
+func TestToCloudPosture_TrustLeavesOutSectionCounts(t *testing.T) {
+	got := (&Output{CollectedAtLevel: string(componentsdk.LevelTrust), Accounts: []AccountPosture{evaluatedAccountFixture()}}).ToCloudPosture().Accounts[0]
+
+	if got.Storage.StorageResourceCount != nil || got.Storage.EncryptedStorageResourceCount != nil || got.Storage.PublicAccessBlockedStorageResourceCount != nil {
+		t.Error("a trust-level storage count was written")
+	}
+	if got.Database.DatabaseCount != nil || got.Database.EncryptedDatabaseCount != nil || got.Database.MultiAZDatabaseCount != nil || got.Database.MultiAZPct.Read {
+		t.Error("a trust-level database count or multi_az_pct was written")
+	}
+	if got.Network.SecurityGroupCount != nil || got.Network.SSHOpenSecurityGroupCount != nil || got.Network.RDPOpenSecurityGroupCount != nil {
+		t.Error("a trust-level network count was written")
+	}
+	for name, present := range map[string]*bool{
+		"storage_resources_present": got.Storage.StorageResourcesPresent,
+		"databases_present":         got.Database.DatabasesPresent,
+		"security_groups_present":   got.Network.SecurityGroupsPresent,
+	} {
+		if !samePtr(present, boolPtr(true)) {
+			t.Errorf("%s = %s, want true", name, showBool(present))
+		}
+	}
+	if v := got.Database.EncryptionPct.Value; v == nil || *v != 100 {
+		t.Errorf("database.encryption_pct = %v, want 100 at trust", v)
+	}
+}
+
+// Threat detection is on only when every scanned region has an enabled
+// detector, and is left out for an account with no region list.
+func TestToCloudPosture_ThreatDetection(t *testing.T) {
+	on := evaluatedAccountFixture()
+	off := evaluatedAccountFixture()
+	off.AccountSecurity.GuardDuty = GuardDutyStatus{Enabled: true}
+	noRegions := evaluatedAccountFixture()
+	noRegions.Regions = nil
+
+	posture := (&Output{Accounts: []AccountPosture{on, off, noRegions}}).ToCloudPosture()
+
+	if got := posture.Accounts[0].ThreatDetection.Enabled; !samePtr(got, boolPtr(true)) {
+		t.Errorf("every region on: enabled = %s, want true", showBool(got))
+	}
+	if got := posture.Accounts[1].ThreatDetection.Enabled; !samePtr(got, boolPtr(false)) {
+		t.Errorf("a region off: enabled = %s, want false", showBool(got))
+	}
+	if got := posture.Accounts[2].ThreatDetection.Enabled; got != nil {
+		t.Errorf("no region list: enabled = %s, want it left out", showBool(got))
+	}
 }

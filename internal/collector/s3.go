@@ -50,7 +50,8 @@ func (c *Collector) collectS3Metrics(ctx context.Context, client s3Client, accou
 			s3At.p("tls_unenforced_bucket_count"), s3At.p("public_access_blocked"), s3At.p("public_access_blocked_bucket_count"),
 			s3At.p("default_encryption_enabled"), s3At.p("default_encryption_enabled_bucket_count"), s3At.p("versioning_enabled"),
 			s3At.p("versioning_enabled_bucket_count"), s3At.p("logging_enabled"), s3At.p("logging_enabled_bucket_count"),
-			s3At.p("log_sink_bucket_count"), s3At.p("logging_required_bucket_count"))
+			s3At.p("log_sink_bucket_count"), s3At.p("logging_required_bucket_count"), s3At.p("public_access_block_unknown_count"),
+			s3At.p("default_encryption_evaluated_count"), s3At.p("default_encryption_inferred_count"), s3At.p("default_encryption_unknown_count"))
 		if audit {
 			c.gaps.leaveOut(err, s3At.p("buckets"))
 		}
@@ -151,7 +152,9 @@ func applyEffectivePublicAccessBlock(buckets []aws.Bucket, accountPublicAccessBl
 func logSinkBuckets(buckets []aws.Bucket) map[string]struct{} {
 	sinks := map[string]struct{}{}
 	for _, b := range buckets {
-		if b.LoggingTargetBucket != "" {
+		// A bucket that logs to itself is a logged source, and no other
+		// bucket's logs land in it.
+		if b.LoggingTargetBucket != "" && b.LoggingTargetBucket != b.Name {
 			sinks[b.LoggingTargetBucket] = struct{}{}
 		}
 	}
@@ -215,14 +218,13 @@ func summarizeS3Buckets(metrics *S3Metrics, buckets []aws.Bucket) {
 			logSinkCount++
 		} else {
 			bucketsRequiringLogging++
-			switch {
-			case b.LoggingErr != nil:
-				metrics.missing.addPartial(b.LoggingErr, 1, "logging_enabled", "logging_enabled_bucket_count")
-			case b.LoggingEnabled:
+			if b.LoggingErr == nil && b.LoggingEnabled {
 				logging++
 			}
 		}
 	}
+	// Each bucket whose logging could not be read counts once as
+	// unmeasured.
 	if loggingErr != nil {
 		metrics.missing.addPartial(loggingErr, loggingFailed, "log_sink_bucket_count", "logging_required_bucket_count", "logging_enabled", "logging_enabled_bucket_count")
 	}
@@ -439,11 +441,14 @@ func convertLifecycleRules(in []aws.BucketLifecycleRule) []S3LifecycleRule {
 	out := make([]S3LifecycleRule, 0, len(in))
 	for _, r := range in {
 		out = append(out, S3LifecycleRule{
-			ID:          r.ID,
-			Status:      r.Status,
-			Prefix:      r.Prefix,
-			Transitions: r.Transitions,
-			Expiration:  r.Expiration,
+			ID:                    r.ID,
+			Status:                r.Status,
+			Prefix:                r.Prefix,
+			Tags:                  r.Tags,
+			ObjectSizeGreaterThan: r.ObjectSizeGreaterThan,
+			ObjectSizeLessThan:    r.ObjectSizeLessThan,
+			Transitions:           r.Transitions,
+			Expiration:            r.Expiration,
 		})
 	}
 	return out

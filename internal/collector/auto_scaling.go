@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"strings"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 	"github.com/locktivity/epack/componentsdk"
@@ -43,7 +44,7 @@ func (c *Collector) collectAutoScalingMetrics(ctx context.Context, client *aws.A
 func aggregateAutoScalingGroups(groups []aws.AutoScalingGroup) *AutoScalingMetrics {
 	out := &AutoScalingMetrics{GroupCount: len(groups)}
 	for _, g := range groups {
-		if g.MinSize <= 1 {
+		if g.MinInstances <= 1 {
 			out.SingleInstanceGroupCount++
 		}
 		if g.AvailabilityZoneCount == 1 {
@@ -55,13 +56,14 @@ func aggregateAutoScalingGroups(groups []aws.AutoScalingGroup) *AutoScalingMetri
 		if g.SuspendedProcessCount > 0 {
 			out.GroupsWithSuspendedProcessesCount++
 		}
-		if g.HealthCheckType == "ELB" {
+		if hasELBHealthCheck(g.HealthCheckType) {
 			out.GroupsWithELBHealthCheckCount++
 		}
 		// Detection without response: the target group stops routing to a hung
 		// application, but the group never replaces the instance because the
-		// VM itself reports healthy.
-		if g.LoadBalanced && g.HealthCheckType != "ELB" {
+		// VM itself reports healthy. With VPC Lattice health checks on, Auto
+		// Scaling also replaces an instance that Lattice reports unhealthy.
+		if g.LoadBalanced && !hasELBHealthCheck(g.HealthCheckType) && !hasHealthCheckType(g.HealthCheckType, "VPC_LATTICE") {
 			out.LoadBalancedGroupsWithoutELBHealthCheckCount++
 		}
 		if !g.UsesLaunchTemplate {
@@ -84,4 +86,21 @@ func mergeAutoScalingMetrics(a, b AutoScalingMetrics) AutoScalingMetrics {
 		GroupsOnLaunchConfigurationsCount:            a.GroupsOnLaunchConfigurationsCount + b.GroupsOnLaunchConfigurationsCount,
 		Groups:                                       appendRows(a.Groups, b.Groups),
 	}
+}
+
+// hasELBHealthCheck reports whether a group's health check types, a
+// comma-separated list such as EBS,ELB, include ELB.
+func hasELBHealthCheck(types string) bool {
+	return hasHealthCheckType(types, "ELB")
+}
+
+// hasHealthCheckType reports whether a group's health check types, a
+// comma-separated list, include want.
+func hasHealthCheckType(types, want string) bool {
+	for _, t := range strings.Split(types, ",") {
+		if strings.TrimSpace(t) == want {
+			return true
+		}
+	}
+	return false
 }

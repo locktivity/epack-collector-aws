@@ -174,11 +174,15 @@ The collector needs read-only AWS permissions in each target account. The minimu
 
 All actions are List, Describe, or Get. Value-reading APIs (`secretsmanager:GetSecretValue`, `ssm:GetParameter`, etc.) are intentionally absent and are forbidden in collector source by a build-time lint.
 
-If a surface is missing its required permissions, the collector emits a per-surface AccessDenied diagnostic warning and continues; it does not fail the whole run. Each value a denied call leaves out gets a `permission_denied` gap in `artifacts/aws.collector-result.json` that names the call. When AWS's message names the IAM action, as in "not authorized to perform: iam:GenerateCredentialReport", the gap names it in `missing_permission`, and its warning says where to allow it: the collector's IAM policy, or the service control policy or permissions boundary that allows the action nowhere. When a policy denies the action explicitly, the warning names that policy and the gap names no permission to grant, because an explicit deny overrides any allow.
+If a surface is missing its required permissions, the collector emits a per-surface AccessDenied diagnostic warning and continues; it does not fail the whole run. Each value a denied call leaves out gets a `permission_denied` gap in `artifacts/aws.collector-result.json` that names the call. When AWS's message names the IAM action, as in "not authorized to perform: iam:GenerateCredentialReport", the gap names it in `missing_permission`, and its warning says where to allow it: the collector's IAM policy, or the service control policy or permissions boundary that allows the action nowhere. When a policy denies the action explicitly, the warning names that policy and the gap names no permission to grant, because an explicit deny overrides any allow. The collector result lists each call with the IAM action it needs as `permission`.
 
 `iam:ListOrganizationsFeatures` only evaluates centralized root access from the AWS Organizations management account or an IAM delegated administrator account. Member-account roles record the AWS error code in the evidence pack instead of inferring the organization-level state.
 
 Without `iam:ListSAMLProviders`, the SAML provider counts are left out with a `permission_denied` gap. Whether IAM Identity Center is in use is still decided from the instance and role listings.
+
+The access-posture file's admins come from `iam:ListAttachedUserPolicies`, `iam:ListGroupsForUser`, and `iam:ListAttachedGroupPolicies`, called for each IAM user. Without them, the admin values are left out with a `permission_denied` gap that names the missing action. A `collect` list that leaves out `access-posture` skips these calls.
+
+The vuln-scanning file comes from `inspector2:BatchGetAccountStatus`, `inspector2:ListCoverageStatistics`, and `inspector2:ListFindings`, called in each scanned region. The coverage and findings are read only where Inspector is on. Without these actions, the Inspector values are left out with a `permission_denied` gap that names the missing action. A `collect` list that leaves out `vuln-scanning` skips these calls.
 
 ### Trust level (default)
 
@@ -202,6 +206,9 @@ The minimum policy. Required for every collection level.
         "iam:ListMFADevices",
         "iam:ListRoles",
         "iam:ListSAMLProviders",
+        "iam:ListAttachedUserPolicies",
+        "iam:ListGroupsForUser",
+        "iam:ListAttachedGroupPolicies",
 
         "s3:GetAccountPublicAccessBlock",
         "s3:GetBucketLocation",
@@ -218,10 +225,12 @@ The minimum policy. Required for every collection level.
         "ec2:DescribeInstances",
         "ec2:DescribeRegions",
         "ec2:DescribeSecurityGroups",
+        "ec2:GetManagedPrefixListEntries",
         "ec2:DescribeSnapshots",
         "ec2:DescribeVolumes",
         "ec2:DescribeVpcs",
 
+        "cloudfront:GetVpcOrigin",
         "cloudfront:ListDistributions",
         "cloudwatch:DescribeAlarms",
         "elasticloadbalancing:DescribeListeners",
@@ -231,8 +240,10 @@ The minimum policy. Required for every collection level.
         "sns:ListSubscriptionsByTopic",
 
         "wafv2:ListWebACLs",
+        "wafv2:GetRuleGroup",
         "wafv2:GetWebACL",
         "wafv2:ListResourcesForWebACL",
+        "elasticloadbalancing:DescribeWebACLAssociation",
 
         "autoscaling:DescribeAutoScalingGroups",
         "autoscaling:DescribePolicies",
@@ -254,6 +265,7 @@ The minimum policy. Required for every collection level.
         "rds:DescribeDBInstances",
 
         "cloudtrail:DescribeTrails",
+        "cloudtrail:GetEventSelectors",
         "cloudtrail:GetTrailStatus",
 
         "config:DescribeConfigurationRecorders",
@@ -269,8 +281,13 @@ The minimum policy. Required for every collection level.
         "securityhub:GetFindings",
         "securityhub:ListEnabledProductsForImport",
 
+        "inspector2:BatchGetAccountStatus",
+        "inspector2:ListCoverageStatistics",
+        "inspector2:ListFindings",
+
         "access-analyzer:ListAnalyzers",
         "access-analyzer:ListFindings",
+        "access-analyzer:ListFindingsV2",
 
         "sso:ListInstances",
         "sso:ListPermissionSets",
@@ -302,6 +319,7 @@ Add these actions to the trust-level policy above. They surface the Identity Cen
   "sso:DescribePermissionSet",
   "sso:ListAccountsForProvisionedPermissionSet",
   "sso:ListManagedPoliciesInPermissionSet",
+  "sso:ListCustomerManagedPolicyReferencesInPermissionSet",
   "sso:GetInlinePolicyForPermissionSet",
   "sso:ListAccountAssignments",
 
@@ -310,6 +328,7 @@ Add these actions to the trust-level policy above. They surface the Identity Cen
   "organizations:ListAccounts",
 
   "lambda:GetPolicy",
+  "lambda:ListAliases",
   "lambda:ListFunctionUrlConfigs",
 
   "kms:ListAliases",
@@ -405,6 +424,10 @@ collectors:
         - us-east-1
         - us-west-2
 ```
+
+AWS Config, Security Hub, and the detailed file's Inspector values are read in one primary region. With `regions` set, that is the first region listed. Otherwise it is the region the collector signs in to, which is `us-east-1` in the commercial partition. When that region is not enabled, it is the first enabled region in alphabetical order. For the vuln-scanning file, Amazon Inspector is read in every scanned region.
+
+An IAM Identity Center instance is listed in the region where Identity Center was enabled, so include that region in `regions`. When none of the listed regions has an instance, the Identity Center values are left out with a `not_read` gap.
 
 ## Troubleshooting
 

@@ -32,6 +32,7 @@ func (c *AWSClient) ListSSMParameters(ctx context.Context, region string) ([]SSM
 		}
 		for _, p := range out.Parameters {
 			row := SSMParameter{
+				ARN:              aws.ToString(p.ARN),
 				Name:             aws.ToString(p.Name),
 				Type:             string(p.Type),
 				DataType:         aws.ToString(p.DataType),

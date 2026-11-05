@@ -19,6 +19,9 @@ const DefaultPrimaryRegion = "us-east-1"
 // Service-specific constants.
 const (
 	GuardDutyHighSeverityThreshold = 7
+	// guardDutyDetectorStatusEnabled is the GetDetector status of a detector
+	// that is running. A suspended detector reports DISABLED.
+	guardDutyDetectorStatusEnabled = "ENABLED"
 	CISStandardsARNMarker          = "cis"
 	InspectorProductNamePrefix     = "Inspector"
 )
@@ -60,8 +63,8 @@ const (
 	EC2InstancesCap = 10000
 
 	// EC2InstanceTagsCap is the maximum number of tags emitted per instance at
-	// internal level. AWS caps tags at 50 per resource, so the cap is mostly
-	// defensive against arbitrary tag-bombing schemes.
+	// internal level. AWS caps tags at 50 per resource, not counting tags with
+	// the aws: prefix, so an instance can carry more.
 	EC2InstanceTagsCap = 50
 
 	// CloudWatchLogGroupsCap is the maximum number of log groups surfaced in
@@ -82,7 +85,8 @@ const (
 	SecretsManagerSecretsCap = 5000
 
 	// SecretsManagerTagsCap is the maximum number of tags emitted per secret
-	// at internal level. AWS caps tags at 50 per resource; this is defensive.
+	// at internal level. AWS caps tags at 50 per resource, not counting tags
+	// with the aws: prefix, so a secret can carry more.
 	SecretsManagerTagsCap = 50
 
 	// SSMParametersCap is the maximum number of Parameter Store parameters
@@ -112,10 +116,11 @@ const (
 	IMDSHTTPTokensRequired = "required"
 )
 
-// DeprecatedLambdaRuntimes lists Lambda runtimes AWS has marked as deprecated.
-// Membership in this set is the signal we use for the trust-level
-// `deprecated_runtime_count` aggregate. Update as AWS publishes new deprecations:
-// https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html
+// DeprecatedLambdaRuntimes lists the runtimes in the deprecated runtimes table
+// of the Lambda developer guide, as of November 2026. Membership in this set
+// is the signal we use for the trust-level `deprecated_runtime_count`
+// aggregate. Update as AWS publishes new deprecations:
+// https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html#runtimes-deprecated
 var DeprecatedLambdaRuntimes = map[string]bool{
 	"nodejs":         true,
 	"nodejs4.3":      true,
@@ -126,26 +131,33 @@ var DeprecatedLambdaRuntimes = map[string]bool{
 	"nodejs12.x":     true,
 	"nodejs14.x":     true,
 	"nodejs16.x":     true,
+	"nodejs18.x":     true,
+	"nodejs20.x":     true,
 	"python2.7":      true,
 	"python3.6":      true,
 	"python3.7":      true,
 	"python3.8":      true,
+	"python3.9":      true,
+	"python3.10":     true,
 	"ruby2.5":        true,
 	"ruby2.7":        true,
+	"ruby3.2":        true,
 	"java8":          true,
 	"go1.x":          true,
+	"provided":       true,
+	"provided.al2":   true,
 	"dotnetcore1.0":  true,
 	"dotnetcore2.0":  true,
 	"dotnetcore2.1":  true,
 	"dotnetcore3.1":  true,
 	"dotnet5.0":      true,
 	"dotnet6":        true,
+	"dotnet7":        true,
 }
 
 // IAM trust policy constants.
 const (
 	TrustPolicyEffectAllow    = "Allow"
 	TrustPolicyPrincipalAll   = "*"
-	TrustPolicyARNPrefix      = "arn:aws:iam::"
 	AccessAnalyzerTypeAccount = "ACCOUNT"
 )

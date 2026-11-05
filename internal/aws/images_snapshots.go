@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -26,8 +27,10 @@ type MachineImage struct {
 
 	// HasUnencryptedVolume is stated as the finding rather than as an
 	// "encrypted" flag, because an instance-store image has no EBS device at
-	// all and calling that encrypted would overstate it.
+	// all and calling that encrypted would overstate it. HasEBSVolume says
+	// whether the image has an EBS device.
 	HasUnencryptedVolume bool
+	HasEBSVolume         bool
 }
 
 // ListOwnedSnapshots returns snapshots this account owns.
@@ -83,8 +86,11 @@ func (c *AWSClient) ListOwnedImages(ctx context.Context, region string) ([]Machi
 	client := ec2.NewFromConfig(cfg)
 
 	var images []MachineImage
+	// A disabled AMI is still owned, and DescribeImages returns it only
+	// when asked with IncludeDisabled.
 	paginator := ec2.NewDescribeImagesPaginator(client, &ec2.DescribeImagesInput{
-		Owners: []string{"self"},
+		Owners:          []string{"self"},
+		IncludeDisabled: aws.Bool(true),
 	})
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
@@ -92,11 +98,17 @@ func (c *AWSClient) ListOwnedImages(ctx context.Context, region string) ([]Machi
 			return nil, fmt.Errorf("describing AMIs in %s: %w", region, err)
 		}
 		for _, img := range page.Images {
+			// DescribeImages still returns an image for a short time after
+			// it is deregistered. It can no longer be launched.
+			if img.State == types.ImageStateDeregistered {
+				continue
+			}
 			images = append(images, MachineImage{
 				ImageID:              aws.ToString(img.ImageId),
 				Name:                 aws.ToString(img.Name),
 				Public:               aws.ToBool(img.Public),
 				HasUnencryptedVolume: hasUnencryptedBlockDevice(img),
+				HasEBSVolume:         slices.ContainsFunc(img.BlockDeviceMappings, func(m types.BlockDeviceMapping) bool { return m.Ebs != nil }),
 				CreateDate:           aws.ToString(img.CreationDate),
 			})
 		}

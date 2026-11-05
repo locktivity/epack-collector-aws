@@ -2,14 +2,23 @@ package collector
 
 import (
 	"context"
+	"slices"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
 	"github.com/locktivity/epack/componentsdk"
 )
 
+// regionsWithoutSES are the regions an account can enable that have no SES
+// endpoint, so SES holds no configuration sets or identities there.
+var regionsWithoutSES = []string{"ap-east-1", "ap-east-2", "ap-southeast-6", "mx-central-1"}
+
 // collectSESMetrics collects outbound mail transport enforcement for a region.
-// Both listings are cheap in regions where SES is unused.
+// Both listings are cheap in regions where SES is unused. A region without
+// an SES endpoint adds nothing.
 func (c *Collector) collectSESMetrics(ctx context.Context, client *aws.AWSClient, region, accountID string, level componentsdk.Level) (*SESMetrics, error) {
+	if slices.Contains(regionsWithoutSES, region) {
+		return aggregateSES(nil, nil), nil
+	}
 	sets, err := client.ListSESConfigurationSets(ctx, region)
 	if err != nil {
 		return nil, err

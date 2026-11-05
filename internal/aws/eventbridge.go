@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
@@ -90,11 +91,14 @@ func (c *AWSClient) resolveRuleTargets(ctx context.Context, client *eventbridge.
 
 // matchesGuardDutyFindings reports whether an EventBridge event pattern
 // selects GuardDuty findings, and whether it further filters on severity.
-// Matching is by literal string: a source entry of "aws.guardduty" or a
-// detail-type entry of "GuardDuty Finding" (either alone selects finding
-// events). Prefix/wildcard matcher objects that would also select findings
-// are not recognised, so an exotic pattern under-reports as no routing
-// rather than over-reporting coverage that may not exist.
+// EventBridge ANDs a pattern's fields, so the pattern must name
+// "aws.guardduty" as a source or "GuardDuty Finding" as a detail-type, and a
+// source or detail-type it lists must include that value. A rule on other
+// GuardDuty events, such as malware scan results, selects no finding.
+// Matching is by literal string. Prefix/wildcard matcher objects that would
+// also select findings are not recognised, so an exotic pattern
+// under-reports as no routing rather than over-reporting coverage that may
+// not exist.
 func matchesGuardDutyFindings(pattern string) (matches, filtersSeverity bool) {
 	if pattern == "" {
 		return false, false
@@ -107,7 +111,12 @@ func matchesGuardDutyFindings(pattern string) (matches, filtersSeverity bool) {
 	if err := json.Unmarshal([]byte(pattern), &parsed); err != nil {
 		return false, false
 	}
-	if !containsLiteral(parsed.Source, "aws.guardduty") && !containsLiteral(parsed.DetailType, "GuardDuty Finding") {
+	source := containsLiteral(parsed.Source, "aws.guardduty")
+	detailType := containsLiteral(parsed.DetailType, "GuardDuty Finding")
+	if !source && !detailType {
+		return false, false
+	}
+	if (parsed.Source != nil && !source) || (parsed.DetailType != nil && !detailType) {
 		return false, false
 	}
 	_, filtersSeverity = parsed.Detail["severity"]
@@ -131,13 +140,13 @@ func eventTargetKind(arn string) string {
 	switch {
 	case isSNSTopicARN(arn):
 		return "sns"
-	case containsSegment(arn, ":lambda:"):
+	case strings.Contains(arn, ":lambda:"):
 		return "lambda"
-	case containsSegment(arn, ":events:") && containsSegment(arn, ":event-bus/"):
+	case strings.Contains(arn, ":events:") && strings.Contains(arn, ":event-bus/"):
 		return "event_bus"
-	case containsSegment(arn, ":events:") && containsSegment(arn, ":api-destination/"):
+	case strings.Contains(arn, ":events:") && strings.Contains(arn, ":api-destination/"):
 		return "api_destination"
-	case containsSegment(arn, ":sqs:"):
+	case strings.Contains(arn, ":sqs:"):
 		return "sqs"
 	default:
 		return "other"

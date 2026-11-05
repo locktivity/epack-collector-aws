@@ -13,11 +13,12 @@ func rule(status, prefix string, days int32) aws.BucketLifecycleRule {
 
 func TestClassifyTrailRetention(t *testing.T) {
 	tests := []struct {
-		name     string
-		rules    []aws.BucketLifecycleRule
-		prefix   string
-		want     string
-		wantDays int32
+		name      string
+		rules     []aws.BucketLifecycleRule
+		prefix    string
+		versioned bool
+		want      string
+		wantDays  int32
 	}{
 		{
 			name:   "no lifecycle keeps everything forever",
@@ -88,6 +89,36 @@ func TestClassifyTrailRetention(t *testing.T) {
 			prefix: "AWSLogs/",
 			want:   trailRetentionUnknown,
 		},
+		{
+			// In a versioned bucket an expiration leaves a noncurrent
+			// version behind, so nothing is deleted.
+			name:      "versioned bucket without noncurrent expiration keeps everything",
+			rules:     []aws.BucketLifecycleRule{rule("Enabled", "AWSLogs/", 365)},
+			prefix:    "AWSLogs/",
+			versioned: true,
+			want:      trailRetentionIndefinite,
+		},
+		{
+			name:      "versioned bucket keeps a version for both periods",
+			rules:     []aws.BucketLifecycleRule{{Status: "Enabled", ExpirationDays: 365, NoncurrentExpirationDays: 30}},
+			prefix:    "AWSLogs/",
+			versioned: true,
+			want:      trailRetentionExpiring,
+			wantDays:  395,
+		},
+		{
+			name:     "a rule on the account's own folder covers the trail",
+			rules:    []aws.BucketLifecycleRule{rule("Enabled", "AWSLogs/111122223333/", 90)},
+			prefix:   "AWSLogs/111122223333/",
+			want:     trailRetentionExpiring,
+			wantDays: 90,
+		},
+		{
+			name:   "a rule on another account's folder does not",
+			rules:  []aws.BucketLifecycleRule{rule("Enabled", "AWSLogs/999999999999/", 90)},
+			prefix: "AWSLogs/111122223333/",
+			want:   trailRetentionIndefinite,
+		},
 	}
 
 	for _, tt := range tests {
@@ -96,7 +127,7 @@ func TestClassifyTrailRetention(t *testing.T) {
 			if tt.rules == nil {
 				lifecycle = nil
 			}
-			state, days := classifyTrailRetention(lifecycle, tt.prefix)
+			state, days := classifyTrailRetention(lifecycle, tt.prefix, false, tt.versioned)
 			if state != tt.want || days != tt.wantDays {
 				t.Fatalf("classifyTrailRetention() = %q %d, want %q %d", state, days, tt.want, tt.wantDays)
 			}
@@ -113,6 +144,16 @@ func TestTrailObjectPrefix(t *testing.T) {
 	}
 	if got := trailObjectPrefix(aws.Trail{S3KeyPrefix: "audit/"}); got != "audit/AWSLogs/" {
 		t.Errorf("trailObjectPrefix() = %q, want audit/AWSLogs/ for a trailing slash", got)
+	}
+	// A trail that is not an organization trail writes only under its own
+	// account's folder.
+	local := aws.Trail{TrailARN: "arn:aws:cloudtrail:us-east-1:111122223333:trail/local", S3KeyPrefix: "audit"}
+	if got := trailObjectPrefix(local); got != "audit/AWSLogs/111122223333/" {
+		t.Errorf("trailObjectPrefix() = %q, want audit/AWSLogs/111122223333/", got)
+	}
+	org := aws.Trail{TrailARN: "arn:aws:cloudtrail:us-east-1:999900001111:trail/org", IsOrganizationTrail: true}
+	if got := trailObjectPrefix(org); got != "AWSLogs/" {
+		t.Errorf("trailObjectPrefix() = %q, want AWSLogs/ for an organization trail", got)
 	}
 }
 

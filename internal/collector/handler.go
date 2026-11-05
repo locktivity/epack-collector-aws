@@ -18,6 +18,8 @@ func Spec(version, commit string) componentsdk.CollectorSpec {
 		Description: "Collects AWS account security posture metrics",
 		Timeout:     10 * time.Minute,
 		Schemas:     map[string][]byte{awsPath: schema.V1},
+		Methods:     schema.Methods(),
+		Writes:      []string{cloudPostureSchema, accessPostureSchema, vulnScanningSchema},
 		TraceMap:    schema.TraceMap,
 	}
 }
@@ -41,6 +43,9 @@ func Run(ctx componentsdk.CollectorContext) error {
 		Wait:       func(_ context.Context, d time.Duration) error { return componentsdk.Wait(ctx, d) },
 		OnStatus:   ctx.Status,
 		OnProgress: ctx.Progress,
+
+		SkipAccessPosture: !componentsdk.Selected(ctx, componentsdk.Location{Schema: accessPostureSchema, Path: accessPosturePath}),
+		SkipVulnScanning:  !componentsdk.Selected(ctx, componentsdk.Location{Schema: vulnScanningSchema, Path: vulnScanningPath}),
 	}
 	var tokenHosts []string
 	if host := config.OIDC.CredentialHost(); host != "" {
@@ -113,7 +118,9 @@ func getStringSlice(cfg map[string]any, key string) []string {
 
 // Artifacts returns the detailed and normalized artifacts for output. Every
 // value a gap covers is left out of the detailed artifact, and each
-// normalized value derived from one is left out with the same gap.
+// normalized value derived from one is left out with the same gap. The
+// access-posture and vuln-scanning artifacts are left out when the run does
+// not collect them.
 func (c *Collector) Artifacts(output *Output) []componentsdk.CollectedArtifact {
 	normalized := c.cloudPosture(output)
 	// The literal holds output itself because epack sdk map reads the
@@ -122,7 +129,7 @@ func (c *Collector) Artifacts(output *Output) []componentsdk.CollectedArtifact {
 	if doc, err := c.gaps.leaveOutCovered(awsPath, output); err == nil {
 		detailed.Data = doc
 	}
-	return []componentsdk.CollectedArtifact{
+	artifacts := []componentsdk.CollectedArtifact{
 		detailed,
 		{
 			Data:   normalized,
@@ -130,4 +137,11 @@ func (c *Collector) Artifacts(output *Output) []componentsdk.CollectedArtifact {
 			Path:   cloudPosturePath,
 		},
 	}
+	if !c.config.SkipAccessPosture {
+		artifacts = append(artifacts, componentsdk.CollectedArtifact{Data: c.accessPosture(output), Schema: accessPostureSchema, Path: accessPosturePath})
+	}
+	if !c.config.SkipVulnScanning {
+		artifacts = append(artifacts, componentsdk.CollectedArtifact{Data: c.vulnScanning(output), Schema: vulnScanningSchema, Path: vulnScanningPath})
+	}
+	return artifacts
 }

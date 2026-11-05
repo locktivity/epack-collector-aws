@@ -335,6 +335,7 @@ func TestEnrichS3BucketsForInternal_PopulatesAllFields(t *testing.T) {
 		lifecycles: map[string]*aws.BucketLifecycle{
 			"alpha": {Rules: []aws.BucketLifecycleRule{
 				{ID: "expire-old", Status: "Enabled", Prefix: "logs/", Expiration: "90d"},
+				{ID: "expire-temp", Status: "Enabled", Tags: map[string]string{"temp": "true"}, ObjectSizeLessThan: 1024, Expiration: "7d"},
 			}},
 		},
 	}
@@ -350,8 +351,11 @@ func TestEnrichS3BucketsForInternal_PopulatesAllFields(t *testing.T) {
 	if buckets[0].ACL == nil || buckets[0].ACL.OwnerID != "owner123" || len(buckets[0].ACL.Grants) != 1 {
 		t.Errorf("ACL not populated correctly: %+v", buckets[0].ACL)
 	}
-	if buckets[0].Lifecycle == nil || len(buckets[0].Lifecycle.Rules) != 1 || buckets[0].Lifecycle.Rules[0].Expiration != "90d" {
-		t.Errorf("Lifecycle not populated correctly: %+v", buckets[0].Lifecycle)
+	if buckets[0].Lifecycle == nil || len(buckets[0].Lifecycle.Rules) != 2 || buckets[0].Lifecycle.Rules[0].Expiration != "90d" {
+		t.Fatalf("Lifecycle not populated correctly: %+v", buckets[0].Lifecycle)
+	}
+	if r := buckets[0].Lifecycle.Rules[1]; r.Tags["temp"] != "true" || r.ObjectSizeLessThan != 1024 || r.Prefix != "" {
+		t.Errorf("a rule scoped by tag and size reads as %+v, want its tag and size bound", r)
 	}
 	if len(c.warnings) != 0 {
 		t.Errorf("expected no warnings on success path, got %v", c.warnings)
@@ -601,4 +605,100 @@ func TestCollectS3Metrics_AccountPABFailureLeavesEvaluatedFalse(t *testing.T) {
 		t.Error("expected BucketListingEvaluated true when only PAB failed")
 	}
 	requireGap(t, c, "/accounts/0/s3/account_public_access_block_enabled")
+}
+
+// A bucket that delivers its access logs to itself is a logged source, and
+// only a bucket another bucket logs to is a sink.
+func TestSummarizeS3Buckets_SelfTargetedLoggingIsNotASink(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		buckets []aws.Bucket
+		sinks   int
+		sink    []bool
+	}{
+		{"logs to itself", []aws.Bucket{
+			{Name: "self-logged", LoggingEnabled: true, LoggingTargetBucket: "self-logged"},
+			{Name: "unlogged"},
+		}, 0, []bool{false, false}},
+		{"logs to another bucket", []aws.Bucket{
+			{Name: "app", LoggingEnabled: true, LoggingTargetBucket: "logs"},
+			{Name: "logs"},
+			{Name: "unlogged"},
+		}, 1, []bool{false, true, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metrics := &S3Metrics{}
+			summarizeS3Buckets(metrics, tc.buckets)
+			if metrics.LogSinkBucketCount != tc.sinks {
+				t.Errorf("LogSinkBucketCount = %d, want %d", metrics.LogSinkBucketCount, tc.sinks)
+			}
+			if metrics.LoggingRequiredBucketCount != 2 || metrics.LoggingEnabledBucketCount != 1 || !pctIs(metrics.LoggingEnabled, 50) {
+				t.Errorf("logging = %d of %d (%s), want 1 of 2 (50)", metrics.LoggingEnabledBucketCount, metrics.LoggingRequiredBucketCount, showPct(metrics.LoggingEnabled))
+			}
+			for i, row := range s3BucketsToInventory(tc.buckets, aws.PublicAccessBlockSettings{}) {
+				if row.IsLogSink != tc.sink[i] {
+					t.Errorf("%s: is_log_sink = %v, want %v", row.Name, row.IsLogSink, tc.sink[i])
+				}
+			}
+		})
+	}
+}
+
+// When the bucket listing fails, every count over the buckets is left out,
+// including the counts of buckets whose settings could not be read.
+func TestCollectS3Metrics_ListingFailureLeavesOutEveryBucketCount(t *testing.T) {
+	c := newTestCollector(Config{})
+	metrics := c.collectS3Metrics(context.Background(), fakeS3Client{listErr: errors.New("InvalidRequest")}, "111111111111", accountAt(0), componentsdk.LevelTrust)
+	doc, err := c.gaps.leaveOutCovered(awsPath, &Output{Accounts: []AccountPosture{{S3: *metrics}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s3 := doc.(map[string]any)["accounts"].([]any)[0].(map[string]any)["s3"].(map[string]any)
+	for _, field := range []string{
+		"bucket_count", "public_access_blocked_bucket_count", "public_access_block_unknown_count",
+		"default_encryption_evaluated_count", "default_encryption_inferred_count", "default_encryption_unknown_count",
+	} {
+		if v, present := s3[field]; present && v != nil {
+			t.Errorf("%s = %v after a failed bucket listing, want it left out", field, v)
+		}
+	}
+}
+
+// unmeasuredAt returns how many items the gap at pointer could not measure,
+// and whether there is such a gap.
+func unmeasuredAt(c *Collector, pointer string) (int, bool) {
+	c.gaps.mu.Lock()
+	defer c.gaps.mu.Unlock()
+	for _, g := range c.gaps.gaps {
+		if g.path == awsPath && g.pointer == pointer {
+			return g.unmeasured, true
+		}
+	}
+	return 0, false
+}
+
+// A bucket whose logging could not be read is one unmeasured bucket in the
+// logging rollups.
+func TestCollectS3Metrics_FailedLoggingReadIsOneUnmeasuredBucket(t *testing.T) {
+	c := newTestCollector(Config{})
+	read := aws.PublicAccessBlockSettings{Evaluated: true}
+	client := fakeS3Client{
+		pab: read,
+		buckets: []aws.Bucket{
+			{Name: "a", PublicAccessBlock: read, DefaultEncryptionEvaluated: true, DefaultEncryptionEnabled: true, LoggingEnabled: true, LoggingTargetBucket: "logs"},
+			{Name: "b", PublicAccessBlock: read, DefaultEncryptionEvaluated: true, DefaultEncryptionEnabled: true, LoggingErr: errors.New("getting logging for b: AccessDenied")},
+			{Name: "logs", PublicAccessBlock: read, DefaultEncryptionEvaluated: true, DefaultEncryptionEnabled: true},
+		},
+	}
+	c.collectS3Metrics(context.Background(), client, "111111111111", accountAt(0), componentsdk.LevelTrust)
+
+	for _, field := range []string{"logging_enabled", "logging_enabled_bucket_count", "logging_required_bucket_count"} {
+		got, ok := unmeasuredAt(c, "/accounts/0/s3/"+field)
+		if !ok {
+			t.Fatalf("no gap at %s; gaps: %v", field, c.gaps.pointers(awsPath))
+		}
+		if got != 1 {
+			t.Errorf("%s: %d buckets unmeasured, want 1", field, got)
+		}
+	}
 }

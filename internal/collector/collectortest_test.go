@@ -28,6 +28,9 @@ var kitOperations = []string{
 	"aws.iam.ListMFADevices",
 	"aws.iam.ListRoles",
 	"aws.iam.ListSAMLProviders",
+	"aws.iam.ListAttachedUserPolicies",
+	"aws.iam.ListGroupsForUser",
+	"aws.iam.ListAttachedGroupPolicies",
 	"aws.organizations.ListAccounts",
 	"aws.s3.ListBuckets",
 	"aws.s3.GetBucketLocation",
@@ -49,12 +52,14 @@ var kitOperations = []string{
 	"aws.ec2.DescribeVpcs",
 	"aws.ec2.DescribeFlowLogs",
 	"aws.ec2.DescribeSecurityGroups",
+	"aws.ec2.GetManagedPrefixListEntries",
 	"aws.ec2.DescribeInstances",
 	"aws.ec2.DescribeVolumes",
 	"aws.ec2.DescribeSnapshots",
 	"aws.ec2.DescribeImages",
 	"aws.lambda.ListFunctions",
 	"aws.lambda.GetPolicy",
+	"aws.lambda.ListAliases",
 	"aws.lambda.ListFunctionUrlConfigs",
 	"aws.cloudwatchlogs.DescribeLogGroups",
 	"aws.cloudwatch.DescribeAlarms",
@@ -80,10 +85,12 @@ var kitOperations = []string{
 	"aws.ssm.DescribeParameters",
 	"aws.wafv2.ListWebACLs",
 	"aws.wafv2.GetWebACL",
+	"aws.wafv2.GetRuleGroup",
 	"aws.wafv2.ListResourcesForWebACL",
 	"aws.wafv2.GetLoggingConfiguration",
 	"aws.cloudtrail.DescribeTrails",
 	"aws.cloudtrail.GetTrailStatus",
+	"aws.cloudtrail.GetEventSelectors",
 	"aws.configservice.DescribeConfigurationRecorders",
 	"aws.configservice.DescribeConfigurationRecorderStatus",
 	"aws.configservice.DescribeConfigRules",
@@ -102,6 +109,9 @@ var kitOperations = []string{
 	"aws.securityhub.GetEnabledStandards",
 	"aws.securityhub.ListEnabledProductsForImport",
 	"aws.securityhub.GetFindings",
+	"aws.inspector2.BatchGetAccountStatus",
+	"aws.inspector2.ListCoverageStatistics",
+	"aws.inspector2.ListFindings",
 	"aws.ssoadmin.ListInstances",
 	"aws.identitystore.ListUsers",
 	"aws.identitystore.ListGroups",
@@ -110,6 +120,7 @@ var kitOperations = []string{
 	"aws.ssoadmin.DescribePermissionSet",
 	"aws.ssoadmin.ListAccountsForProvisionedPermissionSet",
 	"aws.ssoadmin.ListManagedPoliciesInPermissionSet",
+	"aws.ssoadmin.ListCustomerManagedPolicyReferencesInPermissionSet",
 	"aws.ssoadmin.GetInlinePolicyForPermissionSet",
 	"aws.ssoadmin.ListAccountAssignments",
 }
@@ -230,14 +241,7 @@ func kitSuite() collectortest.Suite {
 					"/accounts/0/identity_center/regions_checked":                                []any{kitRegion},
 					"/accounts/0/identity_center/external_id_user_count":                         0,
 					"/accounts/0/identity_center/mfa_evidence":                                   "manual_required",
-				}, cloudPosturePath: {
-					"/accounts/0/iam/user_count":            3,
-					"/accounts/0/iam/access_key_user_count": 2,
-					"/accounts/0/iam/saml_provider_count":   0,
-					"/workforce_sign_in/in_use":             true,
-					"/workforce_sign_in/user_count":         2,
-					"/workforce_sign_in/mfa_source":         "sign_in_service",
-				}, kitResultPath: kitStepPins()},
+				}, accessPosturePath: kitAccessPins(), vulnScanningPath: kitVulnPins(), kitResultPath: kitStepPins()},
 			},
 			{
 				// The account's block sets every flag, so it decides each
@@ -295,6 +299,20 @@ func kitSuite() collectortest.Suite {
 					"/accounts/0/network/open_to_world_ssh_security_group_count":  0,
 					"/accounts/0/waf/covered_internet_facing_alb_count":           0,
 					"/accounts/0/waf/internet_facing_alb_coverage_pct":            nil,
+				}, accessPosturePath: {
+					"/members/members_present":         false,
+					"/admins/admins_present":           false,
+					"/credentials/credentials_present": false,
+					"/root/root_accounts_present":      true,
+				}, vulnScanningPath: {
+					"/scanners/0/enabled":                false,
+					"/scanners/0/resources_present":      false,
+					"/scanners/0/coverage_pct":           nil,
+					"/scanners/0/scanned_resource_count": 0,
+					"/scanners/0/open_critical_present":  false,
+					"/scanners/1/enabled":                false,
+					"/scanners/1/resource_count":         collectortest.Absent,
+					"/scanners/2/coverage_pct":           nil,
 				}},
 			},
 			{
@@ -367,15 +385,21 @@ func kitSuite() collectortest.Suite {
 						"/accounts/0/iam/access_keys_rotated_user_count":  0,
 						"/accounts/0/identity_center/user_count":          2,
 					},
-					cloudPosturePath: {
-						"/accounts/0/iam/mfa_coverage_pct":                  collectortest.Absent,
-						"/accounts/0/iam/access_key_rotation_compliant_pct": collectortest.Absent,
-						"/accounts/0/iam/user_count":                        0,
-						"/accounts/0/iam/access_key_user_count":             0,
-						"/accounts/0/iam/saml_provider_count":               0,
-						"/workforce_sign_in/in_use":                         true,
-						"/workforce_sign_in/user_count":                     2,
-						"/workforce_sign_in/mfa_source":                     "sign_in_service",
+					accessPosturePath: {
+						"/sign_in/sso_configured":                  true,
+						"/members/members_present":                 false,
+						"/members/member_count":                    0,
+						"/members/local_mfa_coverage_pct":          nil,
+						"/members/inactive_pct":                    nil,
+						"/members/sso_member_count":                2,
+						"/admins/admins_present":                   false,
+						"/admins/admin_share_pct":                  nil,
+						"/admins/local_admin_mfa_coverage_pct":     nil,
+						"/credentials/credentials_present":         false,
+						"/credentials/credential_count":            0,
+						"/credentials/never_expiring_pct":          nil,
+						"/credentials/rotation_overdue_pct":        nil,
+						"/scopes/0/members/local_mfa_coverage_pct": nil,
 					},
 				},
 			},
@@ -395,15 +419,12 @@ func kitSuite() collectortest.Suite {
 						"/accounts/0/identity_center/regions_checked":         []any{kitRegion},
 						"/accounts/0/identity_center/instance_type":           collectortest.Absent,
 					},
-					cloudPosturePath: {
-						"/accounts/0/iam/user_count":                        0,
-						"/accounts/0/iam/access_key_user_count":             0,
-						"/accounts/0/iam/saml_provider_count":               0,
-						"/accounts/0/iam/mfa_coverage_pct":                  collectortest.Absent,
-						"/accounts/0/iam/access_key_rotation_compliant_pct": collectortest.Absent,
-						"/workforce_sign_in/in_use":                         false,
-						"/workforce_sign_in/user_count":                     collectortest.Absent,
-						"/workforce_sign_in/mfa_source":                     collectortest.Absent,
+					accessPosturePath: {
+						"/sign_in/sso_configured":   false,
+						"/members/member_count":     0,
+						"/members/sso_member_count": 0,
+						"/members/inactive_pct":     nil,
+						"/admins/admin_count":       0,
 					},
 				},
 			},
@@ -419,10 +440,16 @@ func kitSuite() collectortest.Suite {
 						"/accounts/0/identity_center/instance_type":   "organization",
 						"/accounts/0/identity_center/regions_checked": []any{kitRegion, "us-west-2"},
 					},
-					cloudPosturePath: {
-						"/workforce_sign_in/in_use":     true,
-						"/workforce_sign_in/user_count": 2,
-						"/workforce_sign_in/mfa_source": "sign_in_service",
+					accessPosturePath: {
+						"/sign_in/sso_configured":   true,
+						"/members/sso_member_count": 2,
+					},
+					vulnScanningPath: {
+						"/scanners/0/enabled":               false,
+						"/scanners/0/coverage_pct":          100,
+						"/scanners/1/enabled":               false,
+						"/scanners/1/resource_count":        collectortest.Absent,
+						"/scanners/0/open_critical_present": true,
 					},
 				},
 			},
@@ -439,12 +466,10 @@ func kitSuite() collectortest.Suite {
 						"/accounts/0/iam/saml_provider_count":                 0,
 						"/accounts/0/identity_center/enabled":                 false,
 					},
-					cloudPosturePath: {
-						"/accounts/0/iam/user_count":          0,
-						"/accounts/0/iam/saml_provider_count": 0,
-						"/workforce_sign_in/in_use":           true,
-						"/workforce_sign_in/user_count":       collectortest.Absent,
-						"/workforce_sign_in/mfa_source":       "unknown",
+					accessPosturePath: {
+						"/sign_in/sso_configured":   true,
+						"/members/member_count":     0,
+						"/members/sso_member_count": collectortest.Absent,
 					},
 				},
 			},
@@ -459,10 +484,10 @@ func kitSuite() collectortest.Suite {
 						"/accounts/0/iam/saml_provider_count":                 1,
 						"/accounts/0/iam/identity_center_saml_provider_count": 0,
 					},
-					cloudPosturePath: {
-						"/accounts/0/iam/user_count":          0,
-						"/accounts/0/iam/saml_provider_count": 1,
-						"/workforce_sign_in/in_use":           false,
+					accessPosturePath: {
+						"/sign_in/sso_configured":   true,
+						"/members/member_count":     0,
+						"/members/sso_member_count": 0,
 					},
 				},
 			},
@@ -481,10 +506,9 @@ func kitSuite() collectortest.Suite {
 						"/accounts/0/identity_center/mfa_evidence":            "external_idp",
 						"/accounts/0/identity_center/users/0/has_external_id": true,
 					},
-					cloudPosturePath: {
-						"/workforce_sign_in/in_use":     true,
-						"/workforce_sign_in/user_count": 2,
-						"/workforce_sign_in/mfa_source": "external_idp",
+					accessPosturePath: {
+						"/sign_in/sso_configured":   true,
+						"/members/sso_member_count": 2,
 					},
 				},
 			},
@@ -502,10 +526,9 @@ func kitSuite() collectortest.Suite {
 						"/accounts/0/identity_center/users/0/has_external_id": false,
 						"/accounts/0/identity_center/users/1/has_external_id": false,
 					},
-					cloudPosturePath: {
-						"/workforce_sign_in/in_use":     true,
-						"/workforce_sign_in/user_count": 2,
-						"/workforce_sign_in/mfa_source": "sign_in_service",
+					accessPosturePath: {
+						"/sign_in/sso_configured":   true,
+						"/members/sso_member_count": 2,
 					},
 				},
 			},
@@ -524,11 +547,95 @@ func kitSuite() collectortest.Suite {
 						"/accounts/0/iam/access_keys_rotated_user_count":  nil,
 						"/accounts/0/iam/root_mfa_enabled":                true,
 					},
-					cloudPosturePath: {
-						"/accounts/0/iam/mfa_coverage_pct":                  nil,
-						"/accounts/0/iam/access_key_rotation_compliant_pct": nil,
+					accessPosturePath: {
+						"/members/members_present":          collectortest.Absent,
+						"/members/local_mfa_coverage_pct":   collectortest.Absent,
+						"/admins/admins_present":            collectortest.Absent,
+						"/credentials/credentials_present":  collectortest.Absent,
+						"/credentials/rotation_overdue_pct": collectortest.Absent,
+						"/root/root_mfa_coverage_pct":       100,
 					},
 				},
+			},
+			{
+				// Inspector's status cannot be read, so whether it is on and
+				// what it found are left out. The instances and functions
+				// the collector lists still count.
+				Name:      "Inspector status denied",
+				Responses: inspectorStatusDeniedResponses(),
+				Expect: map[string]map[string]any{vulnScanningPath: {
+					"/scanners/0/enabled":                collectortest.Absent,
+					"/scanners/0/resource_count":         1,
+					"/scanners/0/scanned_resource_count": collectortest.Absent,
+					"/scanners/0/coverage_pct":           collectortest.Absent,
+					"/scanners/0/open_critical_present":  collectortest.Absent,
+					"/scanners/1/resource_count":         collectortest.Absent,
+				}},
+			},
+			{
+				// Inspector's findings cannot be listed, so its coverage stays
+				// and the open findings are left out.
+				Name:      "Inspector findings denied",
+				Responses: inspectorFindingsDeniedResponses(),
+				Expect: map[string]map[string]any{vulnScanningPath: {
+					"/scanners/0/enabled":               true,
+					"/scanners/0/coverage_pct":          100,
+					"/scanners/0/open_critical_present": collectortest.Absent,
+					"/scanners/0/overdue_present":       collectortest.Absent,
+					"/scanners/0/open_critical_count":   collectortest.Absent,
+				}},
+			},
+			{
+				// Inspector is on and has nothing open. The account has no ECR
+				// image, and the function is not scanned.
+				Name:      "Inspector on with no open finding",
+				Responses: inspectorQuietResponses(),
+				Expect: map[string]map[string]any{vulnScanningPath: {
+					"/scanners/0/coverage_pct":           100,
+					"/scanners/0/open_critical_present":  false,
+					"/scanners/0/open_high_present":      false,
+					"/scanners/0/overdue_present":        false,
+					"/scanners/0/open_critical_count":    0,
+					"/scanners/1/resources_present":      false,
+					"/scanners/1/resource_count":         0,
+					"/scanners/1/coverage_pct":           nil,
+					"/scanners/2/scanned_resource_count": 0,
+					"/scanners/2/coverage_pct":           0,
+				}},
+			},
+			{
+				// The count of scanned resources comes in two pages.
+				Name:      "Inspector coverage in two pages",
+				Responses: coveragePagesResponses(),
+				Expect: map[string]map[string]any{vulnScanningPath: {
+					"/scanners/0/scanned_resource_count": 1,
+					"/scanners/1/scanned_resource_count": 1,
+					"/scanners/2/scanned_resource_count": 1,
+				}},
+			},
+			{
+				// bob's attached policies come in two pages, and the second
+				// has AdministratorAccess, so bob is an admin too.
+				Name:      "IAM user policies in two pages",
+				Responses: adminPolicyPagesResponses(),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/admins/admin_count":                  3,
+					"/admins/local_mfa_admin_count":        2,
+					"/admins/local_admin_mfa_coverage_pct": 66,
+				}},
+			},
+			{
+				// No IAM user's policies can be read, so the admins are left
+				// out with a partial gap. The members still count.
+				Name:      "IAM user policies denied",
+				Responses: adminPoliciesDeniedResponses(),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/members/member_count":                3,
+					"/members/local_member_count":          3,
+					"/admins/admins_present":               collectortest.Absent,
+					"/admins/admin_count":                  collectortest.Absent,
+					"/admins/local_admin_mfa_coverage_pct": collectortest.Absent,
+				}},
 			},
 			{
 				Name:          "token rejected",
@@ -623,6 +730,7 @@ func kitSuite() collectortest.Suite {
 var jsonListOperations = []string{
 	"aws.organizations.ListAccounts",
 	"aws.lambda.ListFunctions",
+	"aws.lambda.ListAliases",
 	"aws.lambda.ListFunctionUrlConfigs",
 	"aws.cloudwatchlogs.DescribeLogGroups",
 	"aws.sesv2.ListConfigurationSets",
@@ -652,6 +760,8 @@ var jsonListOperations = []string{
 	"aws.securityhub.GetEnabledStandards",
 	"aws.securityhub.ListEnabledProductsForImport",
 	"aws.securityhub.GetFindings",
+	"aws.inspector2.ListCoverageStatistics",
+	"aws.inspector2.ListFindings",
 	"aws.ssoadmin.ListInstances",
 	"aws.identitystore.ListUsers",
 	"aws.identitystore.ListGroups",
@@ -659,6 +769,7 @@ var jsonListOperations = []string{
 	"aws.ssoadmin.ListPermissionSets",
 	"aws.ssoadmin.ListAccountsForProvisionedPermissionSet",
 	"aws.ssoadmin.ListManagedPoliciesInPermissionSet",
+	"aws.ssoadmin.ListCustomerManagedPolicyReferencesInPermissionSet",
 	"aws.ssoadmin.ListAccountAssignments",
 }
 
@@ -843,4 +954,85 @@ func kitRecordings(t *testing.T, names ...string) []collectortest.Scenario {
 		}
 	}
 	return out
+}
+
+// kitAccessPins are the clean run's access-posture values. alice, bob, and
+// carol are the IAM users, and alice and bob have MFA. alice and carol are
+// admins. Two access keys are active, and carol's is overdue for rotation.
+func kitAccessPins() map[string]any {
+	return map[string]any{
+		"/sign_in/sso_configured":                        true,
+		"/members/members_present":                       true,
+		"/members/member_count":                          3,
+		"/members/sso_member_count":                      2,
+		"/members/local_members_present":                 true,
+		"/members/local_member_count":                    3,
+		"/members/local_mfa_member_count":                2,
+		"/members/local_mfa_coverage_pct":                66,
+		"/members/inactive_member_count":                 0,
+		"/members/inactive_pct":                          0,
+		"/admins/admins_present":                         true,
+		"/admins/admin_count":                            2,
+		"/admins/admin_share_pct":                        67,
+		"/admins/local_admins_present":                   true,
+		"/admins/local_mfa_admin_count":                  1,
+		"/admins/local_admin_mfa_coverage_pct":           50,
+		"/root/root_accounts_present":                    true,
+		"/root/root_account_count":                       1,
+		"/root/root_mfa_coverage_pct":                    100,
+		"/root/root_access_keys_present":                 false,
+		"/credentials/credentials_present":               true,
+		"/credentials/credential_count":                  2,
+		"/credentials/never_expiring_pct":                100,
+		"/credentials/unused_pct":                        0,
+		"/credentials/rotation_overdue_credential_count": 1,
+		"/credentials/rotation_overdue_pct":              50,
+		"/connected_apps":                                collectortest.Absent,
+		"/scopes/0/id":                                   kitAccountID,
+		"/scopes/0/name":                                 "northwind-prod",
+		"/scopes/0/kind":                                 "account",
+		"/scopes/0/members/member_count":                 3,
+		"/scopes/0/admins/local_admin_mfa_coverage_pct":  50,
+		"/scopes/0/members/sso_member_count":             collectortest.Absent,
+		"/scopes/1":                                      collectortest.Absent,
+	}
+}
+
+// kitVulnPins are the clean run's vuln-scanning values. The instance has a
+// critical and a high finding, both overdue, and a low one. One of the two
+// ECR images is scanned and has a medium finding, and the function has a
+// high finding that is not overdue.
+func kitVulnPins() map[string]any {
+	return map[string]any{
+		"/provider":                                "aws",
+		"/scanners/0/scanner":                      "inspector",
+		"/scanners/0/category":                     "hosts",
+		"/scanners/0/enabled":                      true,
+		"/scanners/0/resource_count":               1,
+		"/scanners/0/scanned_resource_count":       1,
+		"/scanners/0/coverage_pct":                 100,
+		"/scanners/0/open_critical_present":        true,
+		"/scanners/0/open_high_present":            true,
+		"/scanners/0/overdue_present":              true,
+		"/scanners/0/open_critical_count":          1,
+		"/scanners/0/open_high_count":              1,
+		"/scanners/0/open_medium_count":            0,
+		"/scanners/0/open_low_count":               1,
+		"/scanners/0/overdue_critical_count":       1,
+		"/scanners/0/overdue_high_count":           1,
+		"/scanners/1/category":                     "containers",
+		"/scanners/1/resource_count":               2,
+		"/scanners/1/scanned_resource_count":       1,
+		"/scanners/1/coverage_pct":                 50,
+		"/scanners/1/open_critical_present":        false,
+		"/scanners/1/open_medium_count":            1,
+		"/scanners/2/category":                     "functions",
+		"/scanners/2/coverage_pct":                 100,
+		"/scanners/2/open_high_present":            true,
+		"/scanners/2/overdue_present":              false,
+		"/scanners/3":                              collectortest.Absent,
+		"/scopes/0/id":                             kitAccountID,
+		"/scopes/0/scanners/0/open_critical_count": 1,
+		"/scopes/1":                                collectortest.Absent,
+	}
 }

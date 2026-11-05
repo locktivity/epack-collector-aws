@@ -54,6 +54,12 @@ type Config struct {
 	// Wait pauses between polls, such as for the IAM credential report. It
 	// defaults to sleeping.
 	Wait func(ctx context.Context, d time.Duration) error `json:"-"`
+
+	// SkipAccessPosture and SkipVulnScanning are true when the run leaves out
+	// the access-posture or vuln-scanning artifact. The calls that feed only
+	// that artifact are then not made.
+	SkipAccessPosture bool `json:"-"`
+	SkipVulnScanning  bool `json:"-"`
 }
 
 // AccountConfig holds configuration for a single AWS account.
@@ -124,6 +130,14 @@ type AccountPosture struct {
 	KMS             KMSMetrics            `json:"kms"`
 	SecretsManager  SecretsManagerMetrics `json:"secrets_manager"`
 	SSMParameters   SSMParametersMetrics  `json:"ssm_parameters"`
+
+	// admins is which IAM users have administrator access, for the
+	// access-posture artifact.
+	admins iamAdmins
+
+	// inspector is what Amazon Inspector reports in each scanned region, for
+	// the vuln-scanning artifact.
+	inspector inspectorScan
 }
 
 // IAMMetrics contains IAM security posture.
@@ -207,6 +221,14 @@ type IAMMetrics struct {
 	// Internal: present (with possibly-empty Users) when collected at internal;
 	// absent when not collected.
 	CredentialReport *IAMCredentialReport `json:"credential_report,omitempty"`
+
+	// report is the credential report, which the admin check reads its users
+	// from. It is nil when the report could not be read.
+	report *aws.CredentialReport
+
+	// usage is what the credential report shows of the users' activity and
+	// access keys, for the access-posture artifact.
+	usage iamUsage
 }
 
 // IAMCredentialReport is the internal-level per-user activity inventory derived
@@ -220,11 +242,12 @@ type IAMCredentialReport struct {
 // IAMCredentialReportUser is a single user row from the credential report.
 // Nil timestamps mean "never" (e.g., a key that has never been used, a password
 // that has never been changed). The root account is reported with UserName
-// "<root_account>" matching AWS's own naming.
+// "<root_account>" matching AWS's own naming. PasswordEnabled is nil for the
+// root account, whose row has not_supported in that column.
 type IAMCredentialReportUser struct {
 	UserName                  string `json:"user_name"`
 	UserCreationTime          string `json:"user_creation_time,omitempty"`
-	PasswordEnabled           bool   `json:"password_enabled"`
+	PasswordEnabled           *bool  `json:"password_enabled,omitempty"`
 	PasswordLastUsed          string `json:"password_last_used,omitempty"`
 	PasswordLastChanged       string `json:"password_last_changed,omitempty"`
 	PasswordNextRotation      string `json:"password_next_rotation,omitempty"`
@@ -390,11 +413,14 @@ type S3BucketLifecycle struct {
 
 // S3LifecycleRule is one rule from a bucket's lifecycle configuration.
 type S3LifecycleRule struct {
-	ID          string   `json:"id,omitempty"`
-	Status      string   `json:"status"`
-	Prefix      string   `json:"prefix,omitempty"`
-	Transitions []string `json:"transitions,omitempty"`
-	Expiration  string   `json:"expiration,omitempty"`
+	ID                    string            `json:"id,omitempty"`
+	Status                string            `json:"status"`
+	Prefix                string            `json:"prefix,omitempty"`
+	Tags                  map[string]string `json:"tags,omitempty"`
+	ObjectSizeGreaterThan int64             `json:"object_size_greater_than,omitempty"`
+	ObjectSizeLessThan    int64             `json:"object_size_less_than,omitempty"`
+	Transitions           []string          `json:"transitions,omitempty"`
+	Expiration            string            `json:"expiration,omitempty"`
 }
 
 // RDSMetrics contains RDS security posture.
@@ -404,8 +430,8 @@ type S3LifecycleRule struct {
 type RDSMetrics struct {
 	// Trust: the aggregates cover only regions that evaluated successfully.
 	// They are meaningful only when regions_failed is empty. DatabaseCount is
-	// the instance + cluster total, so a consumer can tell vacuous aggregates
-	// (zero databases) from real ones.
+	// the clusters plus the instances outside an Aurora cluster, so a consumer
+	// can tell vacuous aggregates (zero databases) from real ones.
 	RegionsEvaluatedCount int      `json:"regions_evaluated_count"`
 	RegionsFailed         []string `json:"regions_failed,omitempty"`
 
@@ -543,6 +569,7 @@ type VPCSummary struct {
 	VPCID             string `json:"vpc_id"`
 	Region            string `json:"region"`
 	IsDefault         bool   `json:"is_default"`
+	Shared            bool   `json:"shared,omitempty"`
 	FlowLogsEnabled   *bool  `json:"flow_logs_enabled,omitempty"`
 	FlowLogsEvaluated *bool  `json:"flow_logs_evaluated,omitempty"`
 	FlowLogsErrorCode string `json:"flow_logs_error_code,omitempty"`
@@ -566,6 +593,9 @@ type SecurityGroupSummary struct {
 
 	// Internal:
 	IngressRules []SGIngressRule `json:"ingress_rules,omitempty"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // SGIngressRule is one ingress rule from a security group. Protocol "-1" means
@@ -575,11 +605,12 @@ type SecurityGroupSummary struct {
 // SGs and tier-to-tier rules). A rule with neither CIDRBlocks nor SourceSGIDs
 // populated is degenerate.
 type SGIngressRule struct {
-	Protocol    string   `json:"protocol"`
-	FromPort    int      `json:"from_port"`
-	ToPort      int      `json:"to_port"`
-	CIDRBlocks  []string `json:"cidr_blocks,omitempty"`
-	SourceSGIDs []string `json:"source_sg_ids,omitempty"`
+	Protocol      string   `json:"protocol"`
+	FromPort      int      `json:"from_port"`
+	ToPort        int      `json:"to_port"`
+	CIDRBlocks    []string `json:"cidr_blocks,omitempty"`
+	SourceSGIDs   []string `json:"source_sg_ids,omitempty"`
+	PrefixListIDs []string `json:"prefix_list_ids,omitempty"`
 }
 
 // AccountSecurity contains account-level security services status.
@@ -659,6 +690,7 @@ type CloudTrailTrail struct {
 	TrailStatusEvaluated     bool   `json:"trail_status_evaluated"`
 	TrailStatusInferred      bool   `json:"trail_status_inferred,omitempty"`
 	TrailStatusErrorCode     string `json:"trail_status_error_code,omitempty"`
+	ManagementEvents         string `json:"management_events,omitempty"`
 
 	// Internal:
 	KMSKeyARN         string `json:"kms_key_arn,omitempty"`
@@ -686,8 +718,9 @@ type ConfigStatus struct {
 	// Internal: rule-by-rule compliance state. Lets a reviewer see which
 	// specific managed or custom rules are firing without needing console
 	// access. Truncated at ConfigRulesCap to keep artifact size bounded.
-	// Present (possibly []) when collected at internal and Config is enabled;
-	// absent when not collected. Truncation companions emit at the same level.
+	// Present (possibly []) when collected at internal, with or without a
+	// recorder, and absent when not collected. Truncation companions emit at
+	// the same level.
 	Rules             []ConfigRuleRow `json:"rules,omitzero"`
 	RulesTruncated    bool            `json:"rules_truncated"`
 	RulesDroppedCount int             `json:"rules_dropped_count"`
@@ -770,8 +803,10 @@ type AccessAnalyzerRow struct {
 // state — important because GuardDuty is regional and a single account can
 // have it enabled in some regions but not others.
 type GuardDutyStatus struct {
-	// Trust:
+	// Trust: EnabledInAllRegions is true when every scanned region has a
+	// detector whose status is ENABLED.
 	Enabled                         bool `json:"enabled"`
+	EnabledInAllRegions             bool `json:"enabled_in_all_regions"`
 	UnremediatedFindingsOver48Hours int  `json:"unremediated_findings_over_48h"`
 
 	// Trust summary plus audit-level rows; see the type's own doc.
@@ -994,7 +1029,7 @@ type AutoScalingGroupRow struct {
 	DesiredCapacity               int32  `json:"desired_capacity"`
 	AvailabilityZoneCount         int    `json:"availability_zone_count"`
 	HealthCheckType               string `json:"health_check_type,omitempty"`
-	HealthCheckGracePeriodSeconds int32  `json:"health_check_grace_period_seconds,omitempty"`
+	HealthCheckGracePeriodSeconds *int32 `json:"health_check_grace_period_seconds,omitempty"`
 	UsesLaunchTemplate            bool   `json:"uses_launch_template"`
 	LoadBalanced                  bool   `json:"load_balanced"`
 	SuspendedProcessCount         int    `json:"suspended_process_count"`
@@ -1046,19 +1081,19 @@ type ECSServiceRow struct {
 	DesiredCount                  int32    `json:"desired_count"`
 	RunningCount                  int32    `json:"running_count"`
 	AutoScaled                    bool     `json:"auto_scaled"`
-	MinCapacity                   int32    `json:"min_capacity,omitempty"`
-	MaxCapacity                   int32    `json:"max_capacity,omitempty"`
+	MinCapacity                   *int32   `json:"min_capacity,omitempty"`
+	MaxCapacity                   *int32   `json:"max_capacity,omitempty"`
 	ScalingPolicyTypes            []string `json:"scaling_policy_types,omitempty"`
 	ScalingMetrics                []string `json:"scaling_metrics,omitempty"`
 	CircuitBreakerEnabled         bool     `json:"circuit_breaker_enabled"`
 	CircuitBreakerRollback        bool     `json:"circuit_breaker_rollback"`
-	MinimumHealthyPercent         int32    `json:"minimum_healthy_percent,omitempty"`
+	MinimumHealthyPercent         *int32   `json:"minimum_healthy_percent,omitempty"`
 	MaximumPercent                int32    `json:"maximum_percent,omitempty"`
 	AssignsPublicIP               bool     `json:"assigns_public_ip"`
 	SubnetCount                   int      `json:"subnet_count"`
 	LoadBalanced                  bool     `json:"load_balanced"`
 	ExecuteCommandEnabled         bool     `json:"execute_command_enabled"`
-	HealthCheckGracePeriodSeconds int32    `json:"health_check_grace_period_seconds,omitempty"`
+	HealthCheckGracePeriodSeconds *int32   `json:"health_check_grace_period_seconds,omitempty"`
 	ScalingUnresolved             bool     `json:"scaling_unresolved,omitempty"`
 
 	// missing holds the values a failed read left unknown.
@@ -1172,13 +1207,14 @@ type WebACLRow struct {
 
 // WAFRuleRow is one rule's enforcement posture within a web ACL.
 type WAFRuleRow struct {
-	Name                 string `json:"name"`
-	Priority             int32  `json:"priority"`
-	Action               string `json:"action"`
-	RateBased            bool   `json:"rate_based,omitempty"`
-	RateLimit            int64  `json:"rate_limit,omitempty"`
-	AggregateKeyType     string `json:"aggregate_key_type,omitempty"`
-	ManagedRuleGroupName string `json:"managed_rule_group_name,omitempty"`
+	Name                  string `json:"name"`
+	Priority              int32  `json:"priority"`
+	Action                string `json:"action"`
+	RateBased             bool   `json:"rate_based,omitempty"`
+	RateLimit             int64  `json:"rate_limit,omitempty"`
+	AggregateKeyType      string `json:"aggregate_key_type,omitempty"`
+	ManagedRuleGroupName  string `json:"managed_rule_group_name,omitempty"`
+	RateBasedBlockInGroup bool   `json:"rate_based_block_in_group,omitempty"`
 }
 
 // CloudFrontMetrics covers distribution transport enforcement on both hops:
@@ -1224,6 +1260,9 @@ type CloudFrontDistributionRow struct {
 	MatchViewerOriginCount int      `json:"match_viewer_origin_count"`
 	HTTPSOnlyOriginCount   int      `json:"https_only_origin_count"`
 	S3OriginCount          int      `json:"s3_origin_count"`
+
+	// missing holds the values a failed read left unknown.
+	missing unread
 }
 
 // LoadBalancerMetrics covers load balancer transport enforcement: which hops
@@ -1296,7 +1335,7 @@ type TargetGroupRow struct {
 
 // ListenerRow is one listener's transport configuration.
 type ListenerRow struct {
-	Port             int32  `json:"port"`
+	Port             *int32 `json:"port,omitempty"`
 	Protocol         string `json:"protocol"`
 	SSLPolicy        string `json:"ssl_policy,omitempty"`
 	RedirectsToHTTPS bool   `json:"redirects_to_https"`
@@ -1332,7 +1371,7 @@ type PublicResourceRow struct {
 	ID        string `json:"id"`
 	Name      string `json:"name,omitempty"`
 	Region    string `json:"region"`
-	Encrypted bool   `json:"encrypted"`
+	Encrypted *bool  `json:"encrypted,omitempty"`
 	CreatedAt string `json:"created_at,omitempty"`
 }
 
@@ -1376,7 +1415,7 @@ type CloudWatchAlarmRow struct {
 	MetricName         string   `json:"metric_name"`
 	ComparisonOperator string   `json:"comparison_operator"`
 	Threshold          *float64 `json:"threshold,omitempty"`
-	EvaluationPeriods  int32    `json:"evaluation_periods"`
+	EvaluationPeriods  *int32   `json:"evaluation_periods,omitempty"`
 	ActionsEnabled     bool     `json:"actions_enabled"`
 	StateValue         string   `json:"state_value"`
 	NotificationTopics int      `json:"notification_topics"`

@@ -79,7 +79,11 @@ func (c *AWSClient) DescribeIdentityCenterPermissionSets(ctx context.Context, re
 		if err != nil {
 			return nil, err
 		}
-		ps.ManagedPoliciesCount = len(mp)
+		customer, err := countCustomerManagedPolicies(ctx, client, instanceARN, arn)
+		if err != nil {
+			return nil, err
+		}
+		ps.ManagedPoliciesCount = len(mp) + customer
 		if withInternalEnrichment {
 			ps.ManagedPolicyARNs = mp
 			inlinePresent, err := permissionSetHasInlinePolicy(ctx, client, instanceARN, arn)
@@ -204,6 +208,28 @@ func listManagedPoliciesForPermissionSet(ctx context.Context, client *ssoadmin.C
 		}
 		if resp.NextToken == nil || *resp.NextToken == "" {
 			return arns, nil
+		}
+		nextToken = resp.NextToken
+	}
+}
+
+// countCustomerManagedPolicies counts the customer managed policies attached
+// to a permission set, which ListManagedPoliciesInPermissionSet leaves out.
+func countCustomerManagedPolicies(ctx context.Context, client *ssoadmin.Client, instanceARN, psARN string) (int, error) {
+	count := 0
+	var nextToken *string
+	for {
+		resp, err := client.ListCustomerManagedPolicyReferencesInPermissionSet(ctx, &ssoadmin.ListCustomerManagedPolicyReferencesInPermissionSetInput{
+			InstanceArn:      aws.String(instanceARN),
+			PermissionSetArn: aws.String(psARN),
+			NextToken:        nextToken,
+		})
+		if err != nil {
+			return 0, fmt.Errorf("listing customer managed policies for permission set %s: %w", psARN, err)
+		}
+		count += len(resp.CustomerManagedPolicyReferences)
+		if resp.NextToken == nil || *resp.NextToken == "" {
+			return count, nil
 		}
 		nextToken = resp.NextToken
 	}
