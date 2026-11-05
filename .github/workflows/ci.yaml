@@ -12,9 +12,11 @@ permissions:
 
 jobs:
   collector:
-    uses: locktivity/epack/.github/workflows/collector-ci.yaml@cf4107a5798b6b442e821e7ddcff50ceaa82e8a0 # v0.10.0
+    uses: locktivity/epack/.github/workflows/collector-ci.yaml@39624edf371f96e4a997170c7e84983c327dda41 # v0.10.0 plus test-timeout
     with:
       name: aws
+      # The test kit runs past 10 minutes under the race detector.
+      test-timeout: 30m
       profile-url: ${{ vars.EVIDENCE_PROFILE_URL }}
       conformance-secrets: AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
       checks: |
