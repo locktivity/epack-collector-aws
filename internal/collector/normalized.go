@@ -231,6 +231,7 @@ func toCloudPosture(o *Output, gaps *gapLog) *CloudPosture {
 		}
 		if gaps != nil {
 			mirrorNormalizedGaps(gaps, i, &normalized, audit)
+			gaps.movedDeprecated(i)
 		}
 		posture.Accounts = append(posture.Accounts, normalized)
 	}
@@ -246,6 +247,7 @@ func toCloudPosture(o *Output, gaps *gapLog) *CloudPosture {
 		}
 		posture.Accounts = append(posture.Accounts, stub)
 		if gaps != nil {
+			gaps.movedDeprecated(j)
 			for _, metric := range normalizedSources {
 				if metric.audit && !audit {
 					continue
@@ -260,6 +262,9 @@ func toCloudPosture(o *Output, gaps *gapLog) *CloudPosture {
 		workforceGaps = newGapLog(nil)
 	}
 	posture.WorkforceSignIn = normalizedWorkforceSignIn(o, workforceGaps)
+	if gaps != nil {
+		gaps.rec.Moved(componentsdk.Location{Path: cloudPosturePath, Pointer: "/workforce_sign_in"}, accessPostureArtifact)
+	}
 
 	return posture
 }

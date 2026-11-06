@@ -1,7 +1,9 @@
 package collector
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -295,7 +297,9 @@ func TestSSOConfiguredOf(t *testing.T) {
 }
 
 // A collect list that leaves out the access-posture and vuln-scanning files
-// skips the calls only they need, and records each file as not shared.
+// skips the calls only they need, and records each file as not shared. The
+// deprecated cloud-posture blocks that moved to them are left out too, each
+// with a not_shared gap.
 func TestCollectLeavesOutAccessAndVulnScanning(t *testing.T) {
 	isolateAWSEnvironment(t)
 	config := kitConfig()
@@ -325,4 +329,60 @@ func TestCollectLeavesOutAccessAndVulnScanning(t *testing.T) {
 			t.Errorf("%s has no not_shared gap", schemaID)
 		}
 	}
+	var posture struct {
+		Accounts        []map[string]any `json:"accounts"`
+		WorkforceSignIn any              `json:"workforce_sign_in"`
+	}
+	for _, a := range res.Artifacts {
+		if a.Path == cloudPosturePath {
+			if err := json.Unmarshal(a.Data, &posture); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(posture.Accounts) == 0 || posture.WorkforceSignIn != nil {
+		t.Errorf("cloud-posture has %d accounts and workforce_sign_in %v, want accounts and no workforce_sign_in", len(posture.Accounts), posture.WorkforceSignIn)
+	}
+	blocks := []string{"/workforce_sign_in"}
+	for i, account := range posture.Accounts {
+		for _, block := range []string{"iam", "vuln_scanning"} {
+			if account[block] != nil {
+				t.Errorf("account %d has %s = %v, which moved to a file collect leaves out", i, block, account[block])
+			}
+			blocks = append(blocks, fmt.Sprintf("/accounts/%d/%s", i, block))
+		}
+	}
+	for _, pointer := range blocks {
+		if g := gapAt(res, cloudPosturePath, pointer); g == nil || g.Code != componentsdk.CodeNotShared {
+			t.Errorf("gap at %s = %+v, want not_shared", pointer, g)
+		}
+	}
+	for _, g := range res.Result.Gaps {
+		if g.Path == cloudPosturePath && (strings.Contains(g.Pointer, "/iam/") || strings.Contains(g.Pointer, "/vuln_scanning/") || strings.HasPrefix(g.Pointer, "/workforce_sign_in/")) {
+			t.Errorf("gap %+v is inside a block the pack does not hold", g)
+		}
+	}
+}
+
+// With every kind collected, cloud-posture keeps the deprecated blocks.
+func TestTheDeprecatedBlocksStayWithEveryKindCollected(t *testing.T) {
+	isolateAWSEnvironment(t)
+	res := runKit(t, kitConfig(), kitSecrets(), kitResponses())
+	for _, a := range res.Artifacts {
+		if a.Path != cloudPosturePath {
+			continue
+		}
+		var posture struct {
+			Accounts        []map[string]any `json:"accounts"`
+			WorkforceSignIn any              `json:"workforce_sign_in"`
+		}
+		if err := json.Unmarshal(a.Data, &posture); err != nil {
+			t.Fatal(err)
+		}
+		if len(posture.Accounts) == 0 || posture.Accounts[0]["iam"] == nil || posture.Accounts[0]["vuln_scanning"] == nil || posture.WorkforceSignIn == nil {
+			t.Errorf("cloud-posture = %+v, want the deprecated blocks", posture)
+		}
+		return
+	}
+	t.Fatalf("no %s in %d artifacts", cloudPosturePath, len(res.Artifacts))
 }
