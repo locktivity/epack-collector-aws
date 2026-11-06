@@ -213,19 +213,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -559,19 +559,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -1363,19 +1363,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -1691,19 +1691,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -2029,19 +2029,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -2337,19 +2337,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -2581,19 +2581,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -3129,19 +3129,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ]
       },
@@ -3365,19 +3365,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -3711,19 +3711,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -4498,19 +4498,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -4826,19 +4826,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -5164,19 +5164,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -5604,19 +5604,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -5848,19 +5848,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -6470,19 +6470,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ]
       },
@@ -6724,31 +6724,31 @@
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:184"
+            "line": "internal/collector/normalized.go:199"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:202"
+            "line": "internal/collector/normalized.go:217"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:212"
+            "line": "internal/collector/normalized.go:229"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:213"
+            "line": "internal/collector/normalized.go:230"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:221"
+            "line": "internal/collector/normalized.go:238"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:227"
+            "line": "internal/collector/normalized.go:244"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:228"
+            "line": "internal/collector/normalized.go:245"
           },
           {
             "role": "input",
@@ -6773,23 +6773,23 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:317"
+            "line": "internal/collector/normalized.go:340"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:318"
+            "line": "internal/collector/normalized.go:341"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:422"
+            "line": "internal/collector/normalized.go:463"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:425"
+            "line": "internal/collector/normalized.go:466"
           },
           {
             "role": "input",
@@ -6864,31 +6864,31 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:285"
+            "line": "internal/collector/normalized.go:308"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:286"
+            "line": "internal/collector/normalized.go:309"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:359"
+            "line": "internal/collector/normalized.go:400"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:367"
+            "line": "internal/collector/normalized.go:408"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:368"
+            "line": "internal/collector/normalized.go:409"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           },
           {
             "role": "input",
@@ -7000,23 +7000,23 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:283"
+            "line": "internal/collector/normalized.go:306"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:284"
+            "line": "internal/collector/normalized.go:307"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:359"
+            "line": "internal/collector/normalized.go:400"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:362"
+            "line": "internal/collector/normalized.go:403"
           },
           {
             "role": "input",
@@ -7107,31 +7107,31 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:287"
+            "line": "internal/collector/normalized.go:310"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:288"
+            "line": "internal/collector/normalized.go:311"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:359"
+            "line": "internal/collector/normalized.go:400"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:367"
+            "line": "internal/collector/normalized.go:408"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:369"
+            "line": "internal/collector/normalized.go:410"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           },
           {
             "role": "condition",
@@ -7186,44 +7186,44 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:289"
+            "line": "internal/collector/normalized.go:312"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:290"
+            "line": "internal/collector/normalized.go:313"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:359"
+            "line": "internal/collector/normalized.go:400"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:363"
+            "line": "internal/collector/normalized.go:404"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:445",
-            "end": 451
+            "line": "internal/collector/normalized.go:486",
+            "end": 492
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           },
           {
             "role": "input",
@@ -7330,31 +7330,31 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
-          },
-          {
-            "role": "condition",
             "line": "internal/collector/normalized.go:293"
           },
           {
-            "role": "assign",
-            "line": "internal/collector/normalized.go:294"
-          },
-          {
             "role": "condition",
-            "line": "internal/collector/normalized.go:359"
-          },
-          {
-            "role": "condition",
-            "line": "internal/collector/normalized.go:367"
+            "line": "internal/collector/normalized.go:316"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:370"
+            "line": "internal/collector/normalized.go:317"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:400"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:408"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/normalized.go:411"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           },
           {
             "role": "condition",
@@ -7409,48 +7409,48 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:295"
+            "line": "internal/collector/normalized.go:318"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:296"
+            "line": "internal/collector/normalized.go:319"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:359"
+            "line": "internal/collector/normalized.go:400"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:367"
+            "line": "internal/collector/normalized.go:408"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:371"
+            "line": "internal/collector/normalized.go:412"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:445",
-            "end": 451
+            "line": "internal/collector/normalized.go:486",
+            "end": 492
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           },
           {
             "role": "input",
@@ -7573,43 +7573,43 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:291"
+            "line": "internal/collector/normalized.go:314"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:292"
+            "line": "internal/collector/normalized.go:315"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:359"
+            "line": "internal/collector/normalized.go:400"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:364"
+            "line": "internal/collector/normalized.go:405"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:365"
+            "line": "internal/collector/normalized.go:406"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           },
           {
             "role": "input",
@@ -7688,6 +7688,700 @@
           {
             "path": "artifacts/aws.details.json",
             "pointer": "/accounts/*/rds/database_count"
+          }
+        ]
+      },
+      "/accounts/*/iam/access_key_rotation_compliant_pct": {
+        "operations": [
+          "aws.iam.GenerateCredentialReport",
+          "aws.iam.GetCredentialReport"
+        ],
+        "code": [
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:766"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:767"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:771"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:777"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:778"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:779"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:786"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:792"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:793"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:51"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:53"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/deprecated.go:84",
+            "end": 89
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:61"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:62"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:76"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:485"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:608"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:609"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:610"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:611"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:293"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:350"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/normalized.go:351"
+          }
+        ],
+        "gaps": [
+          "internal/collector/iam.go:65"
+        ],
+        "copies": [
+          {
+            "path": "artifacts/aws.details.json",
+            "pointer": "/accounts/*/iam/access_keys_rotated"
+          }
+        ]
+      },
+      "/accounts/*/iam/access_key_user_count": {
+        "operations": [
+          "aws.iam.GenerateCredentialReport",
+          "aws.iam.GetCredentialReport"
+        ],
+        "code": [
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:766"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:767"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:771"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:777"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:778"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:779"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:786"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:792"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:793"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:51"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:55"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:61"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:62"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:76"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:482"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:608"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:609"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:293"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:354"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/normalized.go:355"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/normalized.go:494"
+          }
+        ],
+        "gaps": [
+          "internal/collector/iam.go:65"
+        ],
+        "copies": [
+          {
+            "path": "artifacts/aws.details.json",
+            "pointer": "/accounts/*/iam/access_key_user_count"
+          }
+        ]
+      },
+      "/accounts/*/iam/mfa_coverage_pct": {
+        "operations": [
+          "aws.iam.GenerateCredentialReport",
+          "aws.iam.GetCredentialReport"
+        ],
+        "code": [
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:766"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:767"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:771"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:777"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:778"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:779"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:786"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:790"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:51"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:52"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/deprecated.go:84",
+            "end": 89
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:61"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:62"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:76"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:483"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:602"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:604"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:605"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:293"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:344"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/normalized.go:345"
+          }
+        ],
+        "gaps": [
+          "internal/collector/iam.go:65"
+        ],
+        "copies": [
+          {
+            "path": "artifacts/aws.details.json",
+            "pointer": "/accounts/*/iam/mfa_enabled"
+          }
+        ]
+      },
+      "/accounts/*/iam/root_access_protected": {
+        "code": [
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:766"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:767"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:771"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:777"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:778"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:779"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:786"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:790"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:60"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:65"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:205"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:210"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:220"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:221"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:235"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:559"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:560"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:565"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:566"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/network.go:316",
+            "end": 318
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:293"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:348"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/normalized.go:349"
+          }
+        ],
+        "copies": [
+          {
+            "path": "artifacts/aws.details.json",
+            "pointer": "/accounts/*/iam/root_access_protected"
+          }
+        ]
+      },
+      "/accounts/*/iam/root_mfa_enabled": {
+        "operations": [
+          "aws.iam.GetAccountSummary"
+        ],
+        "code": [
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:766"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:767"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:771"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:776"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:777"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:778"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:779"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:786"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:790"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:60"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:64"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:205"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:210"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:220"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:221"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:222"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:223"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:231"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:559"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:560"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:562"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:563"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:564"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:565"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/network.go:316",
+            "end": 318
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:293"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:346"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/normalized.go:347"
+          }
+        ],
+        "gaps": [
+          "internal/collector/iam.go:233"
+        ],
+        "copies": [
+          {
+            "path": "artifacts/aws.details.json",
+            "pointer": "/accounts/*/iam/root_mfa_enabled"
+          }
+        ]
+      },
+      "/accounts/*/iam/saml_provider_count": {
+        "operations": [
+          "aws.iam.ListSAMLProviders"
+        ],
+        "code": [
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:924"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:928"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:929"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:930"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:57"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:58"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:150"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:151"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:159"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:160"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:161"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:164"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:167"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:172"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:293"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:356"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/normalized.go:357"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/normalized.go:494"
+          }
+        ],
+        "gaps": [
+          "internal/collector/iam.go:157"
+        ],
+        "copies": [
+          {
+            "path": "artifacts/aws.details.json",
+            "pointer": "/accounts/*/iam/saml_provider_count"
+          }
+        ]
+      },
+      "/accounts/*/iam/user_count": {
+        "operations": [
+          "aws.iam.GenerateCredentialReport",
+          "aws.iam.GetCredentialReport"
+        ],
+        "code": [
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:51"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:54"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:61"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/iam.go:62"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:76"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:481"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/iam.go:602"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:293"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:352"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/normalized.go:353"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/normalized.go:494"
+          }
+        ],
+        "gaps": [
+          "internal/collector/iam.go:65"
+        ],
+        "copies": [
+          {
+            "path": "artifacts/aws.details.json",
+            "pointer": "/accounts/*/iam/iam_user_count"
           }
         ]
       },
@@ -7780,27 +8474,27 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:299"
+            "line": "internal/collector/normalized.go:322"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:300"
+            "line": "internal/collector/normalized.go:323"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:382"
+            "line": "internal/collector/normalized.go:423"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:389"
+            "line": "internal/collector/normalized.go:430"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:390"
+            "line": "internal/collector/normalized.go:431"
           }
         ],
         "gaps": [
@@ -7890,27 +8584,27 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:297"
+            "line": "internal/collector/normalized.go:320"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:298"
+            "line": "internal/collector/normalized.go:321"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:382"
+            "line": "internal/collector/normalized.go:423"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:385"
+            "line": "internal/collector/normalized.go:426"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:386"
+            "line": "internal/collector/normalized.go:427"
           }
         ],
         "gaps": [
@@ -8000,27 +8694,27 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:301"
+            "line": "internal/collector/normalized.go:324"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:302"
+            "line": "internal/collector/normalized.go:325"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:382"
+            "line": "internal/collector/normalized.go:423"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:385"
+            "line": "internal/collector/normalized.go:426"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:387"
+            "line": "internal/collector/normalized.go:428"
           }
         ],
         "gaps": [
@@ -8122,27 +8816,27 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:303"
+            "line": "internal/collector/normalized.go:326"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:304"
+            "line": "internal/collector/normalized.go:327"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:382"
+            "line": "internal/collector/normalized.go:423"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:389"
+            "line": "internal/collector/normalized.go:430"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:391"
+            "line": "internal/collector/normalized.go:432"
           }
         ],
         "gaps": [
@@ -8204,31 +8898,31 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:311"
+            "line": "internal/collector/normalized.go:334"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:312"
+            "line": "internal/collector/normalized.go:335"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:403"
+            "line": "internal/collector/normalized.go:444"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:409"
+            "line": "internal/collector/normalized.go:450"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:412"
+            "line": "internal/collector/normalized.go:453"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           }
         ],
         "gaps": [
@@ -8307,44 +9001,44 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:315"
+            "line": "internal/collector/normalized.go:338"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:316"
+            "line": "internal/collector/normalized.go:339"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:403"
+            "line": "internal/collector/normalized.go:444"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:408"
+            "line": "internal/collector/normalized.go:449"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:445",
-            "end": 451
+            "line": "internal/collector/normalized.go:486",
+            "end": 492
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -8387,31 +9081,31 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:307"
+            "line": "internal/collector/normalized.go:330"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:308"
+            "line": "internal/collector/normalized.go:331"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:403"
+            "line": "internal/collector/normalized.go:444"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:409"
+            "line": "internal/collector/normalized.go:450"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:410"
+            "line": "internal/collector/normalized.go:451"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           }
         ],
         "gaps": [
@@ -8459,23 +9153,23 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:305"
+            "line": "internal/collector/normalized.go:328"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:306"
+            "line": "internal/collector/normalized.go:329"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:403"
+            "line": "internal/collector/normalized.go:444"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:406"
+            "line": "internal/collector/normalized.go:447"
           }
         ],
         "gaps": [
@@ -8539,31 +9233,31 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:309"
+            "line": "internal/collector/normalized.go:332"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:310"
+            "line": "internal/collector/normalized.go:333"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:403"
+            "line": "internal/collector/normalized.go:444"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:409"
+            "line": "internal/collector/normalized.go:450"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:411"
+            "line": "internal/collector/normalized.go:452"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           }
         ],
         "gaps": [
@@ -8644,44 +9338,44 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:313"
+            "line": "internal/collector/normalized.go:336"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:314"
+            "line": "internal/collector/normalized.go:337"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:403"
+            "line": "internal/collector/normalized.go:444"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:407"
+            "line": "internal/collector/normalized.go:448"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:445",
-            "end": 451
+            "line": "internal/collector/normalized.go:486",
+            "end": 492
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           }
         ],
         "gaps": [
@@ -8756,35 +9450,35 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:275"
+            "line": "internal/collector/normalized.go:298"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:276"
+            "line": "internal/collector/normalized.go:299"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:331"
+            "line": "internal/collector/normalized.go:372"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:338"
+            "line": "internal/collector/normalized.go:379"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:340"
+            "line": "internal/collector/normalized.go:381"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:341"
+            "line": "internal/collector/normalized.go:382"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           },
           {
             "role": "input",
@@ -8890,48 +9584,48 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:279"
+            "line": "internal/collector/normalized.go:302"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:280"
+            "line": "internal/collector/normalized.go:303"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:331"
+            "line": "internal/collector/normalized.go:372"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:338"
+            "line": "internal/collector/normalized.go:379"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:339"
+            "line": "internal/collector/normalized.go:380"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:445",
-            "end": 451
+            "line": "internal/collector/normalized.go:486",
+            "end": 492
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           },
           {
             "role": "input",
@@ -8990,48 +9684,48 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:281"
+            "line": "internal/collector/normalized.go:304"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:282"
+            "line": "internal/collector/normalized.go:305"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:331"
+            "line": "internal/collector/normalized.go:372"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:344"
+            "line": "internal/collector/normalized.go:385"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:345"
+            "line": "internal/collector/normalized.go:386"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:445",
-            "end": 451
+            "line": "internal/collector/normalized.go:486",
+            "end": 492
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           },
           {
             "role": "input",
@@ -9114,35 +9808,35 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:277"
+            "line": "internal/collector/normalized.go:300"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:278"
+            "line": "internal/collector/normalized.go:301"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:331"
+            "line": "internal/collector/normalized.go:372"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:344"
+            "line": "internal/collector/normalized.go:385"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:346"
+            "line": "internal/collector/normalized.go:387"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:347"
+            "line": "internal/collector/normalized.go:388"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           },
           {
             "role": "input",
@@ -9219,31 +9913,31 @@
         "code": [
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:273"
+            "line": "internal/collector/normalized.go:296"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:274"
+            "line": "internal/collector/normalized.go:297"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:331"
+            "line": "internal/collector/normalized.go:372"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:335"
+            "line": "internal/collector/normalized.go:376"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:336"
+            "line": "internal/collector/normalized.go:377"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           },
           {
             "role": "input",
@@ -9272,23 +9966,23 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:271"
+            "line": "internal/collector/normalized.go:294"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:272"
+            "line": "internal/collector/normalized.go:295"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:331"
+            "line": "internal/collector/normalized.go:372"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:334"
+            "line": "internal/collector/normalized.go:375"
           },
           {
             "role": "input",
@@ -9343,23 +10037,23 @@
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:270"
+            "line": "internal/collector/normalized.go:293"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:319"
+            "line": "internal/collector/normalized.go:342"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:320"
+            "line": "internal/collector/normalized.go:343"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:434"
+            "line": "internal/collector/normalized.go:475"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:437"
+            "line": "internal/collector/normalized.go:478"
           }
         ],
         "gaps": [
@@ -9370,6 +10064,184 @@
           {
             "path": "artifacts/aws.details.json",
             "pointer": "/accounts/*/account_security/guardduty/enabled_in_all_regions"
+          }
+        ]
+      },
+      "/accounts/*/vuln_scanning/enabled": {
+        "operations": [
+          "aws.ec2.DescribeRegions",
+          "aws.securityhub.GetFindings"
+        ],
+        "code": [
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:2755"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:2757"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:2764"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:2765"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:2769"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/account.go:649"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/account.go:663"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:74"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:77"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/network.go:316",
+            "end": 318
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:293"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:358"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/normalized.go:359"
+          }
+        ],
+        "gaps": [
+          "internal/collector/account.go:46",
+          "internal/collector/collector.go:188"
+        ],
+        "copies": [
+          {
+            "path": "artifacts/aws.details.json",
+            "pointer": "/accounts/*/account_security/inspector/enabled"
+          }
+        ]
+      },
+      "/accounts/*/vuln_scanning/unpatched_pct": {
+        "operations": [
+          "aws.ec2.DescribeRegions",
+          "aws.securityhub.GetFindings"
+        ],
+        "code": [
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:2752"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:2753"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:2755"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:2757"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:2764"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:2765"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:2771"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:2778"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:2780"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:2783"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/client.go:2784"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:2785"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:2791"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/client.go:2792"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/account.go:649"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/account.go:666"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:74"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:78"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/deprecated.go:84",
+            "end": 89
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:293"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/normalized.go:360"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/normalized.go:361"
+          }
+        ],
+        "gaps": [
+          "internal/collector/account.go:46",
+          "internal/collector/collector.go:188"
+        ],
+        "copies": [
+          {
+            "path": "artifacts/aws.details.json",
+            "pointer": "/accounts/*/account_security/inspector/unpatched_server_percent"
           }
         ]
       },
@@ -9457,19 +10329,19 @@
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:184"
+            "line": "internal/collector/normalized.go:199"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:195"
+            "line": "internal/collector/normalized.go:210"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:196"
+            "line": "internal/collector/normalized.go:211"
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           },
           {
             "role": "input",
@@ -9572,7 +10444,7 @@
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:189"
+            "line": "internal/collector/normalized.go:204"
           },
           {
             "role": "input",
@@ -9590,7 +10462,7 @@
         "code": [
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:187"
+            "line": "internal/collector/normalized.go:202"
           },
           {
             "role": "input",
@@ -9602,7 +10474,7 @@
         "code": [
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:188"
+            "line": "internal/collector/normalized.go:203"
           }
         ]
       },
@@ -9610,8 +10482,535 @@
         "code": [
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:186"
+            "line": "internal/collector/normalized.go:201"
           }
+        ]
+      },
+      "/workforce_sign_in/in_use": {
+        "operations": [
+          "aws.ec2.DescribeRegions",
+          "aws.ssoadmin.ListInstances",
+          "aws.ssoadmin.ListPermissionSets"
+        ],
+        "code": [
+          {
+            "role": "input",
+            "line": "internal/collector/collector.go:76"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/collector.go:77"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/collector.go:79"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/collector.go:92"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/collector.go:98"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/collector.go:101"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/collector.go:102"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/collector.go:106"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/collector.go:111"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/collector.go:117"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:110"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:111"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:115"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:116"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:118"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:119"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:120"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:134"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:135"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:136"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:139"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:140"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:141"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:142"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:144"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:145"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:147"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:148"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:151"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:152"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:153"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:158"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:159"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:160"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:161"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:163"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:164"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:171"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/network.go:316",
+            "end": 318
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/posture.go:1879"
+          }
+        ],
+        "gaps": [
+          "internal/collector/collector.go:188",
+          "internal/collector/identity_center.go:62",
+          "internal/collector/identity_center.go:169"
+        ]
+      },
+      "/workforce_sign_in/mfa_source": {
+        "operations": [
+          "aws.ec2.DescribeRegions",
+          "aws.identitystore.ListUsers",
+          "aws.ssoadmin.ListInstances",
+          "aws.ssoadmin.ListPermissionSets"
+        ],
+        "code": [
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:30"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:33"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/collector.go:92"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/collector.go:98"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/collector.go:102"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/collector.go:117"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/deprecated.go:41",
+            "end": 46
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:112"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:115"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:118"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:119"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:121"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:122"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:123"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:125"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:127"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:129"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:130"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:158"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:172"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:173"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:175"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:179"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:180"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:182"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:183"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:185"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:188"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:189"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:61"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:65"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/identity_center.go:85"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:88"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/identity_center.go:95"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:96"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:97"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/identity_center.go:98"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/identity_center.go:101"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/identity_center.go:269",
+            "end": 277
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/posture.go:1879"
+          }
+        ],
+        "gaps": [
+          "internal/collector/collector.go:188",
+          "internal/collector/identity_center.go:62",
+          "internal/collector/identity_center.go:169"
+        ]
+      },
+      "/workforce_sign_in/user_count": {
+        "operations": [
+          "aws.ec2.DescribeRegions",
+          "aws.identitystore.ListUsers",
+          "aws.ssoadmin.ListInstances",
+          "aws.ssoadmin.ListPermissionSets"
+        ],
+        "code": [
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:25"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:27"
+          },
+          {
+            "role": "condition",
+            "line": "internal/aws/identity_center.go:30"
+          },
+          {
+            "role": "input",
+            "line": "internal/aws/identity_center.go:33"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/collector.go:76"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/collector.go:92"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/collector.go:98"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/collector.go:101"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/collector.go:102"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/collector.go:117"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:112"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:113"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:115"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:116"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:118"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:119"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:121"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:122"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:123"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:124"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:125"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:127"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:129"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:130"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:158"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:172"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:173"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:175"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/deprecated.go:179"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:182"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/deprecated.go:183"
+          },
+          {
+            "role": "assign",
+            "line": "internal/collector/deprecated.go:184"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:61"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:65"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/identity_center.go:85"
+          },
+          {
+            "role": "condition",
+            "line": "internal/collector/identity_center.go:88"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/identity_center.go:95"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/identity_center.go:101"
+          },
+          {
+            "role": "helper",
+            "line": "internal/collector/normalized.go:494"
+          },
+          {
+            "role": "input",
+            "line": "internal/collector/posture.go:1879"
+          }
+        ],
+        "gaps": [
+          "internal/collector/collector.go:188",
+          "internal/collector/identity_center.go:62",
+          "internal/collector/identity_center.go:169"
         ]
       }
     },
@@ -17358,7 +18757,7 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           }
         ],
         "gaps": [
@@ -17505,7 +18904,7 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           }
         ],
         "gaps": [
@@ -17561,7 +18960,7 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           }
         ],
         "gaps": [
@@ -21546,7 +22945,7 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:453"
+            "line": "internal/collector/normalized.go:494"
           }
         ],
         "gaps": [
@@ -53746,19 +55145,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           },
           {
             "role": "input",
@@ -55624,19 +57023,19 @@
           },
           {
             "role": "helper",
-            "line": "internal/collector/normalized.go:440"
+            "line": "internal/collector/normalized.go:481"
           },
           {
             "role": "input",
-            "line": "internal/collector/normalized.go:446"
+            "line": "internal/collector/normalized.go:487"
           },
           {
             "role": "condition",
-            "line": "internal/collector/normalized.go:447"
+            "line": "internal/collector/normalized.go:488"
           },
           {
             "role": "assign",
-            "line": "internal/collector/normalized.go:450"
+            "line": "internal/collector/normalized.go:491"
           },
           {
             "role": "input",
@@ -58772,6 +60171,7 @@
     "internal/collector/collector.go:104": "\t\t\taccountErrors = append(accountErrors, errMsg)",
     "internal/collector/collector.go:106": "\t\t\toutput.FailedAccounts = append(output.FailedAccounts, FailedAccountRecord{",
     "internal/collector/collector.go:107": "\t\t\t\tAccountID: accountIDFromRoleARN(acct.RoleARN),",
+    "internal/collector/collector.go:111": "\t\t\t\terr:       err,",
     "internal/collector/collector.go:117": "\t\toutput.Accounts = append(output.Accounts, *posture)",
     "internal/collector/collector.go:121": "\tallWarnings := append(warnings, c.warnings...)",
     "internal/collector/collector.go:124": "\tif len(accountErrors) \u003e 0 || len(allWarnings) \u003e 0 {",
@@ -58896,6 +60296,80 @@
     "internal/collector/collector.go:695": "\trecordRowsUnread(c, at.sub(\"waf\", \"web_acls\"), p.WAF.WebACLs, func(r *WebACLRow) unread { return r.missing })",
     "internal/collector/collector.go:710": "\tposture.IdentityCenter = c.collectIdentityCenter(steps.next(\"identity_center\", \"IAM Identity Center\"), client, regions, posture.AccountID, at, level)",
     "internal/collector/constants.go:124": "var DeprecatedLambdaRuntimes = map[string]bool{",
+    "internal/collector/deprecated.go:41": "func mfaSource(evidence string) string {",
+    "internal/collector/deprecated.go:42": "\tif evidence == mfaEvidenceManualRequired {",
+    "internal/collector/deprecated.go:43": "\t\treturn mfaSourceSignInService",
+    "internal/collector/deprecated.go:44": "\t}",
+    "internal/collector/deprecated.go:45": "\treturn evidence",
+    "internal/collector/deprecated.go:46": "}",
+    "internal/collector/deprecated.go:51": "\tif iam.CredentialReportEvaluated {",
+    "internal/collector/deprecated.go:52": "\t\tout.MFACoveragePct = pctFloat(iam.MFAEnabled)",
+    "internal/collector/deprecated.go:53": "\t\tout.AccessKeyRotationCompliantPct = pctFloat(iam.AccessKeysRotated)",
+    "internal/collector/deprecated.go:54": "\t\tout.UserCount = intPtr(iam.IAMUserCount)",
+    "internal/collector/deprecated.go:55": "\t\tout.AccessKeyUserCount = intPtr(iam.AccessKeyUserCount)",
+    "internal/collector/deprecated.go:57": "\tif iam.SAMLProviderCount != nil {",
+    "internal/collector/deprecated.go:58": "\t\tout.SAMLProviderCount = intPtr(*iam.SAMLProviderCount)",
+    "internal/collector/deprecated.go:60": "\tif iam.RootCredentialStateEvaluated {",
+    "internal/collector/deprecated.go:64": "\t\tout.RootMFAEnabled = boolPtr(iam.RootMFAEnabled || !iam.RootCredentialsPresent)",
+    "internal/collector/deprecated.go:65": "\t\tout.RootAccessProtected = boolPtr(iam.RootAccessProtected)",
+    "internal/collector/deprecated.go:74": "\tif !ins.StatusEvaluated {",
+    "internal/collector/deprecated.go:77": "\tout.Enabled = boolPtr(ins.Enabled)",
+    "internal/collector/deprecated.go:78": "\tout.UnpatchedPct = pctFloat(ins.UnpatchedServerPercent)",
+    "internal/collector/deprecated.go:84": "func pctFloat(pct *int) *float64 {",
+    "internal/collector/deprecated.go:85": "\tif pct == nil {",
+    "internal/collector/deprecated.go:86": "\t\treturn nil",
+    "internal/collector/deprecated.go:87": "\t}",
+    "internal/collector/deprecated.go:88": "\treturn float64Ptr(float64(*pct))",
+    "internal/collector/deprecated.go:89": "}",
+    "internal/collector/deprecated.go:110": "\t\tinUse                         bool",
+    "internal/collector/deprecated.go:111": "\t\tinstanceUnknown, rolesUnknown *reason",
+    "internal/collector/deprecated.go:112": "\t\tstores                        []string",
+    "internal/collector/deprecated.go:113": "\t\tdirectories                   = map[string]*directory{}",
+    "internal/collector/deprecated.go:115": "\tfor i, acct := range o.Accounts {",
+    "internal/collector/deprecated.go:116": "\t\tat := accountAt(i)",
+    "internal/collector/deprecated.go:118": "\t\tswitch instance, why := identityCenterInstanceSignal(acct, at, gaps); instance {",
+    "internal/collector/deprecated.go:119": "\t\tcase signalYes:",
+    "internal/collector/deprecated.go:120": "\t\t\tinUse = true",
+    "internal/collector/deprecated.go:121": "\t\t\td := directories[idc.IdentityStoreID]",
+    "internal/collector/deprecated.go:122": "\t\t\tif d == nil {",
+    "internal/collector/deprecated.go:123": "\t\t\t\td = \u0026directory{}",
+    "internal/collector/deprecated.go:124": "\t\t\t\tdirectories[idc.IdentityStoreID] = d",
+    "internal/collector/deprecated.go:125": "\t\t\t\tstores = append(stores, idc.IdentityStoreID)",
+    "internal/collector/deprecated.go:127": "\t\t\tswitch {",
+    "internal/collector/deprecated.go:129": "\t\t\tcase idc.MFAEvidence != \"\":",
+    "internal/collector/deprecated.go:130": "\t\t\t\td.read, d.users, d.withExternalID = true, idc.UserCount, idc.ExternalIDUserCount",
+    "internal/collector/deprecated.go:134": "\t\tcase signalUnknown:",
+    "internal/collector/deprecated.go:135": "\t\t\tif instanceUnknown == nil {",
+    "internal/collector/deprecated.go:136": "\t\t\t\tinstanceUnknown = \u0026reason{pointer: why}",
+    "internal/collector/deprecated.go:139": "\t\tswitch roles := acct.IAM.IdentityCenterRoleCount; {",
+    "internal/collector/deprecated.go:140": "\t\tcase roles == nil:",
+    "internal/collector/deprecated.go:141": "\t\t\tif rolesUnknown == nil {",
+    "internal/collector/deprecated.go:142": "\t\t\t\trolesUnknown = \u0026reason{pointer: at.p(\"iam\", \"identity_center_role_count\")}",
+    "internal/collector/deprecated.go:144": "\t\tcase *roles \u003e 0:",
+    "internal/collector/deprecated.go:145": "\t\t\tinUse = true",
+    "internal/collector/deprecated.go:147": "\t\tif providers := acct.IAM.IdentityCenterSAMLProviderCount; providers != nil \u0026\u0026 *providers \u003e 0 {",
+    "internal/collector/deprecated.go:148": "\t\t\tinUse = true",
+    "internal/collector/deprecated.go:151": "\tfor _, failed := range o.FailedAccounts {",
+    "internal/collector/deprecated.go:152": "\t\tif instanceUnknown == nil {",
+    "internal/collector/deprecated.go:153": "\t\t\tinstanceUnknown = \u0026reason{err: failed.err}",
+    "internal/collector/deprecated.go:158": "\tif !inUse {",
+    "internal/collector/deprecated.go:159": "\t\twhy := instanceUnknown",
+    "internal/collector/deprecated.go:160": "\t\tif why == nil {",
+    "internal/collector/deprecated.go:161": "\t\t\twhy = rolesUnknown",
+    "internal/collector/deprecated.go:163": "\t\tif why == nil {",
+    "internal/collector/deprecated.go:164": "\t\t\tout.InUse = boolPtr(false)",
+    "internal/collector/deprecated.go:171": "\tout.InUse = boolPtr(true)",
+    "internal/collector/deprecated.go:172": "\tusers, withExternalID := 0, 0",
+    "internal/collector/deprecated.go:173": "\tfor _, store := range stores {",
+    "internal/collector/deprecated.go:175": "\t\tif !d.read {",
+    "internal/collector/deprecated.go:179": "\t\tusers += d.users",
+    "internal/collector/deprecated.go:180": "\t\twithExternalID += d.withExternalID",
+    "internal/collector/deprecated.go:182": "\tswitch {",
+    "internal/collector/deprecated.go:183": "\tcase len(stores) \u003e 0:",
+    "internal/collector/deprecated.go:184": "\t\tout.UserCount = intPtr(users)",
+    "internal/collector/deprecated.go:185": "\t\tout.MFASource = mfaSource(identityCenterMFAEvidence(users, withExternalID))",
+    "internal/collector/deprecated.go:188": "\tdefault:",
+    "internal/collector/deprecated.go:189": "\t\tout.MFASource = mfaSource(mfaEvidenceUnknown)",
     "internal/collector/diagnostic.go:47": "func apiErrorCode(err error) string {",
     "internal/collector/diagnostic.go:48": "\tvar apiErr smithy.APIError",
     "internal/collector/diagnostic.go:49": "\tif errors.As(err, \u0026apiErr) {",
@@ -60194,120 +61668,138 @@
     "internal/collector/network.go:316": "func boolPtr(v bool) *bool {",
     "internal/collector/network.go:317": "\treturn \u0026v",
     "internal/collector/network.go:318": "}",
-    "internal/collector/normalized.go:184": "\taudit := componentsdk.Level(o.CollectedAtLevel).AtLeast(componentsdk.LevelAudit)",
-    "internal/collector/normalized.go:186": "\t\tSchemaVersion:        \"1.0.0\",",
-    "internal/collector/normalized.go:187": "\t\tCollectedAt:          o.CollectedAt,",
-    "internal/collector/normalized.go:188": "\t\tProvider:             \"aws\",",
-    "internal/collector/normalized.go:189": "\t\tAllAccountsCollected: boolPtr(len(o.FailedAccounts) == 0),",
-    "internal/collector/normalized.go:195": "\tif audit {",
-    "internal/collector/normalized.go:196": "\t\tposture.AccountsExpected = intPtr(len(o.Accounts) + len(o.FailedAccounts))",
-    "internal/collector/normalized.go:202": "\tfor i, acct := range o.Accounts {",
-    "internal/collector/normalized.go:212": "\t\tif audit {",
-    "internal/collector/normalized.go:213": "\t\t\tnormalized.AccountID = acct.AccountID",
-    "internal/collector/normalized.go:221": "\tfor _, failed := range o.FailedAccounts {",
-    "internal/collector/normalized.go:227": "\t\tif audit {",
-    "internal/collector/normalized.go:228": "\t\t\tstub.AccountID = failed.AccountID",
-    "internal/collector/normalized.go:270": "\tswitch field {",
-    "internal/collector/normalized.go:271": "\tcase \"storage/storage_resources_present\":",
-    "internal/collector/normalized.go:272": "\t\taccount.Storage.StorageResourcesPresent = nil",
-    "internal/collector/normalized.go:273": "\tcase \"storage/storage_resource_count\":",
-    "internal/collector/normalized.go:274": "\t\taccount.Storage.StorageResourceCount = nil",
-    "internal/collector/normalized.go:275": "\tcase \"storage/encrypted_storage_resource_count\":",
-    "internal/collector/normalized.go:276": "\t\taccount.Storage.EncryptedStorageResourceCount = nil",
-    "internal/collector/normalized.go:277": "\tcase \"storage/public_access_blocked_storage_resource_count\":",
-    "internal/collector/normalized.go:278": "\t\taccount.Storage.PublicAccessBlockedStorageResourceCount = nil",
-    "internal/collector/normalized.go:279": "\tcase \"storage/encryption_pct\":",
-    "internal/collector/normalized.go:280": "\t\taccount.Storage.EncryptionPct = Reading[float64]{}",
-    "internal/collector/normalized.go:281": "\tcase \"storage/public_access_blocked_pct\":",
-    "internal/collector/normalized.go:282": "\t\taccount.Storage.PublicAccessBlockedPct = Reading[float64]{}",
-    "internal/collector/normalized.go:283": "\tcase \"database/databases_present\":",
-    "internal/collector/normalized.go:284": "\t\taccount.Database.DatabasesPresent = nil",
-    "internal/collector/normalized.go:285": "\tcase \"database/database_count\":",
-    "internal/collector/normalized.go:286": "\t\taccount.Database.DatabaseCount = nil",
-    "internal/collector/normalized.go:287": "\tcase \"database/encrypted_database_count\":",
-    "internal/collector/normalized.go:288": "\t\taccount.Database.EncryptedDatabaseCount = nil",
-    "internal/collector/normalized.go:289": "\tcase \"database/encryption_pct\":",
-    "internal/collector/normalized.go:290": "\t\taccount.Database.EncryptionPct = Reading[float64]{}",
-    "internal/collector/normalized.go:291": "\tcase \"database/public_access_blocked_pct\":",
-    "internal/collector/normalized.go:292": "\t\taccount.Database.PublicAccessBlockedPct = Reading[float64]{}",
-    "internal/collector/normalized.go:293": "\tcase \"database/multi_az_database_count\":",
-    "internal/collector/normalized.go:294": "\t\taccount.Database.MultiAZDatabaseCount = nil",
-    "internal/collector/normalized.go:295": "\tcase \"database/multi_az_pct\":",
-    "internal/collector/normalized.go:296": "\t\taccount.Database.MultiAZPct = Reading[float64]{}",
-    "internal/collector/normalized.go:297": "\tcase \"logging/audit_log_enabled\":",
-    "internal/collector/normalized.go:298": "\t\taccount.Logging.AuditLogEnabled = nil",
-    "internal/collector/normalized.go:299": "\tcase \"logging/audit_log_all_regions\":",
-    "internal/collector/normalized.go:300": "\t\taccount.Logging.AuditLogAllRegions = nil",
-    "internal/collector/normalized.go:301": "\tcase \"logging/cloudtrail_enabled\":",
-    "internal/collector/normalized.go:302": "\t\taccount.Logging.CloudTrailEnabled = nil",
-    "internal/collector/normalized.go:303": "\tcase \"logging/cloudtrail_multiregion\":",
-    "internal/collector/normalized.go:304": "\t\taccount.Logging.CloudTrailMultiregion = nil",
-    "internal/collector/normalized.go:305": "\tcase \"network/security_groups_present\":",
-    "internal/collector/normalized.go:306": "\t\taccount.Network.SecurityGroupsPresent = nil",
-    "internal/collector/normalized.go:307": "\tcase \"network/security_group_count\":",
-    "internal/collector/normalized.go:308": "\t\taccount.Network.SecurityGroupCount = nil",
-    "internal/collector/normalized.go:309": "\tcase \"network/ssh_open_security_group_count\":",
-    "internal/collector/normalized.go:310": "\t\taccount.Network.SSHOpenSecurityGroupCount = nil",
-    "internal/collector/normalized.go:311": "\tcase \"network/rdp_open_security_group_count\":",
-    "internal/collector/normalized.go:312": "\t\taccount.Network.RDPOpenSecurityGroupCount = nil",
-    "internal/collector/normalized.go:313": "\tcase \"network/ssh_open_to_world_pct\":",
-    "internal/collector/normalized.go:314": "\t\taccount.Network.SSHOpenToWorldPct = Reading[float64]{}",
-    "internal/collector/normalized.go:315": "\tcase \"network/rdp_open_to_world_pct\":",
-    "internal/collector/normalized.go:316": "\t\taccount.Network.RDPOpenToWorldPct = Reading[float64]{}",
-    "internal/collector/normalized.go:317": "\tcase \"backup/retention_days_min\":",
-    "internal/collector/normalized.go:318": "\t\taccount.Backup.RetentionDaysMin = nil",
-    "internal/collector/normalized.go:319": "\tcase \"threat_detection/enabled\":",
-    "internal/collector/normalized.go:320": "\t\taccount.ThreatDetection.Enabled = nil",
-    "internal/collector/normalized.go:331": "\tif !s3.BucketListingEvaluated {",
-    "internal/collector/normalized.go:334": "\tout.StorageResourcesPresent = boolPtr(s3.BucketCount \u003e 0)",
-    "internal/collector/normalized.go:335": "\tif audit {",
-    "internal/collector/normalized.go:336": "\t\tout.StorageResourceCount = intPtr(s3.BucketCount)",
-    "internal/collector/normalized.go:338": "\tif s3.DefaultEncryptionUnknownCount == 0 {",
-    "internal/collector/normalized.go:339": "\t\tout.EncryptionPct = percentOf(s3.DefaultEncryptionEnabledBucketCount, s3.BucketCount, componentsdk.RoundDown)",
-    "internal/collector/normalized.go:340": "\t\tif audit {",
-    "internal/collector/normalized.go:341": "\t\t\tout.EncryptedStorageResourceCount = intPtr(s3.DefaultEncryptionEnabledBucketCount)",
-    "internal/collector/normalized.go:344": "\tif s3.PublicAccessBlockUnknownCount == 0 {",
-    "internal/collector/normalized.go:345": "\t\tout.PublicAccessBlockedPct = percentOf(s3.PublicAccessBlockedBucketCount, s3.BucketCount, componentsdk.RoundDown)",
-    "internal/collector/normalized.go:346": "\t\tif audit {",
-    "internal/collector/normalized.go:347": "\t\t\tout.PublicAccessBlockedStorageResourceCount = intPtr(s3.PublicAccessBlockedBucketCount)",
-    "internal/collector/normalized.go:359": "\tif rds.RegionsEvaluatedCount == 0 || len(rds.RegionsFailed) \u003e 0 {",
-    "internal/collector/normalized.go:362": "\tout.DatabasesPresent = boolPtr(rds.DatabaseCount \u003e 0)",
-    "internal/collector/normalized.go:363": "\tout.EncryptionPct = percentOf(rds.EncryptedAtRestDatabaseCount, rds.DatabaseCount, componentsdk.RoundDown)",
-    "internal/collector/normalized.go:364": "\tif rds.DatabaseCount == 0 {",
-    "internal/collector/normalized.go:365": "\t\tout.PublicAccessBlockedPct = Reading[float64]{Read: true}",
-    "internal/collector/normalized.go:367": "\tif audit {",
-    "internal/collector/normalized.go:368": "\t\tout.DatabaseCount = intPtr(rds.DatabaseCount)",
-    "internal/collector/normalized.go:369": "\t\tout.EncryptedDatabaseCount = intPtr(rds.EncryptedAtRestDatabaseCount)",
-    "internal/collector/normalized.go:370": "\t\tout.MultiAZDatabaseCount = intPtr(rds.MultiAZEnabledDatabaseCount)",
-    "internal/collector/normalized.go:371": "\t\tout.MultiAZPct = percentOf(rds.MultiAZEnabledDatabaseCount, rds.DatabaseCount, componentsdk.RoundDown)",
-    "internal/collector/normalized.go:382": "\tif !ct.TrailListingEvaluated {",
-    "internal/collector/normalized.go:385": "\tif ct.Enabled || ct.TrailStatusUnknownCount == 0 {",
-    "internal/collector/normalized.go:386": "\t\tout.AuditLogEnabled = boolPtr(ct.Enabled)",
-    "internal/collector/normalized.go:387": "\t\tout.CloudTrailEnabled = boolPtr(ct.Enabled)",
-    "internal/collector/normalized.go:389": "\tif ct.MultiRegionEnabled || ct.TrailStatusUnknownCount == 0 {",
-    "internal/collector/normalized.go:390": "\t\tout.AuditLogAllRegions = boolPtr(ct.MultiRegionEnabled)",
-    "internal/collector/normalized.go:391": "\t\tout.CloudTrailMultiregion = boolPtr(ct.MultiRegionEnabled)",
-    "internal/collector/normalized.go:403": "\tif n.RegionsEvaluatedCount == 0 || len(n.RegionsFailed) \u003e 0 {",
-    "internal/collector/normalized.go:406": "\tout.SecurityGroupsPresent = boolPtr(n.SecurityGroupCount \u003e 0)",
-    "internal/collector/normalized.go:407": "\tout.SSHOpenToWorldPct = percentOf(n.OpenToWorldSSHSecurityGroupCount, n.SecurityGroupCount, componentsdk.RoundUp)",
-    "internal/collector/normalized.go:408": "\tout.RDPOpenToWorldPct = percentOf(n.OpenToWorldRDPSecurityGroupCount, n.SecurityGroupCount, componentsdk.RoundUp)",
-    "internal/collector/normalized.go:409": "\tif audit {",
-    "internal/collector/normalized.go:410": "\t\tout.SecurityGroupCount = intPtr(n.SecurityGroupCount)",
-    "internal/collector/normalized.go:411": "\t\tout.SSHOpenSecurityGroupCount = intPtr(n.OpenToWorldSSHSecurityGroupCount)",
-    "internal/collector/normalized.go:412": "\t\tout.RDPOpenSecurityGroupCount = intPtr(n.OpenToWorldRDPSecurityGroupCount)",
-    "internal/collector/normalized.go:422": "\tif rds.RegionsEvaluatedCount == 0 || len(rds.RegionsFailed) \u003e 0 || rds.DatabaseCount == 0 {",
-    "internal/collector/normalized.go:425": "\tout.RetentionDaysMin = rds.BackupRetentionMin",
-    "internal/collector/normalized.go:434": "\tif len(regions) == 0 {",
-    "internal/collector/normalized.go:437": "\treturn CloudPostureThreatDetection{Enabled: boolPtr(gd.EnabledInAllRegions)}",
-    "internal/collector/normalized.go:440": "func float64Ptr(v float64) *float64 { return \u0026v }",
-    "internal/collector/normalized.go:445": "func percentOf(count, total int, rounding componentsdk.Rounding) Reading[float64] {",
-    "internal/collector/normalized.go:446": "\tp := componentsdk.Percent(count, total, rounding)",
-    "internal/collector/normalized.go:447": "\tif p == nil {",
-    "internal/collector/normalized.go:448": "\t\treturn Reading[float64]{Read: true}",
-    "internal/collector/normalized.go:449": "\t}",
-    "internal/collector/normalized.go:450": "\treturn Reading[float64]{Value: float64Ptr(float64(*p)), Read: true}",
-    "internal/collector/normalized.go:451": "}",
-    "internal/collector/normalized.go:453": "func intPtr(v int) *int { return \u0026v }",
+    "internal/collector/normalized.go:199": "\taudit := componentsdk.Level(o.CollectedAtLevel).AtLeast(componentsdk.LevelAudit)",
+    "internal/collector/normalized.go:201": "\t\tSchemaVersion:        \"1.0.0\",",
+    "internal/collector/normalized.go:202": "\t\tCollectedAt:          o.CollectedAt,",
+    "internal/collector/normalized.go:203": "\t\tProvider:             \"aws\",",
+    "internal/collector/normalized.go:204": "\t\tAllAccountsCollected: boolPtr(len(o.FailedAccounts) == 0),",
+    "internal/collector/normalized.go:210": "\tif audit {",
+    "internal/collector/normalized.go:211": "\t\tposture.AccountsExpected = intPtr(len(o.Accounts) + len(o.FailedAccounts))",
+    "internal/collector/normalized.go:217": "\tfor i, acct := range o.Accounts {",
+    "internal/collector/normalized.go:229": "\t\tif audit {",
+    "internal/collector/normalized.go:230": "\t\t\tnormalized.AccountID = acct.AccountID",
+    "internal/collector/normalized.go:238": "\tfor _, failed := range o.FailedAccounts {",
+    "internal/collector/normalized.go:244": "\t\tif audit {",
+    "internal/collector/normalized.go:245": "\t\t\tstub.AccountID = failed.AccountID",
+    "internal/collector/normalized.go:293": "\tswitch field {",
+    "internal/collector/normalized.go:294": "\tcase \"storage/storage_resources_present\":",
+    "internal/collector/normalized.go:295": "\t\taccount.Storage.StorageResourcesPresent = nil",
+    "internal/collector/normalized.go:296": "\tcase \"storage/storage_resource_count\":",
+    "internal/collector/normalized.go:297": "\t\taccount.Storage.StorageResourceCount = nil",
+    "internal/collector/normalized.go:298": "\tcase \"storage/encrypted_storage_resource_count\":",
+    "internal/collector/normalized.go:299": "\t\taccount.Storage.EncryptedStorageResourceCount = nil",
+    "internal/collector/normalized.go:300": "\tcase \"storage/public_access_blocked_storage_resource_count\":",
+    "internal/collector/normalized.go:301": "\t\taccount.Storage.PublicAccessBlockedStorageResourceCount = nil",
+    "internal/collector/normalized.go:302": "\tcase \"storage/encryption_pct\":",
+    "internal/collector/normalized.go:303": "\t\taccount.Storage.EncryptionPct = Reading[float64]{}",
+    "internal/collector/normalized.go:304": "\tcase \"storage/public_access_blocked_pct\":",
+    "internal/collector/normalized.go:305": "\t\taccount.Storage.PublicAccessBlockedPct = Reading[float64]{}",
+    "internal/collector/normalized.go:306": "\tcase \"database/databases_present\":",
+    "internal/collector/normalized.go:307": "\t\taccount.Database.DatabasesPresent = nil",
+    "internal/collector/normalized.go:308": "\tcase \"database/database_count\":",
+    "internal/collector/normalized.go:309": "\t\taccount.Database.DatabaseCount = nil",
+    "internal/collector/normalized.go:310": "\tcase \"database/encrypted_database_count\":",
+    "internal/collector/normalized.go:311": "\t\taccount.Database.EncryptedDatabaseCount = nil",
+    "internal/collector/normalized.go:312": "\tcase \"database/encryption_pct\":",
+    "internal/collector/normalized.go:313": "\t\taccount.Database.EncryptionPct = Reading[float64]{}",
+    "internal/collector/normalized.go:314": "\tcase \"database/public_access_blocked_pct\":",
+    "internal/collector/normalized.go:315": "\t\taccount.Database.PublicAccessBlockedPct = Reading[float64]{}",
+    "internal/collector/normalized.go:316": "\tcase \"database/multi_az_database_count\":",
+    "internal/collector/normalized.go:317": "\t\taccount.Database.MultiAZDatabaseCount = nil",
+    "internal/collector/normalized.go:318": "\tcase \"database/multi_az_pct\":",
+    "internal/collector/normalized.go:319": "\t\taccount.Database.MultiAZPct = Reading[float64]{}",
+    "internal/collector/normalized.go:320": "\tcase \"logging/audit_log_enabled\":",
+    "internal/collector/normalized.go:321": "\t\taccount.Logging.AuditLogEnabled = nil",
+    "internal/collector/normalized.go:322": "\tcase \"logging/audit_log_all_regions\":",
+    "internal/collector/normalized.go:323": "\t\taccount.Logging.AuditLogAllRegions = nil",
+    "internal/collector/normalized.go:324": "\tcase \"logging/cloudtrail_enabled\":",
+    "internal/collector/normalized.go:325": "\t\taccount.Logging.CloudTrailEnabled = nil",
+    "internal/collector/normalized.go:326": "\tcase \"logging/cloudtrail_multiregion\":",
+    "internal/collector/normalized.go:327": "\t\taccount.Logging.CloudTrailMultiregion = nil",
+    "internal/collector/normalized.go:328": "\tcase \"network/security_groups_present\":",
+    "internal/collector/normalized.go:329": "\t\taccount.Network.SecurityGroupsPresent = nil",
+    "internal/collector/normalized.go:330": "\tcase \"network/security_group_count\":",
+    "internal/collector/normalized.go:331": "\t\taccount.Network.SecurityGroupCount = nil",
+    "internal/collector/normalized.go:332": "\tcase \"network/ssh_open_security_group_count\":",
+    "internal/collector/normalized.go:333": "\t\taccount.Network.SSHOpenSecurityGroupCount = nil",
+    "internal/collector/normalized.go:334": "\tcase \"network/rdp_open_security_group_count\":",
+    "internal/collector/normalized.go:335": "\t\taccount.Network.RDPOpenSecurityGroupCount = nil",
+    "internal/collector/normalized.go:336": "\tcase \"network/ssh_open_to_world_pct\":",
+    "internal/collector/normalized.go:337": "\t\taccount.Network.SSHOpenToWorldPct = Reading[float64]{}",
+    "internal/collector/normalized.go:338": "\tcase \"network/rdp_open_to_world_pct\":",
+    "internal/collector/normalized.go:339": "\t\taccount.Network.RDPOpenToWorldPct = Reading[float64]{}",
+    "internal/collector/normalized.go:340": "\tcase \"backup/retention_days_min\":",
+    "internal/collector/normalized.go:341": "\t\taccount.Backup.RetentionDaysMin = nil",
+    "internal/collector/normalized.go:342": "\tcase \"threat_detection/enabled\":",
+    "internal/collector/normalized.go:343": "\t\taccount.ThreatDetection.Enabled = nil",
+    "internal/collector/normalized.go:344": "\tcase \"iam/mfa_coverage_pct\":",
+    "internal/collector/normalized.go:345": "\t\taccount.IAM.MFACoveragePct = nil",
+    "internal/collector/normalized.go:346": "\tcase \"iam/root_mfa_enabled\":",
+    "internal/collector/normalized.go:347": "\t\taccount.IAM.RootMFAEnabled = nil",
+    "internal/collector/normalized.go:348": "\tcase \"iam/root_access_protected\":",
+    "internal/collector/normalized.go:349": "\t\taccount.IAM.RootAccessProtected = nil",
+    "internal/collector/normalized.go:350": "\tcase \"iam/access_key_rotation_compliant_pct\":",
+    "internal/collector/normalized.go:351": "\t\taccount.IAM.AccessKeyRotationCompliantPct = nil",
+    "internal/collector/normalized.go:352": "\tcase \"iam/user_count\":",
+    "internal/collector/normalized.go:353": "\t\taccount.IAM.UserCount = nil",
+    "internal/collector/normalized.go:354": "\tcase \"iam/access_key_user_count\":",
+    "internal/collector/normalized.go:355": "\t\taccount.IAM.AccessKeyUserCount = nil",
+    "internal/collector/normalized.go:356": "\tcase \"iam/saml_provider_count\":",
+    "internal/collector/normalized.go:357": "\t\taccount.IAM.SAMLProviderCount = nil",
+    "internal/collector/normalized.go:358": "\tcase \"vuln_scanning/enabled\":",
+    "internal/collector/normalized.go:359": "\t\taccount.VulnScanning.Enabled = nil",
+    "internal/collector/normalized.go:360": "\tcase \"vuln_scanning/unpatched_pct\":",
+    "internal/collector/normalized.go:361": "\t\taccount.VulnScanning.UnpatchedPct = nil",
+    "internal/collector/normalized.go:372": "\tif !s3.BucketListingEvaluated {",
+    "internal/collector/normalized.go:375": "\tout.StorageResourcesPresent = boolPtr(s3.BucketCount \u003e 0)",
+    "internal/collector/normalized.go:376": "\tif audit {",
+    "internal/collector/normalized.go:377": "\t\tout.StorageResourceCount = intPtr(s3.BucketCount)",
+    "internal/collector/normalized.go:379": "\tif s3.DefaultEncryptionUnknownCount == 0 {",
+    "internal/collector/normalized.go:380": "\t\tout.EncryptionPct = percentOf(s3.DefaultEncryptionEnabledBucketCount, s3.BucketCount, componentsdk.RoundDown)",
+    "internal/collector/normalized.go:381": "\t\tif audit {",
+    "internal/collector/normalized.go:382": "\t\t\tout.EncryptedStorageResourceCount = intPtr(s3.DefaultEncryptionEnabledBucketCount)",
+    "internal/collector/normalized.go:385": "\tif s3.PublicAccessBlockUnknownCount == 0 {",
+    "internal/collector/normalized.go:386": "\t\tout.PublicAccessBlockedPct = percentOf(s3.PublicAccessBlockedBucketCount, s3.BucketCount, componentsdk.RoundDown)",
+    "internal/collector/normalized.go:387": "\t\tif audit {",
+    "internal/collector/normalized.go:388": "\t\t\tout.PublicAccessBlockedStorageResourceCount = intPtr(s3.PublicAccessBlockedBucketCount)",
+    "internal/collector/normalized.go:400": "\tif rds.RegionsEvaluatedCount == 0 || len(rds.RegionsFailed) \u003e 0 {",
+    "internal/collector/normalized.go:403": "\tout.DatabasesPresent = boolPtr(rds.DatabaseCount \u003e 0)",
+    "internal/collector/normalized.go:404": "\tout.EncryptionPct = percentOf(rds.EncryptedAtRestDatabaseCount, rds.DatabaseCount, componentsdk.RoundDown)",
+    "internal/collector/normalized.go:405": "\tif rds.DatabaseCount == 0 {",
+    "internal/collector/normalized.go:406": "\t\tout.PublicAccessBlockedPct = Reading[float64]{Read: true}",
+    "internal/collector/normalized.go:408": "\tif audit {",
+    "internal/collector/normalized.go:409": "\t\tout.DatabaseCount = intPtr(rds.DatabaseCount)",
+    "internal/collector/normalized.go:410": "\t\tout.EncryptedDatabaseCount = intPtr(rds.EncryptedAtRestDatabaseCount)",
+    "internal/collector/normalized.go:411": "\t\tout.MultiAZDatabaseCount = intPtr(rds.MultiAZEnabledDatabaseCount)",
+    "internal/collector/normalized.go:412": "\t\tout.MultiAZPct = percentOf(rds.MultiAZEnabledDatabaseCount, rds.DatabaseCount, componentsdk.RoundDown)",
+    "internal/collector/normalized.go:423": "\tif !ct.TrailListingEvaluated {",
+    "internal/collector/normalized.go:426": "\tif ct.Enabled || ct.TrailStatusUnknownCount == 0 {",
+    "internal/collector/normalized.go:427": "\t\tout.AuditLogEnabled = boolPtr(ct.Enabled)",
+    "internal/collector/normalized.go:428": "\t\tout.CloudTrailEnabled = boolPtr(ct.Enabled)",
+    "internal/collector/normalized.go:430": "\tif ct.MultiRegionEnabled || ct.TrailStatusUnknownCount == 0 {",
+    "internal/collector/normalized.go:431": "\t\tout.AuditLogAllRegions = boolPtr(ct.MultiRegionEnabled)",
+    "internal/collector/normalized.go:432": "\t\tout.CloudTrailMultiregion = boolPtr(ct.MultiRegionEnabled)",
+    "internal/collector/normalized.go:444": "\tif n.RegionsEvaluatedCount == 0 || len(n.RegionsFailed) \u003e 0 {",
+    "internal/collector/normalized.go:447": "\tout.SecurityGroupsPresent = boolPtr(n.SecurityGroupCount \u003e 0)",
+    "internal/collector/normalized.go:448": "\tout.SSHOpenToWorldPct = percentOf(n.OpenToWorldSSHSecurityGroupCount, n.SecurityGroupCount, componentsdk.RoundUp)",
+    "internal/collector/normalized.go:449": "\tout.RDPOpenToWorldPct = percentOf(n.OpenToWorldRDPSecurityGroupCount, n.SecurityGroupCount, componentsdk.RoundUp)",
+    "internal/collector/normalized.go:450": "\tif audit {",
+    "internal/collector/normalized.go:451": "\t\tout.SecurityGroupCount = intPtr(n.SecurityGroupCount)",
+    "internal/collector/normalized.go:452": "\t\tout.SSHOpenSecurityGroupCount = intPtr(n.OpenToWorldSSHSecurityGroupCount)",
+    "internal/collector/normalized.go:453": "\t\tout.RDPOpenSecurityGroupCount = intPtr(n.OpenToWorldRDPSecurityGroupCount)",
+    "internal/collector/normalized.go:463": "\tif rds.RegionsEvaluatedCount == 0 || len(rds.RegionsFailed) \u003e 0 || rds.DatabaseCount == 0 {",
+    "internal/collector/normalized.go:466": "\tout.RetentionDaysMin = rds.BackupRetentionMin",
+    "internal/collector/normalized.go:475": "\tif len(regions) == 0 {",
+    "internal/collector/normalized.go:478": "\treturn CloudPostureThreatDetection{Enabled: boolPtr(gd.EnabledInAllRegions)}",
+    "internal/collector/normalized.go:481": "func float64Ptr(v float64) *float64 { return \u0026v }",
+    "internal/collector/normalized.go:486": "func percentOf(count, total int, rounding componentsdk.Rounding) Reading[float64] {",
+    "internal/collector/normalized.go:487": "\tp := componentsdk.Percent(count, total, rounding)",
+    "internal/collector/normalized.go:488": "\tif p == nil {",
+    "internal/collector/normalized.go:489": "\t\treturn Reading[float64]{Read: true}",
+    "internal/collector/normalized.go:490": "\t}",
+    "internal/collector/normalized.go:491": "\treturn Reading[float64]{Value: float64Ptr(float64(*p)), Read: true}",
+    "internal/collector/normalized.go:492": "}",
+    "internal/collector/normalized.go:494": "func intPtr(v int) *int { return \u0026v }",
     "internal/collector/posture.go:1877": "\t\tSchemaVersion: SchemaVersion,",
     "internal/collector/posture.go:1878": "\t\tCollectedAt:   now.UTC().Format(time.RFC3339),",
     "internal/collector/posture.go:1879": "\t\tAccounts:      []AccountPosture{},",

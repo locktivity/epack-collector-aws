@@ -13,14 +13,17 @@ import (
 // Fields are designed to be vendor-agnostic (works for AWS, GCP, Azure).
 // The schema marks the account IDs and the counts as audit-level, so they are
 // written from the audit level only. AllAccountsCollected and the present
-// flags are written at every level.
+// flags are written at every level. WorkforceSignIn and each account's IAM
+// and VulnScanning are deprecated blocks, written at every level as before
+// epack v0.10.0 (see deprecated.go).
 type CloudPosture struct {
-	SchemaVersion        string                `json:"schema_version"`
-	CollectedAt          string                `json:"collected_at"`
-	Provider             string                `json:"provider"`
-	AccountsExpected     *int                  `json:"accounts_expected,omitempty"`
-	AllAccountsCollected *bool                 `json:"all_accounts_collected,omitempty"`
-	Accounts             []CloudPostureAccount `json:"accounts"`
+	SchemaVersion        string                      `json:"schema_version"`
+	CollectedAt          string                      `json:"collected_at"`
+	Provider             string                      `json:"provider"`
+	AccountsExpected     *int                        `json:"accounts_expected,omitempty"`
+	AllAccountsCollected *bool                       `json:"all_accounts_collected,omitempty"`
+	Accounts             []CloudPostureAccount       `json:"accounts"`
+	WorkforceSignIn      CloudPostureWorkforceSignIn `json:"workforce_sign_in,omitzero"`
 }
 
 // Reading is a normalized value that may have no reading in the detailed
@@ -58,6 +61,8 @@ type CloudPostureAccount struct {
 	Network             CloudPostureNetwork         `json:"network,omitzero"`
 	Backup              CloudPostureBackup          `json:"backup,omitzero"`
 	ThreatDetection     CloudPostureThreatDetection `json:"threat_detection,omitzero"`
+	IAM                 CloudPostureIAM             `json:"iam,omitzero"`
+	VulnScanning        CloudPostureVulnScanning    `json:"vuln_scanning,omitzero"`
 }
 
 // CloudPostureStorage contains normalized storage security metrics over the
@@ -175,6 +180,16 @@ var normalizedSources = []struct {
 	{"network/rdp_open_to_world_pct", []string{"network/open_to_world_rdp"}, false},
 	{"backup/retention_days_min", []string{"rds/backup_retention_min"}, false},
 	{"threat_detection/enabled", []string{"account_security/guardduty/enabled_in_all_regions"}, false},
+	// The deprecated blocks in deprecated.go.
+	{"iam/mfa_coverage_pct", []string{"iam/mfa_enabled"}, false},
+	{"iam/root_mfa_enabled", []string{"iam/root_mfa_enabled", "iam/root_credentials_present"}, false},
+	{"iam/root_access_protected", []string{"iam/root_access_protected"}, false},
+	{"iam/access_key_rotation_compliant_pct", []string{"iam/access_keys_rotated"}, false},
+	{"iam/user_count", []string{"iam/iam_user_count"}, false},
+	{"iam/access_key_user_count", []string{"iam/access_key_user_count"}, false},
+	{"iam/saml_provider_count", []string{"iam/saml_provider_count"}, false},
+	{"vuln_scanning/enabled", []string{"account_security/inspector/enabled"}, false},
+	{"vuln_scanning/unpatched_pct", []string{"account_security/inspector/unpatched_server_percent"}, false},
 }
 
 // failedAccountsPointer is the detailed list the account totals come from.
@@ -208,6 +223,8 @@ func toCloudPosture(o *Output, gaps *gapLog) *CloudPosture {
 			Network:         normalizedNetwork(acct.Network, audit),
 			Backup:          normalizedBackup(acct.RDS),
 			ThreatDetection: normalizedThreatDetection(acct.AccountSecurity.GuardDuty, acct.Regions),
+			IAM:             normalizedIAM(acct.IAM),
+			VulnScanning:    normalizedVulnScanning(acct.AccountSecurity.Inspector),
 		}
 		if audit {
 			normalized.AccountID = acct.AccountID
@@ -237,6 +254,12 @@ func toCloudPosture(o *Output, gaps *gapLog) *CloudPosture {
 			}
 		}
 	}
+
+	workforceGaps := gaps
+	if workforceGaps == nil {
+		workforceGaps = newGapLog(nil)
+	}
+	posture.WorkforceSignIn = normalizedWorkforceSignIn(o, workforceGaps)
 
 	return posture
 }
@@ -318,6 +341,24 @@ func clearNormalized(account *CloudPostureAccount, field string) {
 		account.Backup.RetentionDaysMin = nil
 	case "threat_detection/enabled":
 		account.ThreatDetection.Enabled = nil
+	case "iam/mfa_coverage_pct":
+		account.IAM.MFACoveragePct = nil
+	case "iam/root_mfa_enabled":
+		account.IAM.RootMFAEnabled = nil
+	case "iam/root_access_protected":
+		account.IAM.RootAccessProtected = nil
+	case "iam/access_key_rotation_compliant_pct":
+		account.IAM.AccessKeyRotationCompliantPct = nil
+	case "iam/user_count":
+		account.IAM.UserCount = nil
+	case "iam/access_key_user_count":
+		account.IAM.AccessKeyUserCount = nil
+	case "iam/saml_provider_count":
+		account.IAM.SAMLProviderCount = nil
+	case "vuln_scanning/enabled":
+		account.VulnScanning.Enabled = nil
+	case "vuln_scanning/unpatched_pct":
+		account.VulnScanning.UnpatchedPct = nil
 	}
 }
 

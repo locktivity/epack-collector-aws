@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.7.1
+
+- The collector is built on epack v0.10.1.
+- `artifacts/aws.cloud-posture.json` has `accounts[*].iam`, `accounts[*].vuln_scanning`, and `workforce_sign_in` again, as deprecated blocks that epack v0.10.1 declares. They hold the values v0.6 wrote, taken from the detailed artifact, at every level. Profiles that read them grade as they did before v0.7.0. A later minor removes them.
+- Each of those values is also in the access-posture or vuln-scanning file, except `iam.saml_provider_count`, `workforce_sign_in.mfa_source`, and `vuln_scanning.unpatched_pct`, which have no new field.
+
 ## v0.7.0
 
 - The collector is built on epack v0.10.0. The detailed artifact moves from `artifacts/aws.json` to `artifacts/aws.details.json`, the path epack's `ArtifactPath` gives it. A reader of the old path needs the new one

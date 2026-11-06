@@ -46,5 +46,9 @@
     "/scanners/*/open_low_count": "Counts the ACTIVE findings rated LOW in ListFindings for the account's resources of the category. A region where Inspector is off adds none.",
     "/scanners/*/overdue_critical_count": "Counts the ACTIVE findings rated CRITICAL whose firstObservedAt is more than 30 days before the run.",
     "/scanners/*/overdue_high_count": "Counts the ACTIVE findings rated HIGH whose firstObservedAt is more than 90 days before the run."
+  },
+  "evidencepack/cloud-posture@v1": {
+    "/workforce_sign_in/in_use": "Sets true when ListInstances has an active organization instance of IAM Identity Center for any account, ListRoles has an AWSReservedSSO_ role, or ListSAMLProviders has the SAML provider Identity Center creates. Sets false when every account's instance and role listings answered and found none.",
+    "/workforce_sign_in/user_count": "Counts the users ListUsers returns from the identity store of each organization instance the accounts can see, counting each store once."
   }
 }
