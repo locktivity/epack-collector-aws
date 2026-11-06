@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The collector is built on epack v0.10.2.
+- The deprecated `accounts[*].iam` and `workforce_sign_in` blocks are left out when `collect` leaves out `access-posture`, and `accounts[*].vuln_scanning` when it leaves out `vuln-scanning`. Each has a `not_shared` gap, and the gaps inside it are dropped. v0.7.1 wrote them whatever `collect` listed.
+
 ## v0.7.1
 
 - The collector is built on epack v0.10.1.

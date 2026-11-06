@@ -1,5 +1,11 @@
 package collector
 
+import (
+	"fmt"
+
+	"github.com/locktivity/epack/componentsdk"
+)
+
 // The blocks in this file are the ones epack v0.10.0 moved out of
 // cloud-posture, into access-posture and vuln-scanning. The schema keeps
 // them as deprecated, and the collector writes them as v0.6 did, so profiles
@@ -190,3 +196,17 @@ func normalizedWorkforceSignIn(o *Output, gaps *gapLog) CloudPostureWorkforceSig
 	}
 	return out
 }
+
+// movedDeprecated records account i's deprecated blocks as moved to the
+// artifacts that now hold their values. A collect list that leaves out one
+// of them then leaves out the block, with a not_shared gap.
+func (l *gapLog) movedDeprecated(i int) {
+	l.rec.Moved(componentsdk.Location{Path: cloudPosturePath, Pointer: fmt.Sprintf("/accounts/%d/iam", i)}, accessPostureArtifact)
+	l.rec.Moved(componentsdk.Location{Path: cloudPosturePath, Pointer: fmt.Sprintf("/accounts/%d/vuln_scanning", i)}, vulnScanningArtifact)
+}
+
+// The artifacts the deprecated blocks moved to.
+var (
+	accessPostureArtifact = componentsdk.Location{Schema: accessPostureSchema, Path: accessPosturePath}
+	vulnScanningArtifact  = componentsdk.Location{Schema: vulnScanningSchema, Path: vulnScanningPath}
+)
