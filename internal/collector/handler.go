@@ -29,10 +29,11 @@ func Spec(version, commit string) componentsdk.CollectorSpec {
 // for each value it could not read.
 func Run(ctx componentsdk.CollectorContext) error {
 	cfg := ctx.Config()
+	accounts, accountsKey := accountsFromConfig(cfg)
 	config := Config{
 		AuthMode: getString(cfg, "auth_mode"),
 		Regions:  getStringSlice(cfg, "regions"),
-		Accounts: accountsFromConfig(cfg),
+		Accounts: accounts,
 		OIDC: aws.OIDCEnv{
 			RequestURL:   ctx.Secret(aws.GitHubTokenRequestURLEnv),
 			RequestToken: ctx.Secret(aws.GitHubTokenRequestTokenEnv),
@@ -61,12 +62,14 @@ func Run(ctx componentsdk.CollectorContext) error {
 	if err != nil {
 		return err
 	}
+	declareTargets(config.Recorder, accountsKey, len(config.Regions) > 0)
 	return ctx.Emit(c.Artifacts(output))
 }
 
-// accountsFromConfig reads the accounts to collect: the accounts list, or a
-// single role_arn, or none, which collects the default credentials' account.
-func accountsFromConfig(cfg map[string]any) []AccountConfig {
+// accountsFromConfig reads the accounts to collect and the config key that
+// lists them: the accounts list, or a single role_arn, or none, which
+// collects the default credentials' account.
+func accountsFromConfig(cfg map[string]any) ([]AccountConfig, string) {
 	if accounts, ok := cfg["accounts"].([]any); ok && len(accounts) > 0 {
 		var out []AccountConfig
 		for _, acct := range accounts {
@@ -78,16 +81,55 @@ func accountsFromConfig(cfg map[string]any) []AccountConfig {
 				})
 			}
 		}
-		return out
+		if len(out) == 0 {
+			return nil, ""
+		}
+		return out, "accounts"
 	}
 	if roleARN := getString(cfg, "role_arn"); roleARN != "" {
 		return []AccountConfig{{
 			RoleARN:    roleARN,
 			ExternalID: getString(cfg, "external_id"),
 			Label:      getString(cfg, "label"),
-		}}
+		}}, "role_arn"
 	}
-	return nil
+	return nil, ""
+}
+
+// declareTargets declares the accounts the run was pointed at, the regions
+// it scanned in each, and the primary region it read AWS Config, Security
+// Hub, and the detailed Inspector values in. The accounts are read from the
+// normalized artifact, which keeps an entry for an account that failed, so a
+// failed account leaves the accounts incomplete. With no regions listed, the
+// collector picks the primary region itself.
+func declareTargets(rec *componentsdk.Recorder, accountsKey string, regionsListed bool) {
+	rec.Targets(componentsdk.TargetAccount, componentsdk.Location{Path: cloudPosturePath, Pointer: "/accounts"}, "/account_id").
+		ChosenBy(chosenBy(accountsKey)).
+		Label("/account_label")
+	regionsKey := ""
+	primaryChoice := componentsdk.ChosenByCollector
+	if regionsListed {
+		regionsKey = "regions"
+		primaryChoice = componentsdk.ChosenByConfig
+	}
+	rec.Targets(componentsdk.TargetRegion, componentsdk.Location{Path: awsPath, Pointer: "/accounts/*/regions"}).
+		ChosenBy(chosenBy(regionsKey))
+	rec.Targets(componentsdk.TargetRegion, componentsdk.Location{Path: awsPath, Pointer: "/accounts/*/primary_region"}).
+		ChosenBy(primaryChoice, regionsKey).
+		For(
+			componentsdk.Location{Path: awsPath, Pointer: "/accounts/*/account_security/config"},
+			componentsdk.Location{Path: awsPath, Pointer: "/accounts/*/account_security/security_hub"},
+			componentsdk.Location{Path: awsPath, Pointer: "/accounts/*/account_security/inspector"},
+		)
+}
+
+// chosenBy returns ChosenByConfig with the config key that lists the
+// targets, or ChosenByDiscovery when no key lists them.
+func chosenBy(configKey string) (componentsdk.TargetChoice, string) {
+	if configKey == "" {
+		return componentsdk.ChosenByDiscovery, ""
+	}
+	return componentsdk.ChosenByConfig, configKey
 }
 
 func getString(cfg map[string]any, key string) string {

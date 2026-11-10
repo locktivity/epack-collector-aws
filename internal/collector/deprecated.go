@@ -124,11 +124,11 @@ func normalizedWorkforceSignIn(o *Output, gaps *gapLog) CloudPostureWorkforceSig
 		switch instance, why := identityCenterInstanceSignal(acct, at, gaps); instance {
 		case signalYes:
 			inUse = true
-			d := directories[idc.IdentityStoreID]
+			d := directories[idc.identityStoreID]
 			if d == nil {
 				d = &directory{}
-				directories[idc.IdentityStoreID] = d
-				stores = append(stores, idc.IdentityStoreID)
+				directories[idc.identityStoreID] = d
+				stores = append(stores, idc.identityStoreID)
 			}
 			switch {
 			case d.read:

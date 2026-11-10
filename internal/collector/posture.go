@@ -80,8 +80,9 @@ type Output struct {
 }
 
 // FailedAccountRecord is a configured account whose collection failed
-// entirely, so no AccountPosture exists for it. AccountID is parsed from the
-// configured role ARN when derivable; ErrorCode is the upstream error code.
+// entirely, so no AccountPosture exists for it. From the audit level,
+// AccountID is parsed from the configured role ARN when derivable, and
+// RoleARN is that role; ErrorCode is the upstream error code at every level.
 // Consumers use these to distinguish "N healthy accounts" from "N of M
 // answered".
 type FailedAccountRecord struct {
@@ -102,14 +103,16 @@ type Diagnostics struct {
 }
 
 // AccountPosture represents the collected security posture of a single AWS account.
-// AccountLabel is the operator-supplied label from the account's config entry,
-// passed through verbatim so downstream consumers can segment accounts
+// AccountID is written from the audit level. AccountLabel is the
+// operator-supplied label from the account's config entry, passed through
+// verbatim at every level so downstream consumers can segment accounts
 // (production, staging, management) without an external mapping.
 type AccountPosture struct {
-	AccountID       string                `json:"account_id"`
+	AccountID       string                `json:"account_id,omitempty"`
 	AccountAlias    *string               `json:"account_alias,omitempty"`
 	AccountLabel    string                `json:"account_label,omitempty"`
 	Regions         []string              `json:"regions"`
+	PrimaryRegion   string                `json:"primary_region,omitempty"`
 	IAM             IAMMetrics            `json:"iam"`
 	S3              S3Metrics             `json:"s3"`
 	RDS             RDSMetrics            `json:"rds"`
@@ -201,6 +204,8 @@ type IAMMetrics struct {
 	RootSigningCertificatesPresent bool `json:"root_signing_certificates_present"`
 	RootAccessProtected            bool `json:"root_access_protected"`
 
+	// RootOrganizationID is written from the audit level, since it names the
+	// company's organization.
 	RootOrganizationsFeaturesEvaluated      bool   `json:"root_organizations_features_evaluated"`
 	RootOrganizationID                      string `json:"root_organization_id,omitempty"`
 	RootCredentialsManagementFeatureEnabled bool   `json:"root_credentials_management_feature_enabled"`
@@ -892,11 +897,11 @@ type GuardDutyFindingNotification struct {
 	SubscriptionsByProtocol                map[string]int `json:"subscriptions_by_protocol,omitempty"`
 	SubscriptionsPendingConfirmationCount  int            `json:"subscriptions_pending_confirmation_count"`
 	TopicsUnresolvedCount                  int            `json:"topics_unresolved_count,omitempty"`
-	AdministratorAccountID                 string         `json:"administrator_account_id,omitempty"`
 
-	// Audit: per-rule rows. Present (possibly []) when collected at audit+;
-	// absent when not collected.
-	Rules []GuardDutyNotificationRuleRow `json:"rules,omitzero"`
+	// Audit: the administrator account, and per-rule rows, present (possibly
+	// []) when collected at audit+ and absent when not collected.
+	AdministratorAccountID string                         `json:"administrator_account_id,omitempty"`
+	Rules                  []GuardDutyNotificationRuleRow `json:"rules,omitzero"`
 }
 
 // GuardDutyNotificationRuleRow is a per-rule audit-level row. Topic rows name
@@ -1459,7 +1464,9 @@ type IdentityCenterStatus struct {
 	// Trust: resource-conditional sub-fields keep omitempty because their
 	// absence means "the IdC resource itself doesn't exist" (Enabled=false),
 	// not "wasn't collected at this level". RegionsChecked lists the regions
-	// whose instance listing answered.
+	// whose instance listing answered. The instance's ARN, its owner's
+	// account ID, and its identity store's ID identify the company's
+	// resources, so they are written from the audit level.
 	Enabled                bool     `json:"enabled"`
 	InstanceARN            string   `json:"instance_arn,omitempty"`
 	InstanceRegion         string   `json:"instance_region,omitempty"`
@@ -1473,6 +1480,10 @@ type IdentityCenterStatus struct {
 	GroupCount             int      `json:"group_count"`
 	PermissionSetCount     int      `json:"permission_set_count"`
 	RegionsChecked         []string `json:"regions_checked"`
+
+	// identityStoreID is the instance's identity store at every level, which
+	// tells two accounts that share a directory apart from two that do not.
+	identityStoreID string
 
 	// Audit: present (possibly []) when collected at audit+ and IdC is
 	// enabled; absent when not collected at this level. AccountAssignments rows
@@ -1880,10 +1891,13 @@ func NewOutput(now time.Time) *Output {
 	}
 }
 
-// NewAccountPosture creates a new AccountPosture for the given account ID.
-func NewAccountPosture(accountID string, regions []string) *AccountPosture {
-	return &AccountPosture{
-		AccountID: accountID,
-		Regions:   regions,
+// NewAccountPosture creates a new AccountPosture for the given account ID,
+// which it holds from the audit level, since a trust artifact names none of
+// the company's accounts.
+func NewAccountPosture(accountID string, regions []string, level componentsdk.Level) *AccountPosture {
+	posture := &AccountPosture{Regions: regions}
+	if level.AtLeast(componentsdk.LevelAudit) {
+		posture.AccountID = accountID
 	}
+	return posture
 }

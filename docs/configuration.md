@@ -425,7 +425,7 @@ collectors:
         - us-west-2
 ```
 
-AWS Config, Security Hub, and the detailed file's Inspector values are read in one primary region. With `regions` set, that is the first region listed. Otherwise it is the region the collector signs in to, which is `us-east-1` in the commercial partition. When that region is not enabled, it is the first enabled region in alphabetical order. For the vuln-scanning file, Amazon Inspector is read in every scanned region.
+AWS Config, Security Hub, and the detailed file's Inspector values are read in one primary region. With `regions` set, that is the first region listed. Otherwise it is the region the collector signs in to, which is `us-east-1` in the commercial partition. When that region is not enabled, it is the first enabled region in alphabetical order. Each account's `primary_region` in the detailed file names the region they were read in, and the collector result declares it as a region target for those values alone. For the vuln-scanning file, Amazon Inspector is read in every scanned region.
 
 An IAM Identity Center instance is listed in the region where Identity Center was enabled, so include that region in `regions`. When none of the listed regions has an instance, the Identity Center values are left out with a `not_read` gap.
 

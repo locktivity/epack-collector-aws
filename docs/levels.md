@@ -9,7 +9,7 @@ much detail it gathers. There are three levels, and they are cumulative:
 
 | Level | Question it answers | What's in the artifact |
 |---|---|---|
-| `trust` (default) | Do they pass? | Aggregates and pass/fail flags only. No names of users, resources, or findings. |
+| `trust` (default) | Do they pass? | Aggregates and pass/fail flags only. No account IDs, ARNs, or names of users, resources, or findings. |
 | `audit` | Where is the gap? | Per-resource rows with identifying names and configuration detail. No per-user activity. |
 | `internal` | Who or what specifically? | Per-user activity, finding payloads, key ARNs, recent audit-log events. |
 
@@ -36,6 +36,31 @@ stderr warning. The collector never silently upgrades to a higher level.
 The active level appears in the output artifact as the top-level
 `collected_at_level` field.
 
+## Identifiers
+
+A trust artifact holds no identifier of your accounts or resources. These
+fields appear from the audit level:
+
+- `accounts[].account_id`
+- `failed_accounts[].account_id` and `failed_accounts[].role_arn`
+- `iam.root_organization_id`
+- `account_security.guardduty.finding_notification.administrator_account_id`
+- `identity_center.instance_arn`, `identity_center.instance_owner_account_id`,
+  and `identity_center.identity_store_id`
+
+Names you set yourself stay at every level: `account_label` and
+`failed_accounts[].label` from the configuration, and `account_alias`, the
+account's IAM alias.
+
+The same holds for `diagnostics`. At trust, `account_errors` and `warnings`
+name an account by its configured label, as `(default credentials)`, or by
+its position in the configuration, such as `account 2`. They give a failed
+call's AWS error code, such as `AccessDenied`, and not AWS's message, which
+often holds the caller's role ARN and the account ID. A warning about one
+resource says what kind of resource it is, such as `a KMS key`, without its
+name or ID. At audit and above, they name the account by its ID or role ARN,
+quote AWS's message, and name the resource.
+
 ## What each level adds, per surface
 
 ### IAM (`iam`)
@@ -47,7 +72,9 @@ The active level appears in the output artifact as the top-level
   account or delegated administrator, the count of SAML providers the account
   trusts, and the counts of roles and SAML providers IAM Identity Center
   created in the account.
-- **audit**: `users[]` (per-user MFA + access-key + console flags),
+- **audit**: `root_organization_id`, the organization the centralized root
+  access features were read from. `users[]` (per-user MFA + access-key +
+  console flags),
   `roles[]` (per-role ARN, external-trust flag, wildcard-principal flag,
   the foreign principal account IDs, and a best-effort
   `external_trust_in_org` determination backed by the
@@ -115,20 +142,23 @@ per-rule / per-finding detail at internal.
 - **Config**: `recorders[]` at audit; `rules[]` per-rule compliance state at
   internal.
 - **GuardDuty**: trust includes the `finding_notification` routing summary.
-  `detectors[]` per-region and `finding_notification.rules[]` per-rule at
-  audit; `findings[]` per unarchived high-or-critical finding at internal.
+  `finding_notification.administrator_account_id`, `detectors[]` per-region,
+  and `finding_notification.rules[]` per-rule at audit; `findings[]` per
+  unarchived high-or-critical finding at internal.
 - **Security Hub**: enabled-standards inventory + integration count at audit.
 - **Inspector**: the unpatched and affected EC2 instance counts the
   percentage is taken from at trust; raw finding counts at audit.
 
 ### IAM Identity Center (`identity_center`)
 
-- **trust**: enabled flag, instance metadata (status, owning account, and
-  whether it is an organization or account instance), user / group /
-  permission-set counts, the count of users with an external ID from SCIM
-  provisioning, `mfa_evidence`, and the regions whose instance listing
-  answered. The instance is looked for in every scanned region.
-- **audit**: the full access model. `users[]` (id, login, display name,
+- **trust**: enabled flag, instance metadata (region, status, and whether it
+  is an organization or account instance), user / group / permission-set
+  counts, the count of users with an external ID from SCIM provisioning,
+  `mfa_evidence`, and the regions whose instance listing answered. The
+  instance is looked for in every scanned region.
+- **audit**: the instance's identifiers (`instance_arn`, the owning account's
+  `instance_owner_account_id`, and `identity_store_id`), and the full access
+  model. `users[]` (id, login, display name,
   primary email, and whether the user has an external ID from SCIM
   provisioning; identity-system inventories are audit-level evidence, and no
   PII beyond the primary email is collected), `groups[]` with

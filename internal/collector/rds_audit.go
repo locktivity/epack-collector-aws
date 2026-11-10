@@ -111,7 +111,7 @@ func (c *Collector) collectRDSEventAlerting(ctx context.Context, client *aws.AWS
 
 		subscribers, err := client.GetSNSTopicSubscribers(ctx, region, sub.TopicARN)
 		if err != nil {
-			c.warn("region %s: failed to read subscribers for RDS event subscription %s", region, sub.ID)
+			c.warn("region %s: failed to read subscribers for %s", region, named{"RDS event subscription " + sub.ID, "an RDS event subscription"})
 			metrics.BackupAlertingTopicsUnresolvedCount++
 			metrics.missing.addPartial(err, 1, "backup_failure_alerting_reaching_subscriber_count")
 			continue

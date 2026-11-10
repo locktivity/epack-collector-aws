@@ -106,9 +106,13 @@ func TestE2E_RealAWSCollection(t *testing.T) {
 		t.Fatal("expected at least one account in output")
 	}
 
+	audit := e2eLevel().AtLeast(componentsdk.LevelAudit)
 	for i, acct := range output.Accounts {
-		if len(acct.AccountID) != 12 {
+		switch {
+		case audit && len(acct.AccountID) != 12:
 			t.Errorf("accounts[%d].account_id should be 12 digits, got %q", i, acct.AccountID)
+		case !audit && acct.AccountID != "":
+			t.Errorf("accounts[%d].account_id = %q, want none below the audit level", i, acct.AccountID)
 		}
 		if len(acct.Regions) == 0 {
 			t.Errorf("accounts[%d].regions should not be empty", i)

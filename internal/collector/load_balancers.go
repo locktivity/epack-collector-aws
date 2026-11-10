@@ -17,7 +17,7 @@ func (c *Collector) collectLoadBalancerMetrics(ctx context.Context, client *aws.
 
 	for _, lb := range lbs {
 		if lb.ListenersUnresolved {
-			c.warn("account %s region %s: failed to read listeners for load balancer %s; its transport posture is unproven", accountID, region, lb.Name)
+			c.warn("account %s region %s: failed to read listeners for %s; its transport posture is unproven", accountID, region, named{"load balancer " + lb.Name, "a load balancer"})
 		}
 	}
 

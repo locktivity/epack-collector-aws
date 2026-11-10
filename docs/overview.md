@@ -44,7 +44,7 @@ null; the count beside it (here `iam_user_count`) is 0.
 | `root_signing_certificates_present` | Whether root has signing certificates present |
 | `root_access_protected` | Whether root MFA is active or no long-term root credentials are present |
 | `root_organizations_features_evaluated` | Whether centralized root access features were read from IAM |
-| `root_organization_id` | Organization ID returned by IAM when centralized root access features were read |
+| `root_organization_id` | Audit level and above: the organization ID returned by IAM when centralized root access features were read |
 | `root_credentials_management_feature_enabled` | Whether IAM reported the `RootCredentialsManagement` centralized root access feature |
 | `root_sessions_feature_enabled` | Whether IAM reported the `RootSessions` centralized root access feature |
 | `root_organizations_features_error_code` | Error code when centralized root access features could not be read |
@@ -127,7 +127,7 @@ Interpretation guide:
 |--------|-------------|
 | `enabled` | Whether an Identity Center instance was found in any scanned region. A member account cannot see its organization's instance |
 | `instance_status` | AWS's status for the instance, such as `ACTIVE`. Only an active instance signs people in |
-| `instance_owner_account_id` | The account that owns the instance: the management account for an organization instance |
+| `instance_owner_account_id` | Audit level and above: the account that owns the instance, the management account for an organization instance |
 | `instance_type` | `organization` or `account`. An account instance cannot sign people in to AWS accounts |
 | `user_count` | Users in the connected identity store |
 | `external_id_user_count` | Users with an external ID from SCIM provisioning, which IAM Identity Center sets when an external identity provider provisions a user. External IDs from other issuers, such as an Active Directory sync, do not count. The IDs are not collected |
@@ -231,9 +231,10 @@ The optional `label` is operator-supplied and rides each account's output as
 
 Each account's posture is collected independently and included in the output.
 An account that fails entirely is recorded under `failed_accounts` (with the
-account ID parsed from its role ARN and the upstream error code) instead of
-silently disappearing, and the normalized artifact carries a matching stub
-entry (with `collection_error_code` and no metric groups). The normalized
+upstream error code, and from the audit level the account ID parsed from its
+role ARN and the role itself) instead of silently disappearing, and the
+normalized artifact carries a matching stub entry (with
+`collection_error_code` and no metric groups). The normalized
 `all_accounts_collected` is false when any account failed, and from the audit
 level `accounts_expected` counts every configured account. A metric group with
 no value left in it is left out of the normalized artifact. The access-posture

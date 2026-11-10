@@ -16,9 +16,11 @@ import (
 // Collector collects AWS account security posture.
 type Collector struct {
 	config   Config
-	warnings []string         // Service-level warnings accumulated during collection
-	gaps     *gapLog          // Values left out of the artifacts, and why
-	now      func() time.Time // The run's clock
+	level    componentsdk.Level // The run's level, which decides what warnings name
+	account  accountName        // The account being collected, as trust warnings name it
+	warnings []string           // Service-level warnings accumulated during collection
+	gaps     *gapLog            // Values left out of the artifacts, and why
+	now      func() time.Time   // The run's clock
 }
 
 // ErrNoUsableAccounts means no accounts were configured and the implicit
@@ -27,8 +29,13 @@ type Collector struct {
 // this to a config error rather than a network error.
 var ErrNoUsableAccounts = errors.New("no accounts configured and default AWS credentials are unavailable")
 
-// warn records a service-level warning for diagnostics.
+// warn records a service-level warning for diagnostics. Below the audit
+// level, the warning names nothing that identifies the company's accounts or
+// resources. See trustArgs.
 func (c *Collector) warn(format string, args ...interface{}) {
+	if !c.level.AtLeast(componentsdk.LevelAudit) {
+		args = c.trustArgs(args)
+	}
 	c.warnings = append(c.warnings, fmt.Sprintf(format, args...))
 }
 
@@ -56,9 +63,10 @@ func New(config Config) (*Collector, error) {
 }
 
 // regionCopy returns a Collector for one concurrent region scan: it shares
-// the configuration, clock, and gap log, and buffers its own warnings.
+// the configuration, level, account, clock, and gap log, and buffers its own
+// warnings.
 func (c *Collector) regionCopy() *Collector {
-	return &Collector{config: c.config, gaps: c.gaps, now: c.now}
+	return &Collector{config: c.config, level: c.level, account: c.account, gaps: c.gaps, now: c.now}
 }
 
 // Collect fetches and aggregates security posture metrics for all configured accounts.
@@ -68,6 +76,8 @@ func (c *Collector) regionCopy() *Collector {
 func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Output, error) {
 	output := NewOutput(c.now())
 	output.CollectedAtLevel = string(level)
+	c.level = level
+	audit := level.AtLeast(componentsdk.LevelAudit)
 
 	// Reset service-level warnings from any previous run
 	c.warnings = nil
@@ -82,8 +92,10 @@ func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Out
 	total := int64(len(accounts))
 	c.status("Starting AWS posture collection")
 
-	// Track account errors and warnings for diagnostics
-	var accountErrors []string
+	// Track account errors and warnings for diagnostics. failureMessages
+	// holds each account error in full for the run's failure, which is not
+	// an artifact.
+	var accountErrors, failureMessages []string
 	var accountFailures []error
 	var warnings []string
 
@@ -98,18 +110,23 @@ func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Out
 	for i, acct := range accounts {
 		c.progress(int64(i+1), total, fmt.Sprintf("Collecting account %d of %d", i+1, len(accounts)))
 
+		c.account = accountName{name: trustAccountName(acct, i+1)}
 		posture, err := c.collectAccount(ctx, acct, authMode, level, len(output.Accounts))
 		if err != nil {
 			errMsg := formatAccountError(acct, err)
-			accountErrors = append(accountErrors, errMsg)
+			failureMessages = append(failureMessages, errMsg)
+			accountErrors = append(accountErrors, c.accountError(acct, i+1, err))
 			accountFailures = append(accountFailures, fmt.Errorf("%s: %w", accountRef(acct), err))
-			output.FailedAccounts = append(output.FailedAccounts, FailedAccountRecord{
-				AccountID: accountIDFromRoleARN(acct.RoleARN),
-				RoleARN:   acct.RoleARN,
+			failed := FailedAccountRecord{
 				Label:     acct.Label,
 				ErrorCode: apiErrorCode(err),
 				err:       err,
-			})
+			}
+			if audit {
+				failed.AccountID = accountIDFromRoleARN(acct.RoleARN)
+				failed.RoleARN = acct.RoleARN
+			}
+			output.FailedAccounts = append(output.FailedAccounts, failed)
 			c.status(errMsg)
 			continue
 		}
@@ -140,7 +157,7 @@ func (c *Collector) Collect(ctx context.Context, level componentsdk.Level) (*Out
 			case componentsdk.CodeAuthFailed, componentsdk.CodePermissionDenied:
 				return nil, accountFailures[0]
 			}
-			return nil, componentsdk.ConfigError{Err: fmt.Errorf("%w: %s", ErrNoUsableAccounts, strings.Join(accountErrors, "; "))}
+			return nil, componentsdk.ConfigError{Err: fmt.Errorf("%w: %s", ErrNoUsableAccounts, strings.Join(failureMessages, "; "))}
 		}
 		return nil, fmt.Errorf("all %d configured accounts failed: %w", len(accounts), errors.Join(accountFailures...))
 	}
@@ -168,6 +185,7 @@ func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig
 		return nil, fmt.Errorf("getting account ID: %w", err)
 	}
 	accountID := identity.Account
+	c.account.id = accountID
 	c.status(fmt.Sprintf("Connected to account %s", accountID))
 	if index == 0 {
 		c.signedInAs(identity, client.AuthMethod())
@@ -180,18 +198,18 @@ func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig
 	regions, err := c.getRegions(accountCtx, client)
 	if err != nil {
 		c.warn("account %s: failed to list enabled regions: %v", accountID, err)
-		posture := NewAccountPosture(accountID, nil)
+		posture := NewAccountPosture(accountID, nil, level)
 		c.collectAccountAlias(accountCtx, client, accountID, at, posture)
 		c.collectGlobalMetrics(steps, client, accountID, at, posture, level)
 		posture.AccountSecurity = *c.collectCloudTrailOnly(steps.next("cloudtrail", "CloudTrail trails"), client, err, accountID, at, &posture.S3, level)
-		c.gaps.leaveOut(err, at.p("regions"))
+		c.gaps.leaveOut(err, at.p("regions"), at.p("primary_region"))
 		c.leaveOutRegional(err, at)
 		posture.inspector = inspectorScan{err: err}
 		normalizeForLevel(posture, level)
 		return posture, nil
 	}
 
-	posture := NewAccountPosture(accountID, regions)
+	posture := NewAccountPosture(accountID, regions, level)
 	c.collectAccountAlias(accountCtx, client, accountID, at, posture)
 
 	// Collect global metrics (IAM, S3, CloudFront)
@@ -203,7 +221,7 @@ func (c *Collector) collectAccount(ctx context.Context, acctConfig AccountConfig
 	c.collectRegionalMetrics(ctx, client, regions, accountID, at, posture, level)
 
 	// Collect account security services
-	c.collectSecurityServices(steps, client, regions, at, posture, level)
+	c.collectSecurityServices(steps, client, regions, accountID, at, posture, level)
 
 	// Strict-superset normalization: at audit+, every level-gated array is
 	// non-nil so consumers can rely on []  vs `null` to distinguish "fleet
@@ -698,16 +716,17 @@ func (c *Collector) recordRegionalUnread(at at, p *AccountPosture) {
 // collectSecurityServices collects account-level security service status,
 // each service as a step. level is passed through to per-surface collectors
 // that gate audit / internal fields.
-func (c *Collector) collectSecurityServices(steps *stepper, client *aws.AWSClient, regions []string, at at, posture *AccountPosture, level componentsdk.Level) {
+func (c *Collector) collectSecurityServices(steps *stepper, client *aws.AWSClient, regions []string, accountID string, at at, posture *AccountPosture, level componentsdk.Level) {
 	primaryRegion := DefaultPrimaryRegion
 	if len(regions) > 0 {
 		primaryRegion = regions[0]
 	}
+	posture.PrimaryRegion = primaryRegion
 
 	// collectAccountSecurity handles per-service warnings internally
-	posture.AccountSecurity = *c.collectAccountSecurity(steps, client, primaryRegion, regions, posture.AccountID, at, &posture.S3, &posture.inspector, level)
+	posture.AccountSecurity = *c.collectAccountSecurity(steps, client, primaryRegion, regions, accountID, at, &posture.S3, &posture.inspector, level)
 
-	posture.IdentityCenter = c.collectIdentityCenter(steps.next("identity_center", "IAM Identity Center"), client, regions, posture.AccountID, at, level)
+	posture.IdentityCenter = c.collectIdentityCenter(steps.next("identity_center", "IAM Identity Center"), client, regions, accountID, at, level)
 }
 
 // resolveAuthMode determines the effective authentication mode based on config.
@@ -762,10 +781,16 @@ func (c *Collector) initializeAuth(accounts []AccountConfig) (authMode string, w
 		return authMode, nil, nil
 	}
 
-	// Check for incompatible settings
-	for _, acct := range accounts {
-		if acct.ExternalID != "" {
+	// Check for incompatible settings. Below the audit level the warning
+	// names the account as trust warnings do, since its role ARN holds the
+	// account ID.
+	for i, acct := range accounts {
+		switch {
+		case acct.ExternalID == "":
+		case c.level.AtLeast(componentsdk.LevelAudit):
 			warnings = append(warnings, fmt.Sprintf("external_id is ignored in OIDC mode for role %s", acct.RoleARN))
+		default:
+			warnings = append(warnings, fmt.Sprintf("external_id is ignored in OIDC mode for account %s", trustAccountName(acct, i+1)))
 		}
 	}
 
@@ -795,6 +820,17 @@ func accountIDFromRoleARN(roleARN string) string {
 // formatAccountError creates a diagnostic error message for a failed account collection.
 func formatAccountError(acct AccountConfig, err error) string {
 	return fmt.Sprintf("failed to collect account (%s): %v", accountRef(acct), err)
+}
+
+// accountError is the diagnostics message for the account at a 1-based
+// position in the configuration whose collection failed. Below the audit
+// level it names the account as trustAccountName does and the failure by its
+// code, since the role ARN and AWS's message both hold the account ID.
+func (c *Collector) accountError(acct AccountConfig, position int, err error) string {
+	if c.level.AtLeast(componentsdk.LevelAudit) {
+		return formatAccountError(acct, err)
+	}
+	return fmt.Sprintf("failed to collect account %s: %s", trustAccountName(acct, position), errorCode(err))
 }
 
 // accountRef names an account by its label and role, or as the default

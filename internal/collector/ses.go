@@ -30,12 +30,12 @@ func (c *Collector) collectSESMetrics(ctx context.Context, client *aws.AWSClient
 
 	for _, s := range sets {
 		if s.Unresolved {
-			c.warn("account %s region %s: failed to read SES configuration set %s; its TLS policy is unproven", accountID, region, s.Name)
+			c.warn("account %s region %s: failed to read %s; its TLS policy is unproven", accountID, region, named{"SES configuration set " + s.Name, "an SES configuration set"})
 		}
 	}
 	for _, i := range identities {
 		if i.Unresolved {
-			c.warn("account %s region %s: failed to read SES identity %s; its default configuration set is unknown", accountID, region, i.Name)
+			c.warn("account %s region %s: failed to read %s; its default configuration set is unknown", accountID, region, named{"SES identity " + i.Name, "an SES identity"})
 		}
 	}
 

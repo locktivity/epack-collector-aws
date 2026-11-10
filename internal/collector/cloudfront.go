@@ -26,7 +26,7 @@ func (c *Collector) collectCloudFrontMetrics(ctx context.Context, client *aws.AW
 
 	for _, d := range distributions {
 		if d.VPCOriginErr != nil {
-			c.warn("account %s: failed to read a VPC origin of CloudFront distribution %s, so its origin protocols are unknown: %v", accountID, d.ID, d.VPCOriginErr)
+			c.warn("account %s: failed to read a VPC origin of %s, so its origin protocols are unknown: %v", accountID, named{"CloudFront distribution " + d.ID, "a CloudFront distribution"}, d.VPCOriginErr)
 		}
 	}
 	out := aggregateCloudFrontDistributions(distributions)

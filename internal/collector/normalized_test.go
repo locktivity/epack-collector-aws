@@ -750,7 +750,7 @@ func noInstance() IdentityCenterStatus {
 // ID.
 func orgInstance(store string, users, withExternalID int) IdentityCenterStatus {
 	return IdentityCenterStatus{
-		Enabled: true, InstanceStatus: "ACTIVE", InstanceType: "organization", IdentityStoreID: store,
+		Enabled: true, InstanceStatus: "ACTIVE", InstanceType: "organization", identityStoreID: store,
 		UserCount: users, ExternalIDUserCount: withExternalID, MFAEvidence: identityCenterMFAEvidence(users, withExternalID),
 		RegionsChecked: []string{"us-east-1"},
 	}

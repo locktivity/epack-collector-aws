@@ -37,7 +37,7 @@ func (c *Collector) collectKMSMetrics(ctx context.Context, client *aws.AWSClient
 		}
 		switch {
 		case k.RotationErr != nil:
-			c.warn("account %s region %s: failed to read rotation status for KMS key %s: %v", accountID, region, k.KeyID, k.RotationErr)
+			c.warn("account %s region %s: failed to read rotation status for %s: %v", accountID, region, named{"KMS key " + k.KeyID, "a KMS key"}, k.RotationErr)
 			if !pendingDeletion {
 				out.missing.addPartial(k.RotationErr, 1, "cmks_with_rotation_disabled_count")
 			}
