@@ -56,7 +56,7 @@ func (c *Collector) collectAccessAnalyzerStatus(ctx context.Context, client *aws
 	}
 
 	for _, analyzer := range status.analyzersUnresolved(regions, byRegion) {
-		c.warn("account %s: failed to list findings for access analyzer %s; its findings are unknown, not zero", accountID, analyzer)
+		c.warn("account %s: failed to list findings for %s; its findings are unknown, not zero", accountID, named{"access analyzer " + analyzer, "an access analyzer"})
 	}
 
 	if level.AtLeast(componentsdk.LevelAudit) {

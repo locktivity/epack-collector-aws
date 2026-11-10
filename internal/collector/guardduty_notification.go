@@ -70,12 +70,12 @@ func (c *Collector) scanGuardDutyNotificationRegion(ctx context.Context, client 
 }
 
 // applyGuardDutyNotificationScan folds one detector region's scan into the
-// account summary, appending audit rows when includeRows is set. What a
-// failed read leaves unknown goes into missing, by field under the GuardDuty
-// status.
-func applyGuardDutyNotificationScan(fn *GuardDutyFindingNotification, missing *unread, s guardDutyNotificationScan, region string, includeRows bool) {
+// account summary, adding the administrator account and the rows when audit
+// is set. What a failed read leaves unknown goes into missing, by field under
+// the GuardDuty status.
+func applyGuardDutyNotificationScan(fn *GuardDutyFindingNotification, missing *unread, s guardDutyNotificationScan, region string, audit bool) {
 	fn.DetectorRegionsCount++
-	if fn.AdministratorAccountID == "" {
+	if audit && fn.AdministratorAccountID == "" {
 		fn.AdministratorAccountID = s.adminAccountID
 		missing.add(s.adminErr, "finding_notification/administrator_account_id")
 	}
@@ -84,7 +84,7 @@ func applyGuardDutyNotificationScan(fn *GuardDutyFindingNotification, missing *u
 		missing.addPartial(s.rulesErr, 1, "finding_notification/rule_count", "finding_notification/detector_regions_routed_count",
 			"finding_notification/detector_regions_reaching_subscriber_count", "finding_notification/subscriptions_by_protocol",
 			"finding_notification/subscriptions_pending_confirmation_count")
-		if includeRows {
+		if audit {
 			missing.add(s.rulesErr, "finding_notification/rules")
 		}
 		return
@@ -125,7 +125,7 @@ func applyGuardDutyNotificationScan(fn *GuardDutyFindingNotification, missing *u
 		}
 	}
 
-	if includeRows {
+	if audit {
 		for _, rule := range s.rules {
 			row := guardDutyNotificationRuleToRow(rule, region, s.reach)
 			for _, topic := range rule.TopicARNs {

@@ -98,14 +98,16 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, acc
 
 	features, err := client.ListOrganizationsFeatures(ctx)
 	if err != nil {
-		processRootOrganizationsFeatures(nil, err, metrics)
+		processRootOrganizationsFeatures(nil, err, metrics, level)
 		if shouldWarnRootOrganizationsFeaturesError(metrics.RootOrganizationsFeaturesErrorCode) {
 			c.warn("account %s: failed to collect IAM organizations root features: %v", accountID, err)
 		}
-		c.gaps.leaveOut(rootOrganizationsFeaturesGap(err), iamAt.p("root_organization_id"),
-			iamAt.p("root_credentials_management_feature_enabled"), iamAt.p("root_sessions_feature_enabled"))
+		c.gaps.leaveOut(rootOrganizationsFeaturesGap(err), iamAt.p("root_credentials_management_feature_enabled"), iamAt.p("root_sessions_feature_enabled"))
+		if level.AtLeast(componentsdk.LevelAudit) {
+			c.gaps.leaveOut(rootOrganizationsFeaturesGap(err), iamAt.p("root_organization_id"))
+		}
 	} else {
-		processRootOrganizationsFeatures(features, nil, metrics)
+		processRootOrganizationsFeatures(features, nil, metrics, level)
 	}
 	if report != nil {
 		hardware, unmeasured, err := c.collectHardwareMFAMetrics(ctx, client, report, accountID)
@@ -515,7 +517,7 @@ func (c *Collector) collectHardwareMFAMetrics(ctx context.Context, client mfaDev
 
 		devices, err := client.ListMFADevices(ctx, user.User)
 		if err != nil {
-			c.warn("account %s: failed to list MFA devices for IAM user %s: %v", accountID, user.User, err)
+			c.warn("account %s: failed to list MFA devices for %s: %v", accountID, named{"IAM user " + user.User, "an IAM user"}, err)
 			unmeasured++
 			if firstErr == nil {
 				firstErr = err
@@ -566,7 +568,9 @@ func processRootCredentialState(metrics *IAMMetrics, mfaActive, passwordPresent,
 	metrics.RootAccessProtected = mfaActive || !credentialsPresent
 }
 
-func processRootOrganizationsFeatures(features *aws.OrganizationFeatures, err error, metrics *IAMMetrics) {
+// processRootOrganizationsFeatures records what IAM's centralized root access
+// features report. The organization ID is written from the audit level.
+func processRootOrganizationsFeatures(features *aws.OrganizationFeatures, err error, metrics *IAMMetrics, level componentsdk.Level) {
 	if err != nil {
 		metrics.RootOrganizationsFeaturesErrorCode = apiErrorCode(err)
 		return
@@ -576,7 +580,9 @@ func processRootOrganizationsFeatures(features *aws.OrganizationFeatures, err er
 		return
 	}
 	metrics.RootOrganizationsFeaturesEvaluated = true
-	metrics.RootOrganizationID = features.OrganizationID
+	if level.AtLeast(componentsdk.LevelAudit) {
+		metrics.RootOrganizationID = features.OrganizationID
+	}
 	metrics.RootCredentialsManagementFeatureEnabled = features.RootCredentialsManagementFeatureEnabled
 	metrics.RootSessionsFeatureEnabled = features.RootSessionsFeatureEnabled
 }

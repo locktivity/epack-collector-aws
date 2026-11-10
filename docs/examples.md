@@ -103,15 +103,18 @@ collectors:
 ## Sample Output
 
 Metrics use percentages (0-100, rounded down), booleans, and counts. Each
-percentage has the count it is taken of beside it.
+percentage has the count it is taken of beside it. This sample is part of a
+trust-level run's output, which names no account by its ID. From the audit
+level, each account also carries its `account_id`, and
+[levels.md](levels.md) lists the other identifiers that level adds.
 
 ```json
 {
   "schema_version": "1.0.0",
   "collected_at": "2024-01-15T10:30:00Z",
+  "collected_at_level": "trust",
   "accounts": [
     {
-      "account_id": "123456789012",
       "account_alias": "production",
       "regions": ["us-east-1", "us-west-2"],
       "iam": {
@@ -133,7 +136,6 @@ percentage has the count it is taken of beside it.
         "root_signing_certificates_present": false,
         "root_access_protected": true,
         "root_organizations_features_evaluated": true,
-        "root_organization_id": "o-abc1234567",
         "root_credentials_management_feature_enabled": true,
         "root_sessions_feature_enabled": true
       },

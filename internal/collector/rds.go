@@ -65,7 +65,7 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 			paramsByGroup[inst.ParameterGroupName] = params
 			paramErrByGroup[inst.ParameterGroupName] = err
 			if err != nil {
-				c.warn("region %s: failed to read parameter group %s; data-change logging is unknown, not absent: %v", region, inst.ParameterGroupName, err)
+				c.warn("region %s: failed to read %s; data-change logging is unknown, not absent: %v", region, named{"parameter group " + inst.ParameterGroupName, "a parameter group"}, err)
 			}
 		}
 		dmlByInstance[inst.DBInstanceIdentifier] = classifyDMLLogging(inst, paramsByGroup[inst.ParameterGroupName], paramErrByGroup[inst.ParameterGroupName])
@@ -270,7 +270,7 @@ func (c *Collector) readDBPortPrefixLists(ctx context.Context, client *aws.AWSCl
 					}
 					cidrs, err := client.GetManagedPrefixListCIDRs(ctx, region, id)
 					if err != nil {
-						c.warn("region %s: failed to read prefix list %s, so it is unknown whether the databases whose port it is allowed on are open to the internet: %v", region, id, err)
+						c.warn("region %s: failed to read %s, so it is unknown whether the databases whose port it is allowed on are open to the internet: %v", region, named{"prefix list " + id, "a prefix list"}, err)
 					}
 					lists[id] = prefixListRead{cidrs: cidrs, err: err}
 				}

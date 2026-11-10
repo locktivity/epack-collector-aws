@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.7.3
+
+- The collector is built on epack v0.10.5.
+- A trust-level run no longer writes an identifier of your accounts or resources. The detailed file's `accounts[*].account_id`, `iam.root_organization_id`, `account_security.guardduty.finding_notification.administrator_account_id`, `identity_center.instance_arn`, `instance_owner_account_id`, and `identity_store_id`, and `failed_accounts[*].account_id` and `role_arn` are written from the audit level. The schema marks them `audit` and stays at 1.0.0. A reader of a trust artifact that keyed accounts by `account_id` needs `account_label` or the account's position.
+- At trust, `diagnostics.account_errors` and `warnings` name an account by its configured label, as `(default credentials)`, or by its position in the configuration, give a failed call's AWS error code in place of AWS's message, and say what kind of resource a warning is about without its name or ID. Audit and internal runs write them as before.
+- The collector result lists the run's targets: the accounts from `aws.cloud-posture.json` and each account's regions from `aws.details.json`. It declares each account's primary region separately, for the AWS Config, Security Hub, and `account_security.inspector` values read there alone. That region is the new `accounts[*].primary_region` in `aws.details.json`. A trust run gives no counts.
+
+## v0.7.2
+
 - The collector is built on epack v0.10.2.
 - The deprecated `accounts[*].iam` and `workforce_sign_in` blocks are left out when `collect` leaves out `access-posture`, and `accounts[*].vuln_scanning` when it leaves out `vuln-scanning`. Each has a `not_shared` gap, and the gaps inside it are dropped. v0.7.1 wrote them whatever `collect` listed.
 

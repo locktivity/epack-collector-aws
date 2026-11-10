@@ -196,7 +196,7 @@ func (c *Collector) readExposurePrefixLists(ctx context.Context, client *aws.AWS
 				}
 				cidrs, err := client.GetManagedPrefixListCIDRs(ctx, region, id)
 				if err != nil {
-					c.warn("region %s: failed to read prefix list %s, so it is unknown whether the security groups that allow it are open to the world: %v", region, id, err)
+					c.warn("region %s: failed to read %s, so it is unknown whether the security groups that allow it are open to the world: %v", region, named{"prefix list " + id, "a prefix list"}, err)
 				}
 				lists[id] = prefixListRead{cidrs: cidrs, err: err}
 			}

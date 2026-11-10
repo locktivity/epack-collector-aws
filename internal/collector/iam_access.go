@@ -116,7 +116,7 @@ func (c *Collector) collectIAMAdmins(ctx context.Context, client adminPolicyList
 		}
 		admin, err := c.userIsAdmin(ctx, client, user.User, groups)
 		if err != nil {
-			c.warn("account %s: failed to read the policies of IAM user %s: %v", accountID, user.User, err)
+			c.warn("account %s: failed to read the policies of %s: %v", accountID, named{"IAM user " + user.User, "an IAM user"}, err)
 			out.unmeasured++
 			if out.err == nil {
 				out.err = err

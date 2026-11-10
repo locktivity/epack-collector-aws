@@ -78,11 +78,14 @@ func (c *Collector) collectIdentityCenter(ctx context.Context, client idcClient,
 	}
 
 	status.Enabled = true
-	status.InstanceARN = inst.InstanceARN
 	status.InstanceRegion = inst.Region
 	status.InstanceStatus = inst.Status
-	status.InstanceOwnerAccountID = inst.OwnerAccountID
-	status.IdentityStoreID = inst.IdentityStoreID
+	status.identityStoreID = inst.IdentityStoreID
+	if audit {
+		status.InstanceARN = inst.InstanceARN
+		status.InstanceOwnerAccountID = inst.OwnerAccountID
+		status.IdentityStoreID = inst.IdentityStoreID
+	}
 
 	users, usersErr := client.ListIdentityStoreUsers(ctx, inst.Region, inst.IdentityStoreID)
 	if usersErr != nil {
@@ -236,7 +239,7 @@ func (c *Collector) findIdentityCenterInstance(ctx context.Context, client idcCl
 		}
 	}
 	if len(found) > 1 {
-		c.warn("account %s: found %d Identity Center instances; reporting %s", accountID, len(found), report.InstanceARN)
+		c.warn("account %s: found %d Identity Center instances; reporting %s", accountID, len(found), named{report.InstanceARN, "one of them"})
 	}
 	return report, true, failed, firstErr
 }

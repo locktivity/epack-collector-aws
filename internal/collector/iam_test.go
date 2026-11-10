@@ -218,7 +218,7 @@ func TestProcessRootOrganizationsFeatures(t *testing.T) {
 		OrganizationID:                          "o-abc1234567",
 		RootCredentialsManagementFeatureEnabled: true,
 		RootSessionsFeatureEnabled:              true,
-	}, nil, metrics)
+	}, nil, metrics, componentsdk.LevelAudit)
 
 	if !metrics.RootOrganizationsFeaturesEvaluated {
 		t.Fatalf("expected root organizations features to be evaluated")
@@ -237,12 +237,31 @@ func TestProcessRootOrganizationsFeatures(t *testing.T) {
 	}
 }
 
+// The organization ID names the company's organization, so a trust run
+// leaves it out and keeps the feature flags.
+func TestProcessRootOrganizationsFeatures_TrustLeavesOutOrganizationID(t *testing.T) {
+	metrics := &IAMMetrics{}
+
+	processRootOrganizationsFeatures(&aws.OrganizationFeatures{
+		OrganizationID:                          "o-abc1234567",
+		RootCredentialsManagementFeatureEnabled: true,
+		RootSessionsFeatureEnabled:              true,
+	}, nil, metrics, componentsdk.LevelTrust)
+
+	if metrics.RootOrganizationID != "" {
+		t.Errorf("RootOrganizationID = %q, want none at trust", metrics.RootOrganizationID)
+	}
+	if !metrics.RootOrganizationsFeaturesEvaluated || !metrics.RootCredentialsManagementFeatureEnabled || !metrics.RootSessionsFeatureEnabled {
+		t.Errorf("feature flags = %+v, want both read at trust", metrics)
+	}
+}
+
 func TestProcessRootOrganizationsFeatures_APIError(t *testing.T) {
 	metrics := &IAMMetrics{}
 
 	processRootOrganizationsFeatures(nil, &smithy.GenericAPIError{
 		Code: "AccountNotManagementOrDelegatedAdministrator",
-	}, metrics)
+	}, metrics, componentsdk.LevelAudit)
 
 	if metrics.RootOrganizationsFeaturesEvaluated {
 		t.Fatalf("expected failed feature read not to be evaluated")
@@ -255,7 +274,7 @@ func TestProcessRootOrganizationsFeatures_APIError(t *testing.T) {
 func TestProcessRootOrganizationsFeatures_MissingOutput(t *testing.T) {
 	metrics := &IAMMetrics{}
 
-	processRootOrganizationsFeatures(nil, nil, metrics)
+	processRootOrganizationsFeatures(nil, nil, metrics, componentsdk.LevelAudit)
 
 	if metrics.RootOrganizationsFeaturesEvaluated {
 		t.Fatalf("expected missing feature output not to be evaluated")

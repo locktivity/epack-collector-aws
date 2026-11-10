@@ -140,7 +140,6 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
   "collected_at_level": "trust",
   "accounts": [
     {
-      "account_id": "123456789012",
       "account_alias": "production",
       "regions": ["us-east-1", "us-west-2"],
       "iam": {
@@ -163,7 +162,6 @@ The full machine-readable shape is in [docs/schema/v1.0.0.json](docs/schema/v1.0
         "root_signing_certificates_present": false,
         "root_access_protected": true,
         "root_organizations_features_evaluated": true,
-        "root_organization_id": "o-abc1234567",
         "root_credentials_management_feature_enabled": true,
         "root_sessions_feature_enabled": true
       },

@@ -315,13 +315,47 @@ func TestCollectIdentityCenter_FindsInstanceInASecondRegion(t *testing.T) {
 	if !status.Enabled || status.InstanceRegion != "us-west-2" {
 		t.Errorf("enabled %v in %q, want the instance in us-west-2", status.Enabled, status.InstanceRegion)
 	}
-	if status.InstanceStatus != "ACTIVE" || status.InstanceOwnerAccountID != "111111111111" || status.InstanceType != "organization" {
-		t.Errorf("status %q, owner %q, type %q; want an active organization instance this account owns", status.InstanceStatus, status.InstanceOwnerAccountID, status.InstanceType)
+	if status.InstanceStatus != "ACTIVE" || status.InstanceType != "organization" {
+		t.Errorf("status %q, type %q; want an active organization instance", status.InstanceStatus, status.InstanceType)
 	}
 	if len(status.RegionsChecked) != 2 || status.RegionsChecked[0] != "us-east-1" || status.RegionsChecked[1] != "us-west-2" {
 		t.Errorf("regions checked = %v, want both, in order", status.RegionsChecked)
 	}
 	requireNoGaps(t, c)
+}
+
+// The instance's ARN, its owner's account ID, and its identity store's ID
+// identify the company's resources, so a trust run leaves them out and an
+// audit run writes them. The store ID is kept within the run at every level,
+// to tell accounts that share a directory apart.
+func TestCollectIdentityCenter_InstanceIdentifiersFromAudit(t *testing.T) {
+	inst := identityCenterInstance("us-east-1")
+	for _, tc := range []struct {
+		level componentsdk.Level
+		want  bool
+	}{
+		{componentsdk.LevelTrust, false},
+		{componentsdk.LevelAudit, true},
+		{componentsdk.LevelInternal, true},
+	} {
+		t.Run(string(tc.level), func(t *testing.T) {
+			client := rbacFakeClient()
+			client.instances = []aws.IdentityCenterInstance{inst}
+			status := newTestCollector(Config{}).collectIdentityCenter(context.Background(), client, []string{"us-east-1"}, "111111111111", accountAt(0), tc.level)
+
+			got := status.InstanceARN != "" || status.InstanceOwnerAccountID != "" || status.IdentityStoreID != ""
+			all := status.InstanceARN == inst.InstanceARN && status.InstanceOwnerAccountID == inst.OwnerAccountID && status.IdentityStoreID == inst.IdentityStoreID
+			if got != tc.want || (tc.want && !all) {
+				t.Errorf("instance %q, owner %q, store %q; want them written: %v", status.InstanceARN, status.InstanceOwnerAccountID, status.IdentityStoreID, tc.want)
+			}
+			if status.identityStoreID != inst.IdentityStoreID {
+				t.Errorf("identityStoreID = %q, want %q at every level", status.identityStoreID, inst.IdentityStoreID)
+			}
+			if !status.Enabled || status.InstanceStatus != "ACTIVE" || status.InstanceType != "organization" {
+				t.Errorf("enabled %v, status %q, type %q; want an active organization instance", status.Enabled, status.InstanceStatus, status.InstanceType)
+			}
+		})
+	}
 }
 
 // A region that did not answer could hold the instance, so with none found
@@ -450,8 +484,8 @@ func TestCollectIdentityCenter_PrefersTheOrganizationInstance(t *testing.T) {
 
 			status := c.collectIdentityCenter(context.Background(), client, regions, self, accountAt(0), componentsdk.LevelTrust)
 
-			if status.InstanceARN != orgInstance.InstanceARN || status.InstanceType != "organization" {
-				t.Errorf("instance %s of type %q, want the organization instance", status.InstanceARN, status.InstanceType)
+			if status.identityStoreID != orgInstance.IdentityStoreID || status.InstanceType != "organization" {
+				t.Errorf("instance with store %s of type %q, want the organization instance", status.identityStoreID, status.InstanceType)
 			}
 			acct := AccountPosture{
 				AccountID:      self,

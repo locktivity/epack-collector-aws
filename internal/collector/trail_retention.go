@@ -89,7 +89,7 @@ func (c *Collector) resolveTrailBucketRetention(ctx context.Context, client *aws
 
 		region, err := client.GetBucketRegion(ctx, name)
 		if err != nil {
-			c.warn("account %s: failed to locate trail bucket %s; its retention is unknown: %v", accountID, name, err)
+			c.warn("account %s: failed to locate %s; its retention is unknown: %v", accountID, named{"trail bucket " + name, "a trail bucket"}, err)
 			v.state, v.publicAccess = trailRetentionUnknown, trailRetentionUnknown
 			v.missing.add(err, "bucket_retention", "bucket_expiration_days", "bucket_object_lock_mode", "bucket_public_access")
 			status.missing.addPartial(err, 1, trailRetentionCounts...)
@@ -100,7 +100,7 @@ func (c *Collector) resolveTrailBucketRetention(ctx context.Context, client *aws
 
 		lifecycle, err := client.GetBucketLifecycle(ctx, region, name)
 		if err != nil {
-			c.warn("account %s: failed to read lifecycle for trail bucket %s; its retention is unknown, not indefinite", accountID, name)
+			c.warn("account %s: failed to read lifecycle for %s; its retention is unknown, not indefinite", accountID, named{"trail bucket " + name, "a trail bucket"})
 			v.state = trailRetentionUnknown
 			v.missing.add(err, "bucket_retention", "bucket_expiration_days")
 			status.missing.addPartial(err, 1, trailRetentionCounts...)
@@ -108,14 +108,14 @@ func (c *Collector) resolveTrailBucketRetention(ctx context.Context, client *aws
 			v.lifecycle, v.lifecycleRead = lifecycle, true
 			v.versioned, v.versioningErr = client.GetBucketVersioning(ctx, region, name)
 			if v.versioningErr != nil {
-				c.warn("account %s: failed to read versioning for trail bucket %s; whether expired objects are deleted is unknown: %v", accountID, name, v.versioningErr)
+				c.warn("account %s: failed to read versioning for %s; whether expired objects are deleted is unknown: %v", accountID, named{"trail bucket " + name, "a trail bucket"}, v.versioningErr)
 			}
 		}
 
 		lock, err := client.GetBucketObjectLock(ctx, region, name)
 		switch {
 		case err != nil:
-			c.warn("account %s: failed to read object lock for trail bucket %s: %v", accountID, name, err)
+			c.warn("account %s: failed to read object lock for %s: %v", accountID, named{"trail bucket " + name, "a trail bucket"}, err)
 			v.missing.add(err, "bucket_object_lock_mode")
 			status.missing.addPartial(err, 1, trailObjectLockCounts...)
 		case lock != nil:
@@ -127,7 +127,7 @@ func (c *Collector) resolveTrailBucketRetention(ctx context.Context, client *aws
 		v.publicAccess = trailBucketPublicAccess(s3.accountPAB, bucketPAB)
 		switch v.publicAccess {
 		case trailBucketAccessNotBlocked:
-			c.warn("account %s: trail delivery bucket %s has no effective public access block; audit logs have no legitimate public readership", accountID, name)
+			c.warn("account %s: %s has no effective public access block; audit logs have no legitimate public readership", accountID, named{"trail delivery bucket " + name, "a trail delivery bucket"})
 		case trailRetentionUnknown:
 			why := bucketPAB.Err
 			if why == nil {

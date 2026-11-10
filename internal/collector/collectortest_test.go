@@ -210,6 +210,7 @@ func kitSuite() collectortest.Suite {
 				Name:      "clean",
 				Responses: kitResponses(),
 				Expect: map[string]map[string]any{awsPath: {
+					"/accounts/0/primary_region":                                                 kitRegion,
 					"/accounts/0/s3/account_public_access_block_enabled":                         false,
 					"/accounts/0/s3/public_access_blocked":                                       50,
 					"/accounts/0/s3/buckets/0/public_access_blocked":                             false,
@@ -323,6 +324,7 @@ func kitSuite() collectortest.Suite {
 				Responses: emptyRegionListResponses(),
 				Expect: map[string]map[string]any{awsPath: {
 					"/accounts/0/regions":            nil,
+					"/accounts/0/primary_region":     nil,
 					"/accounts/0/ec2/instance_count": nil,
 					"/accounts/0/monitoring":         nil,
 				}},

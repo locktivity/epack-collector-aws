@@ -153,7 +153,10 @@ func TestConfig_PrimaryRegionDoesNotDependOnRegionOrder(t *testing.T) {
 				restResponse("aws.securityhub.GetFindings", http.MethodPost, "https://securityhub.us-east-1.amazonaws.com/findings", http.StatusUnauthorized, notSubscribed),
 			)...)
 			doc := runDetailed(t, responses)
-			expectValues(t, doc, map[string]any{"/accounts/0/account_security/config/enabled": true})
+			expectValues(t, doc, map[string]any{
+				"/accounts/0/primary_region":                  "us-east-1",
+				"/accounts/0/account_security/config/enabled": true,
+			})
 		})
 	}
 }

@@ -173,13 +173,24 @@ func TestApplyGuardDutyNotificationScanTrustLevelSkipsRows(t *testing.T) {
 	var fn GuardDutyFindingNotification
 	var missing unread
 	applyGuardDutyNotificationScan(&fn, &missing, guardDutyNotificationScan{
-		evaluated: true,
-		rules:     []aws.GuardDutyNotificationRule{snsRule(true, arn)},
-		reach:     map[string]*aws.SNSTopicSubscribers{arn: topic(arn, 1, 0)},
+		evaluated:      true,
+		rules:          []aws.GuardDutyNotificationRule{snsRule(true, arn)},
+		reach:          map[string]*aws.SNSTopicSubscribers{arn: topic(arn, 1, 0)},
+		adminAccountID: "999999999999",
 	}, "us-east-1", false)
+	applyGuardDutyNotificationScan(&fn, &missing, guardDutyNotificationScan{
+		evaluated: true,
+		adminErr:  errors.New("reading administrator: AccessDeniedException"),
+	}, "eu-west-1", false)
 
 	if fn.Rules != nil {
 		t.Errorf("Rules = %v, want nil at trust level", fn.Rules)
+	}
+	if fn.AdministratorAccountID != "" {
+		t.Errorf("AdministratorAccountID = %q, want none at trust level", fn.AdministratorAccountID)
+	}
+	if hasUnread(missing, "finding_notification/administrator_account_id", 0) {
+		t.Errorf("administrator_account_id is marked unread at trust level: %+v", missing)
 	}
 	if fn.DetectorRegionsReachingSubscriberCount != 1 {
 		t.Errorf("DetectorRegionsReachingSubscriberCount = %d, want 1", fn.DetectorRegionsReachingSubscriberCount)
