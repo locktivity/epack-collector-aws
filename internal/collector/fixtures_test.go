@@ -389,14 +389,19 @@ func kitIAMResponses(report string) []collectortest.Response {
 		queryResponse("aws.iam.ListRoles", kitIAMURL, "<Roles>"+roleXML.String()+"</Roles><IsTruncated>false</IsTruncated>"),
 		samlProvidersResponse(),
 		// alice has AdministratorAccess attached, and carol has it through
-		// the platform-admins group. bob's developers group can only read.
+		// the platform-admins group. bob's developers group can only read,
+		// and neither bob nor the group has an inline policy. carol has no
+		// console password, so she is a credential and her policies are
+		// not read.
 		attachedUserPolicies("alice", kitAdminPolicy),
 		attachedUserPolicies("bob"),
 		attachedUserPolicies("carol", kitReadOnlyPolicy),
+		inlineUserPolicies("bob"),
 		groupsForUser("bob", "developers"),
 		groupsForUser("carol", "platform-admins"),
 		attachedGroupPolicies("developers", kitReadOnlyPolicy),
 		attachedGroupPolicies("platform-admins", kitAdminPolicy),
+		inlineGroupPolicies("developers"),
 		jsonResponse("aws.organizations.ListAccounts", "https://organizations.us-east-1.amazonaws.com/", map[string]any{
 			"Accounts": []any{
 				map[string]any{"Id": kitAccountID, "Arn": "arn:aws:organizations::111122223333:account/o-kit12345678/111122223333", "Name": "Northwind Prod", "Email": "aws-prod@northwind.example", "Status": "ACTIVE"},
@@ -431,6 +436,27 @@ func attachedUserPolicies(user string, arns ...string) collectortest.Response {
 // attachedGroupPolicies answers the listing of a group's attached policies.
 func attachedGroupPolicies(group string, arns ...string) collectortest.Response {
 	return queryItemResponse("aws.iam.ListAttachedGroupPolicies", kitIAMURL, map[string]string{"GroupName": group}, policyMembers(arns))
+}
+
+// policyNames lists inline policy names as IAM's PolicyNames members.
+func policyNames(names []string) string {
+	var b strings.Builder
+	b.WriteString("<PolicyNames>")
+	for _, name := range names {
+		fmt.Fprintf(&b, "<member>%s</member>", name)
+	}
+	b.WriteString("</PolicyNames><IsTruncated>false</IsTruncated>")
+	return b.String()
+}
+
+// inlineUserPolicies answers the listing of a user's inline policies.
+func inlineUserPolicies(user string, names ...string) collectortest.Response {
+	return queryItemResponse("aws.iam.ListUserPolicies", kitIAMURL, map[string]string{"UserName": user}, policyNames(names))
+}
+
+// inlineGroupPolicies answers the listing of a group's inline policies.
+func inlineGroupPolicies(group string, names ...string) collectortest.Response {
+	return queryItemResponse("aws.iam.ListGroupPolicies", kitIAMURL, map[string]string{"GroupName": group}, policyNames(names))
 }
 
 // groupsForUser answers the listing of the groups a user belongs to.

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.8.0
+
+- In the access file, the members are the IAM users with a console password and the users of the organization's IAM Identity Center, so `member_count` adds `sso_member_count` to the IAM users, and `sso_coverage_pct` is written as their share. An IAM user with access keys and no console password is a credential, not a member, and is not checked for admin access. When Identity Center has users, the inactive member values, and each account's `member_count`, are left out with a `not_read` gap.
+- Admins are the IAM members with the AWS managed `AdministratorAccess`, `PowerUserAccess`, or `IAMFullAccess` policy, on the user or one of the user's groups. A user with an inline or customer managed policy and none of those three leaves the admin counts out with a `partial` gap, since the collector does not read policy documents. The collector reads inline policy names with the new `iam:ListUserPolicies` and `iam:ListGroupPolicies` calls. When Identity Center has users, `admin_count` and `admin_share_pct` are left out with a `not_read` gap, and the `local_admin_*` values still count the IAM admins.
 - The collector is built on Go 1.26.11.
 
 ## v0.7.3

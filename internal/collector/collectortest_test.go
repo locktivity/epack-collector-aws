@@ -29,8 +29,10 @@ var kitOperations = []string{
 	"aws.iam.ListRoles",
 	"aws.iam.ListSAMLProviders",
 	"aws.iam.ListAttachedUserPolicies",
+	"aws.iam.ListUserPolicies",
 	"aws.iam.ListGroupsForUser",
 	"aws.iam.ListAttachedGroupPolicies",
+	"aws.iam.ListGroupPolicies",
 	"aws.organizations.ListAccounts",
 	"aws.s3.ListBuckets",
 	"aws.s3.GetBucketLocation",
@@ -389,13 +391,16 @@ func kitSuite() collectortest.Suite {
 					},
 					accessPosturePath: {
 						"/sign_in/sso_configured":                  true,
-						"/members/members_present":                 false,
-						"/members/member_count":                    0,
+						"/members/members_present":                 true,
+						"/members/member_count":                    2,
+						"/members/local_members_present":           false,
 						"/members/local_mfa_coverage_pct":          nil,
-						"/members/inactive_pct":                    nil,
+						"/members/inactive_pct":                    collectortest.Absent,
 						"/members/sso_member_count":                2,
-						"/admins/admins_present":                   false,
-						"/admins/admin_share_pct":                  nil,
+						"/members/sso_coverage_pct":                100,
+						"/admins/admins_present":                   collectortest.Absent,
+						"/admins/admin_share_pct":                  collectortest.Absent,
+						"/admins/local_admins_present":             false,
 						"/admins/local_admin_mfa_coverage_pct":     nil,
 						"/credentials/credentials_present":         false,
 						"/credentials/credential_count":            0,
@@ -469,9 +474,10 @@ func kitSuite() collectortest.Suite {
 						"/accounts/0/identity_center/enabled":                 false,
 					},
 					accessPosturePath: {
-						"/sign_in/sso_configured":   true,
-						"/members/member_count":     0,
-						"/members/sso_member_count": collectortest.Absent,
+						"/sign_in/sso_configured":     true,
+						"/members/member_count":       collectortest.Absent,
+						"/members/local_member_count": 0,
+						"/members/sso_member_count":   collectortest.Absent,
 					},
 				},
 			},
@@ -617,13 +623,55 @@ func kitSuite() collectortest.Suite {
 			},
 			{
 				// bob's attached policies come in two pages, and the second
-				// has AdministratorAccess, so bob is an admin too.
+				// has AdministratorAccess, so bob is an admin too. Identity
+				// Center has users, so the admin count is left out.
 				Name:      "IAM user policies in two pages",
 				Responses: adminPolicyPagesResponses(),
 				Expect: map[string]map[string]any{accessPosturePath: {
-					"/admins/admin_count":                  3,
+					"/admins/admin_count":                  collectortest.Absent,
+					"/admins/local_admin_count":            2,
 					"/admins/local_mfa_admin_count":        2,
-					"/admins/local_admin_mfa_coverage_pct": 66,
+					"/admins/local_admin_mfa_coverage_pct": 100,
+				}},
+			},
+			{
+				// Without Identity Center, the members are alice and bob,
+				// who have console passwords. carol has only an access key,
+				// so she is a credential. alice is the one admin.
+				Name:      "IAM users without Identity Center",
+				Responses: noIdentityCenterResponses(kitCredentialReport),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/members/member_count":                2,
+					"/members/sso_member_count":            0,
+					"/members/sso_coverage_pct":            0,
+					"/members/inactive_pct":                0,
+					"/admins/admin_count":                  1,
+					"/admins/admin_share_pct":              50,
+					"/admins/local_admin_mfa_coverage_pct": 100,
+					"/credentials/credential_count":        2,
+				}},
+			},
+			{
+				// PowerUserAccess on bob's developers group can change or
+				// delete any resource, so bob is an admin too.
+				Name: "PowerUserAccess through a group",
+				Responses: replaceResponses(noIdentityCenterResponses(kitCredentialReport),
+					attachedGroupPolicies("developers", "arn:aws:iam::aws:policy/PowerUserAccess")),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/admins/admin_count":     2,
+					"/admins/admin_share_pct": 100,
+				}},
+			},
+			{
+				// bob has an inline policy, whose document is not read, so
+				// whether he is an admin is unknown. alice still makes
+				// admins_present true.
+				Name:      "inline policy",
+				Responses: replaceResponses(noIdentityCenterResponses(kitCredentialReport), inlineUserPolicies("bob", "deploy")),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/admins/admins_present":    true,
+					"/admins/admin_count":       collectortest.Absent,
+					"/admins/local_admin_count": collectortest.Absent,
 				}},
 			},
 			{
@@ -632,8 +680,8 @@ func kitSuite() collectortest.Suite {
 				Name:      "IAM user policies denied",
 				Responses: adminPoliciesDeniedResponses(),
 				Expect: map[string]map[string]any{accessPosturePath: {
-					"/members/member_count":                3,
-					"/members/local_member_count":          3,
+					"/members/member_count":                4,
+					"/members/local_member_count":          2,
 					"/admins/admins_present":               collectortest.Absent,
 					"/admins/admin_count":                  collectortest.Absent,
 					"/admins/local_admin_mfa_coverage_pct": collectortest.Absent,
@@ -959,26 +1007,31 @@ func kitRecordings(t *testing.T, names ...string) []collectortest.Scenario {
 }
 
 // kitAccessPins are the clean run's access-posture values. alice, bob, and
-// carol are the IAM users, and alice and bob have MFA. alice and carol are
-// admins. Two access keys are active, and carol's is overdue for rotation.
+// carol are the IAM users. alice and bob have console passwords and MFA,
+// so they are members, with Identity Center's two users. carol has only an
+// access key, so she is a credential. alice is the IAM admin. Identity
+// Center has users, so the admin count and the inactive members are left
+// out. Two access keys are active, and carol's is overdue for rotation.
 func kitAccessPins() map[string]any {
 	return map[string]any{
 		"/sign_in/sso_configured":                        true,
 		"/members/members_present":                       true,
-		"/members/member_count":                          3,
+		"/members/member_count":                          4,
 		"/members/sso_member_count":                      2,
+		"/members/sso_coverage_pct":                      50,
 		"/members/local_members_present":                 true,
-		"/members/local_member_count":                    3,
+		"/members/local_member_count":                    2,
 		"/members/local_mfa_member_count":                2,
-		"/members/local_mfa_coverage_pct":                66,
-		"/members/inactive_member_count":                 0,
-		"/members/inactive_pct":                          0,
+		"/members/local_mfa_coverage_pct":                100,
+		"/members/inactive_member_count":                 collectortest.Absent,
+		"/members/inactive_pct":                          collectortest.Absent,
 		"/admins/admins_present":                         true,
-		"/admins/admin_count":                            2,
-		"/admins/admin_share_pct":                        67,
+		"/admins/admin_count":                            collectortest.Absent,
+		"/admins/admin_share_pct":                        collectortest.Absent,
 		"/admins/local_admins_present":                   true,
+		"/admins/local_admin_count":                      1,
 		"/admins/local_mfa_admin_count":                  1,
-		"/admins/local_admin_mfa_coverage_pct":           50,
+		"/admins/local_admin_mfa_coverage_pct":           100,
 		"/root/root_accounts_present":                    true,
 		"/root/root_account_count":                       1,
 		"/root/root_mfa_coverage_pct":                    100,
@@ -993,8 +1046,9 @@ func kitAccessPins() map[string]any {
 		"/scopes/0/id":                                   kitAccountID,
 		"/scopes/0/name":                                 "northwind-prod",
 		"/scopes/0/kind":                                 "account",
-		"/scopes/0/members/member_count":                 3,
-		"/scopes/0/admins/local_admin_mfa_coverage_pct":  50,
+		"/scopes/0/members/member_count":                 collectortest.Absent,
+		"/scopes/0/members/local_member_count":           2,
+		"/scopes/0/admins/local_admin_mfa_coverage_pct":  100,
 		"/scopes/0/members/sso_member_count":             collectortest.Absent,
 		"/scopes/1":                                      collectortest.Absent,
 	}

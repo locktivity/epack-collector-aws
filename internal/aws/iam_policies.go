@@ -27,6 +27,40 @@ func (c *AWSClient) ListAttachedUserPolicyARNs(ctx context.Context, userName str
 	return arns, nil
 }
 
+// ListUserPolicyNames returns the names of the inline policies embedded in
+// an IAM user, every page of them.
+func (c *AWSClient) ListUserPolicyNames(ctx context.Context, userName string) ([]string, error) {
+	paginator := iam.NewListUserPoliciesPaginator(iam.NewFromConfig(c.cfg), &iam.ListUserPoliciesInput{
+		UserName: aws.String(userName),
+	})
+	var names []string
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing the inline policies of IAM user %s: %w", userName, err)
+		}
+		names = append(names, page.PolicyNames...)
+	}
+	return names, nil
+}
+
+// ListGroupPolicyNames returns the names of the inline policies embedded in
+// an IAM group, every page of them.
+func (c *AWSClient) ListGroupPolicyNames(ctx context.Context, groupName string) ([]string, error) {
+	paginator := iam.NewListGroupPoliciesPaginator(iam.NewFromConfig(c.cfg), &iam.ListGroupPoliciesInput{
+		GroupName: aws.String(groupName),
+	})
+	var names []string
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing the inline policies of IAM group %s: %w", groupName, err)
+		}
+		names = append(names, page.PolicyNames...)
+	}
+	return names, nil
+}
+
 // ListGroupsForUser returns the names of the IAM groups a user belongs to,
 // every page of them.
 func (c *AWSClient) ListGroupsForUser(ctx context.Context, userName string) ([]string, error) {

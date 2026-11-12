@@ -9,10 +9,11 @@ import (
 // AccessPosture is the evidencepack/access-posture@v1 artifact for every
 // account collected. The sections hold totals across the accounts, and from
 // the audit level scopes holds each account alone. Members are the IAM users
-// in each account's credential report, and admins are the ones with the AWS
-// managed AdministratorAccess policy. Credentials are their active access
-// keys. A value left out has a gap, and the counts and scopes are written
-// from the audit level only.
+// with a console password in each account's credential report, and the
+// users of the organization's IAM Identity Center. Admins are the IAM users
+// with an AWS managed policy in adminPolicies. Credentials are the IAM
+// users' active access keys. A value left out has a gap, and the counts and
+// scopes are written from the audit level only.
 type AccessPosture struct {
 	SchemaVersion string            `json:"schema_version"`
 	CollectedAt   string            `json:"collected_at"`
@@ -32,12 +33,14 @@ type AccessSignIn struct {
 	SSOConfigured *bool `json:"sso_configured,omitempty"`
 }
 
-// AccessMembers counts the IAM users. Every IAM user signs in without SSO,
-// so the local values count the same users.
+// AccessMembers counts the IAM users with a console password and the
+// Identity Center users. Every such IAM user signs in without SSO, so the
+// local values count them.
 type AccessMembers struct {
 	MembersPresent      *bool            `json:"members_present,omitempty"`
 	MemberCount         *int             `json:"member_count,omitempty"`
 	SSOMemberCount      *int             `json:"sso_member_count,omitempty"`
+	SSOCoveragePct      Reading[float64] `json:"sso_coverage_pct,omitzero"`
 	LocalMembersPresent *bool            `json:"local_members_present,omitempty"`
 	LocalMemberCount    *int             `json:"local_member_count,omitempty"`
 	LocalMFAMemberCount *int             `json:"local_mfa_member_count,omitempty"`
@@ -46,7 +49,9 @@ type AccessMembers struct {
 	InactivePct         Reading[float64] `json:"inactive_pct,omitzero"`
 }
 
-// AccessAdmins counts the IAM users with the AdministratorAccess policy.
+// AccessAdmins counts the IAM users with a policy in adminPolicies. The
+// admin count over every member is left out when Identity Center has users,
+// since who of them administers an account is not read.
 type AccessAdmins struct {
 	AdminsPresent            *bool            `json:"admins_present,omitempty"`
 	AdminCount               *int             `json:"admin_count,omitempty"`
@@ -93,17 +98,18 @@ type AccessScope struct {
 // The reasons for the access-posture values AWS never reports, and for the
 // ones it reports that this collector does not read.
 var (
-	ssoRequiredUnsupported     = unsupported("AWS has no account setting to require SSO for everyone who signs in.")
-	mfaRequiredUnsupported     = unsupported("AWS has no account setting to require MFA for everyone who signs in.")
-	scimUnsupported            = unsupported("Whether IAM Identity Center users are provisioned through SCIM is not available from the AWS API.")
-	externalMembersUnsupported = unsupported("IAM has no guest or outside users. People from other accounts get access through roles.")
-	ssoCoverageUnsupported     = unsupported("IAM users cannot be linked to SSO, and Identity Center users are counted apart from them in sso_member_count.")
-	scopeSSOMembersNotRead     = notRead("Who is assigned to each account is in ListAccountAssignments from the account that holds the Identity Center instance, which this collector does not count per account.")
-	unrestrictedKeysNotRead    = notRead("An access key's IP and scope limits are in its user's policy documents, from GetUserPolicy and GetPolicyVersion, which this collector does not read.")
-	writeAccessKeysNotRead     = notRead("What an access key can change is in its user's policy documents, from GetUserPolicy and GetPolicyVersion, which this collector does not read.")
-	connectedAppsNotRead       = notRead("Third-party access goes through IAM roles that trust other accounts, from ListRoles, and Identity Center applications, from ListApplications. This collector does not count them as connected apps.")
-	unreadDirectoryNotRead     = notRead("The organization's Identity Center users are listed with ListUsers from the account that holds the instance or a delegated administrator, and no account collected is one.")
-	accessPostureLeftOut       = []struct {
+	ssoRequiredUnsupported        = unsupported("AWS has no account setting to require SSO for everyone who signs in.")
+	mfaRequiredUnsupported        = unsupported("AWS has no account setting to require MFA for everyone who signs in.")
+	scimUnsupported               = unsupported("Whether IAM Identity Center users are provisioned through SCIM is not available from the AWS API.")
+	externalMembersUnsupported    = unsupported("IAM has no guest or outside users. People from other accounts get access through roles.")
+	identityCenterAdminsNotRead   = notRead("Which Identity Center users can administer an account is in the permission sets ListAccountAssignments assigns them, from the account that holds the Identity Center instance, which this collector does not read.")
+	identityCenterInactiveNotRead = notRead("When Identity Center users last signed in is in CloudTrail's sign-in events, which this collector does not read.")
+	scopeSSOMembersNotRead        = notRead("Who is assigned to each account is in ListAccountAssignments from the account that holds the Identity Center instance, which this collector does not count per account.")
+	unrestrictedKeysNotRead       = notRead("An access key's IP and scope limits are in its user's policy documents, from GetUserPolicy and GetPolicyVersion, which this collector does not read.")
+	writeAccessKeysNotRead        = notRead("What an access key can change is in its user's policy documents, from GetUserPolicy and GetPolicyVersion, which this collector does not read.")
+	connectedAppsNotRead          = notRead("Third-party access goes through IAM roles that trust other accounts, from ListRoles, and Identity Center applications, from ListApplications. This collector does not count them as connected apps.")
+	unreadDirectoryNotRead        = notRead("The organization's Identity Center users are listed with ListUsers from the account that holds the instance or a delegated administrator, and no account collected is one.")
+	accessPostureLeftOut          = []struct {
 		why      *reason
 		audit    bool
 		pointers []string
@@ -113,7 +119,6 @@ var (
 		{scimUnsupported, false, []string{"sign_in/scim_enabled"}},
 		{externalMembersUnsupported, false, []string{"members/external_members_present"}},
 		{externalMembersUnsupported, true, []string{"members/external_member_count"}},
-		{ssoCoverageUnsupported, false, []string{"members/sso_coverage_pct"}},
 		{unrestrictedKeysNotRead, false, []string{"credentials/unrestricted_pct"}},
 		{unrestrictedKeysNotRead, true, []string{"credentials/unrestricted_credential_count"}},
 		{writeAccessKeysNotRead, false, []string{"credentials/write_access_pct"}},
@@ -154,15 +159,20 @@ func identityCenterInstanceSignal(acct AccountPosture, at at, gaps *gapLog) (sig
 }
 
 // accountAccess is one account's access evidence, folded from its detailed
-// values and the admin check.
+// values and the admin check. members are the IAM users with a console
+// password, who sign in without SSO, and localAdmins the admins among them.
+// people are every member, Identity Center users included, and admins every
+// admin. addPeople sets people and admins, and inactive over people.
 type accountAccess struct {
 	ssoConfigured truth
 
 	members, localMFA, inactive count
 	membersPresent              truth
+	people                      count
+	peoplePresent               truth
 
-	admins, adminMFA count
-	adminsPresent    truth
+	admins, localAdmins, adminMFA     count
+	adminsPresent, localAdminsPresent truth
 
 	rootAccounts, rootMFA count
 	rootPresent, rootKeys truth
@@ -178,7 +188,7 @@ func failedAccess(err error) accountAccess {
 	c, t := count{why: why}, truth{why: why}
 	return accountAccess{
 		ssoConfigured: t, members: c, localMFA: c, inactive: c, membersPresent: t,
-		admins: c, adminMFA: c, adminsPresent: t,
+		localAdmins: c, adminMFA: c, localAdminsPresent: t,
 		rootAccounts: c, rootMFA: c, rootPresent: t, rootKeys: t,
 		keys: c, unusedKeys: c, overdueKeys: c, keysPresent: t,
 	}
@@ -193,9 +203,9 @@ func accessOf(acct AccountPosture, i int, gaps *gapLog) accountAccess {
 	keys := at.p("iam", "access_key_user_count")
 	a := accountAccess{
 		ssoConfigured: ssoConfiguredOf(acct, at, gaps),
-		members:       countAt(gaps, users, iam.IAMUserCount),
-		localMFA:      countAt(gaps, at.p("iam", "mfa_enabled_user_count"), iam.MFAEnabledUserCount),
-		inactive:      countAt(gaps, users, iam.usage.inactiveUsers),
+		members:       countAt(gaps, users, iam.usage.consoleUsers),
+		localMFA:      countAt(gaps, at.p("iam", "mfa_enabled_user_count"), iam.usage.consoleMFAUsers),
+		inactive:      countAt(gaps, users, iam.usage.consoleInactiveUsers),
 		rootAccounts:  count{n: 1},
 		rootMFA:       rootMFAOf(iam, at, gaps),
 		rootKeys:      truthAt(gaps, at.p("iam", "root_access_keys_exist"), iam.RootAccessKeysExist),
@@ -203,7 +213,7 @@ func accessOf(acct AccountPosture, i int, gaps *gapLog) accountAccess {
 		unusedKeys:    countAt(gaps, keys, iam.usage.unusedKeys),
 		overdueKeys:   countAt(gaps, keys, iam.usage.rotationOverdueKeys),
 	}
-	a.admins, a.adminMFA, a.adminsPresent = adminsOf(acct.admins, a.members)
+	a.localAdmins, a.adminMFA, a.localAdminsPresent = adminsOf(acct.admins, a.members)
 	a.membersPresent = presentIn(a.members)
 	a.rootPresent = presentIn(a.rootAccounts)
 	a.keysPresent = presentIn(a.keys)
@@ -366,6 +376,35 @@ func ssoMembersOf(o *Output, gaps *gapLog) count {
 	return count{why: unreadDirectoryNotRead}
 }
 
+// addPeople sets a's members to people, the IAM users with a console
+// password and any Identity Center users, idc. When idc is unknown, or has
+// users, the admins and the inactive members are unknown, for idc's reason
+// or else inactiveWhy and adminsWhy: Identity Center users' account
+// assignments and sign-ins are not read. A value the IAM users already
+// leave unknown keeps its own reason, and the IAM admins still make
+// admins_present true.
+func addPeople(a accountAccess, people, idc count, inactiveWhy, adminsWhy *reason) accountAccess {
+	a.people = people
+	a.peoplePresent = anyOf(a.membersPresent, presentIn(people))
+	a.admins, a.adminsPresent = a.localAdmins, a.localAdminsPresent
+	switch {
+	case idc.why != nil:
+		inactiveWhy, adminsWhy = idc.why, idc.why
+	case idc.n == 0:
+		return a
+	}
+	if a.inactive.why == nil {
+		a.inactive = count{why: inactiveWhy}
+	}
+	if a.localAdmins.why == nil {
+		a.admins = count{why: adminsWhy}
+	}
+	if a.localAdminsPresent.why == nil && !a.localAdminsPresent.v {
+		a.adminsPresent = truth{why: adminsWhy}
+	}
+	return a
+}
+
 // accessPosture builds the access-posture artifact for output.
 func (c *Collector) accessPosture(o *Output) *AccessPosture {
 	return toAccessPosture(o, c.gaps)
@@ -380,6 +419,7 @@ func toAccessPosture(o *Output, gaps *gapLog) *AccessPosture {
 		Provider:      "aws",
 		SystemType:    "cloud",
 	}
+	sso := ssoMembersOf(o, gaps)
 	accounts := make([]accountAccess, 0, len(o.Accounts)+len(o.FailedAccounts))
 	for i, acct := range o.Accounts {
 		a := accessOf(acct, i, gaps)
@@ -387,6 +427,14 @@ func toAccessPosture(o *Output, gaps *gapLog) *AccessPosture {
 		if !audit {
 			continue
 		}
+		people := a.members
+		switch {
+		case sso.why != nil:
+			people = sso
+		case sso.n > 0:
+			people = count{why: scopeSSOMembersNotRead}
+		}
+		a = addPeople(a, people, sso, scopeSSOMembersNotRead, scopeSSOMembersNotRead)
 		scope := AccessScope{ID: acct.AccountID, Kind: "account"}
 		base := fmt.Sprintf("/scopes/%d/", len(posture.Scopes))
 		if alias := accountAt(i).p("account_alias"); gaps.covered(alias) {
@@ -396,6 +444,7 @@ func toAccessPosture(o *Output, gaps *gapLog) *AccessPosture {
 		}
 		writeAccess(w, base, a, &scope.SignIn, &scope.Members, &scope.Admins, &scope.Root, &scope.Credentials)
 		w.leaveOut(scopeSSOMembersNotRead, true, base+"members/sso_member_count")
+		w.leaveOut(scopeSSOMembersNotRead, false, base+"members/sso_coverage_pct")
 		leaveOutUnreportedAccess(w, base)
 		posture.Scopes = append(posture.Scopes, scope)
 	}
@@ -404,8 +453,10 @@ func toAccessPosture(o *Output, gaps *gapLog) *AccessPosture {
 	}
 
 	total := foldAccess(accounts)
+	total = addPeople(total, sumOf(total.members, sso), sso, identityCenterInactiveNotRead, identityCenterAdminsNotRead)
 	writeAccess(w, "/", total, &posture.SignIn, &posture.Members, &posture.Admins, &posture.Root, &posture.Credentials)
-	posture.Members.SSOMemberCount = w.count(ssoMembersOf(o, gaps), "/members/sso_member_count")
+	posture.Members.SSOMemberCount = w.count(sso, "/members/sso_member_count")
+	posture.Members.SSOCoveragePct = w.pct(sso, total.people, componentsdk.RoundDown, "/members/sso_coverage_pct")
 	leaveOutUnreportedAccess(w, "/")
 	w.leaveOut(connectedAppsNotRead, false, "/connected_apps")
 	return posture
@@ -430,22 +481,22 @@ func foldAccess(accounts []accountAccess) accountAccess {
 		return out
 	}
 	return accountAccess{
-		ssoConfigured:  allOf(flags(func(a accountAccess) truth { return a.ssoConfigured })...),
-		members:        field(func(a accountAccess) count { return a.members }),
-		localMFA:       field(func(a accountAccess) count { return a.localMFA }),
-		inactive:       field(func(a accountAccess) count { return a.inactive }),
-		membersPresent: anyOf(flags(func(a accountAccess) truth { return a.membersPresent })...),
-		admins:         field(func(a accountAccess) count { return a.admins }),
-		adminMFA:       field(func(a accountAccess) count { return a.adminMFA }),
-		adminsPresent:  anyOf(flags(func(a accountAccess) truth { return a.adminsPresent })...),
-		rootAccounts:   field(func(a accountAccess) count { return a.rootAccounts }),
-		rootMFA:        field(func(a accountAccess) count { return a.rootMFA }),
-		rootPresent:    anyOf(flags(func(a accountAccess) truth { return a.rootPresent })...),
-		rootKeys:       anyOf(flags(func(a accountAccess) truth { return a.rootKeys })...),
-		keys:           field(func(a accountAccess) count { return a.keys }),
-		unusedKeys:     field(func(a accountAccess) count { return a.unusedKeys }),
-		overdueKeys:    field(func(a accountAccess) count { return a.overdueKeys }),
-		keysPresent:    anyOf(flags(func(a accountAccess) truth { return a.keysPresent })...),
+		ssoConfigured:      allOf(flags(func(a accountAccess) truth { return a.ssoConfigured })...),
+		members:            field(func(a accountAccess) count { return a.members }),
+		localMFA:           field(func(a accountAccess) count { return a.localMFA }),
+		inactive:           field(func(a accountAccess) count { return a.inactive }),
+		membersPresent:     anyOf(flags(func(a accountAccess) truth { return a.membersPresent })...),
+		localAdmins:        field(func(a accountAccess) count { return a.localAdmins }),
+		adminMFA:           field(func(a accountAccess) count { return a.adminMFA }),
+		localAdminsPresent: anyOf(flags(func(a accountAccess) truth { return a.localAdminsPresent })...),
+		rootAccounts:       field(func(a accountAccess) count { return a.rootAccounts }),
+		rootMFA:            field(func(a accountAccess) count { return a.rootMFA }),
+		rootPresent:        anyOf(flags(func(a accountAccess) truth { return a.rootPresent })...),
+		rootKeys:           anyOf(flags(func(a accountAccess) truth { return a.rootKeys })...),
+		keys:               field(func(a accountAccess) count { return a.keys }),
+		unusedKeys:         field(func(a accountAccess) count { return a.unusedKeys }),
+		overdueKeys:        field(func(a accountAccess) count { return a.overdueKeys }),
+		keysPresent:        anyOf(flags(func(a accountAccess) truth { return a.keysPresent })...),
 	}
 }
 
@@ -457,22 +508,22 @@ func writeAccess(w writer, base string, a accountAccess, signIn *AccessSignIn, m
 
 	signIn.SSOConfigured = w.truth(a.ssoConfigured, at("sign_in/sso_configured"))
 
-	members.MembersPresent = w.truth(a.membersPresent, at("members/members_present"))
-	members.MemberCount = w.count(a.members, at("members/member_count"))
+	members.MembersPresent = w.truth(a.peoplePresent, at("members/members_present"))
+	members.MemberCount = w.count(a.people, at("members/member_count"))
 	members.LocalMembersPresent = w.truth(a.membersPresent, at("members/local_members_present"))
 	members.LocalMemberCount = w.count(a.members, at("members/local_member_count"))
 	members.LocalMFAMemberCount = w.count(a.localMFA, at("members/local_mfa_member_count"))
 	members.LocalMFACoveragePct = w.pct(a.localMFA, a.members, componentsdk.RoundDown, at("members/local_mfa_coverage_pct"))
 	members.InactiveMemberCount = w.count(a.inactive, at("members/inactive_member_count"))
-	members.InactivePct = w.pct(a.inactive, a.members, componentsdk.RoundUp, at("members/inactive_pct"))
+	members.InactivePct = w.pct(a.inactive, a.people, componentsdk.RoundUp, at("members/inactive_pct"))
 
 	admins.AdminsPresent = w.truth(a.adminsPresent, at("admins/admins_present"))
 	admins.AdminCount = w.count(a.admins, at("admins/admin_count"))
-	admins.AdminSharePct = w.pct(a.admins, a.members, componentsdk.RoundUp, at("admins/admin_share_pct"))
-	admins.LocalAdminsPresent = w.truth(a.adminsPresent, at("admins/local_admins_present"))
-	admins.LocalAdminCount = w.count(a.admins, at("admins/local_admin_count"))
+	admins.AdminSharePct = w.pct(a.admins, a.people, componentsdk.RoundUp, at("admins/admin_share_pct"))
+	admins.LocalAdminsPresent = w.truth(a.localAdminsPresent, at("admins/local_admins_present"))
+	admins.LocalAdminCount = w.count(a.localAdmins, at("admins/local_admin_count"))
 	admins.LocalMFAAdminCount = w.count(a.adminMFA, at("admins/local_mfa_admin_count"))
-	admins.LocalAdminMFACoveragePct = w.pct(a.adminMFA, a.admins, componentsdk.RoundDown, at("admins/local_admin_mfa_coverage_pct"))
+	admins.LocalAdminMFACoveragePct = w.pct(a.adminMFA, a.localAdmins, componentsdk.RoundDown, at("admins/local_admin_mfa_coverage_pct"))
 
 	root.RootAccountsPresent = w.truth(a.rootPresent, at("root/root_accounts_present"))
 	root.RootAccountCount = w.count(a.rootAccounts, at("root/root_account_count"))

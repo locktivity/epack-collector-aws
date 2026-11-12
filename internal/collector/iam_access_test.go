@@ -37,6 +37,11 @@ func TestCredentialUsage(t *testing.T) {
 	if got.inactiveUsers != 2 {
 		t.Errorf("inactive users = %d, want 2", got.inactiveUsers)
 	}
+	// The four users with a console password are members. Of them,
+	// stale-console and never are inactive, and none has MFA.
+	if got.consoleUsers != 4 || got.consoleInactiveUsers != 2 || got.consoleMFAUsers != 0 {
+		t.Errorf("console users = %d, inactive %d, with MFA %d; want 4, 2, 0", got.consoleUsers, got.consoleInactiveUsers, got.consoleMFAUsers)
+	}
 	if got.activeKeys != 3 {
 		t.Errorf("active keys = %d, want 3", got.activeKeys)
 	}
@@ -57,6 +62,8 @@ func TestCredentialUsage(t *testing.T) {
 type fakeAdminPolicies struct {
 	user, groupsOf map[string][]string
 	group          map[string][]string
+	userInline     map[string][]string
+	groupInline    map[string][]string
 	userErr        map[string]error
 	groupErr       map[string]error
 	groupReads     map[string]int
@@ -64,6 +71,14 @@ type fakeAdminPolicies struct {
 
 func (f *fakeAdminPolicies) ListAttachedUserPolicyARNs(_ context.Context, user string) ([]string, error) {
 	return f.user[user], f.userErr[user]
+}
+
+func (f *fakeAdminPolicies) ListUserPolicyNames(_ context.Context, user string) ([]string, error) {
+	return f.userInline[user], nil
+}
+
+func (f *fakeAdminPolicies) ListGroupPolicyNames(_ context.Context, group string) ([]string, error) {
+	return f.groupInline[group], nil
 }
 
 func (f *fakeAdminPolicies) ListGroupsForUser(_ context.Context, user string) ([]string, error) {
@@ -82,9 +97,10 @@ func reportOf(users ...aws.CredentialReportUser) *aws.CredentialReport {
 	return &aws.CredentialReport{Users: append([]aws.CredentialReportUser{{User: "<root_account>"}}, users...)}
 }
 
-// AdministratorAccess counts when it is attached to the user or to one of
-// the user's groups, in any partition. A customer managed policy with the
-// same name does not count, and each group is read once.
+// AdministratorAccess, PowerUserAccess and IAMFullAccess count when they are
+// attached to the user or to one of the user's groups, in any partition. A
+// customer managed policy with the same name does not count, and each group
+// is read once.
 func TestCollectIAMAdmins(t *testing.T) {
 	c := newTestCollector(Config{})
 	client := &fakeAdminPolicies{
@@ -104,21 +120,23 @@ func TestCollectIAMAdmins(t *testing.T) {
 		},
 	}
 	report := reportOf(
-		aws.CredentialReportUser{User: "direct", MFAActive: true},
-		aws.CredentialReportUser{User: "govcloud"},
-		aws.CredentialReportUser{User: "lookalike", MFAActive: true},
-		aws.CredentialReportUser{User: "via-group", MFAActive: true},
-		aws.CredentialReportUser{User: "via-group2"},
-		aws.CredentialReportUser{User: "developer", MFAActive: true},
+		aws.CredentialReportUser{User: "direct", PasswordEnabled: true, MFAActive: true},
+		aws.CredentialReportUser{User: "govcloud", PasswordEnabled: true},
+		aws.CredentialReportUser{User: "lookalike", PasswordEnabled: true, MFAActive: true},
+		aws.CredentialReportUser{User: "via-group", PasswordEnabled: true, MFAActive: true},
+		aws.CredentialReportUser{User: "via-group2", PasswordEnabled: true},
+		aws.CredentialReportUser{User: "developer", PasswordEnabled: true, MFAActive: true},
 	)
 
 	got := c.collectIAMAdmins(context.Background(), client, report, "111122223333")
 
-	if !got.read || got.unmeasured != 0 || got.err != nil {
-		t.Fatalf("read %t, %d unmeasured, err %v; want every user read", got.read, got.unmeasured, got.err)
+	if !got.read || got.unmeasured != 1 || !errors.Is(got.err, errPolicyDocumentsNotRead) {
+		t.Fatalf("read %t, %d unmeasured, err %v; want lookalike unmeasured for its unread policy", got.read, got.unmeasured, got.err)
 	}
-	if got.admins != 4 || got.mfaAdmins != 2 {
-		t.Errorf("%d admins, %d with MFA; want 4 and 2", got.admins, got.mfaAdmins)
+	// developer's group has PowerUserAccess. lookalike's customer managed
+	// policy is not read, so lookalike is unmeasured.
+	if got.admins != 5 || got.mfaAdmins != 3 {
+		t.Errorf("%d admins, %d with MFA; want 5 and 3", got.admins, got.mfaAdmins)
 	}
 	for group, reads := range client.groupReads {
 		if reads != 1 {
@@ -141,10 +159,10 @@ func TestCollectIAMAdmins_UnreadPolicies(t *testing.T) {
 		groupErr: map[string]error{"secret": denied},
 	}
 	report := reportOf(
-		aws.CredentialReportUser{User: "admin", MFAActive: true},
-		aws.CredentialReportUser{User: "unreadable"},
-		aws.CredentialReportUser{User: "blocked-group"},
-		aws.CredentialReportUser{User: "two-groups"},
+		aws.CredentialReportUser{User: "admin", PasswordEnabled: true, MFAActive: true},
+		aws.CredentialReportUser{User: "unreadable", PasswordEnabled: true},
+		aws.CredentialReportUser{User: "blocked-group", PasswordEnabled: true},
+		aws.CredentialReportUser{User: "two-groups", PasswordEnabled: true},
 	)
 
 	got := c.collectIAMAdmins(context.Background(), client, report, "111122223333")
@@ -154,6 +172,40 @@ func TestCollectIAMAdmins_UnreadPolicies(t *testing.T) {
 	}
 	if got.admins != 2 || got.mfaAdmins != 1 {
 		t.Errorf("%d admins, %d with MFA among the users read; want 2 and 1", got.admins, got.mfaAdmins)
+	}
+}
+
+// A user with an inline or customer managed policy, on the user or a group,
+// and none of the admin policies, is unmeasured, since the policy's document
+// is not read. A user with an admin policy is an admin whatever else they
+// have, and a user without a console password is a credential, so it is not
+// checked.
+func TestCollectIAMAdmins_InlineAndCustomerManagedPolicies(t *testing.T) {
+	c := newTestCollector(Config{})
+	client := &fakeAdminPolicies{
+		user: map[string][]string{
+			"admin":   {"arn:aws:iam::aws:policy/IAMFullAccess", "arn:aws:iam::111122223333:policy/deploy"},
+			"managed": {"arn:aws:iam::111122223333:policy/deploy"},
+			"reader":  {"arn:aws:iam::aws:policy/ReadOnlyAccess"},
+			"keys":    {"arn:aws:iam::aws:policy/AdministratorAccess"},
+		},
+		userInline:  map[string][]string{"inline": {"s3-write"}},
+		groupsOf:    map[string][]string{"via-group": {"ops"}},
+		groupInline: map[string][]string{"ops": {"ops-inline"}},
+	}
+	report := reportOf(
+		aws.CredentialReportUser{User: "admin", PasswordEnabled: true},
+		aws.CredentialReportUser{User: "managed", PasswordEnabled: true},
+		aws.CredentialReportUser{User: "inline", PasswordEnabled: true},
+		aws.CredentialReportUser{User: "via-group", PasswordEnabled: true},
+		aws.CredentialReportUser{User: "reader", PasswordEnabled: true},
+		aws.CredentialReportUser{User: "keys", AccessKey1Active: true},
+	)
+
+	got := c.collectIAMAdmins(context.Background(), client, report, "111122223333")
+
+	if got.admins != 1 || got.unmeasured != 3 || !errors.Is(got.err, errPolicyDocumentsNotRead) {
+		t.Errorf("%d admins, %d unmeasured, err %v; want 1, 3, and the unread policy documents", got.admins, got.unmeasured, got.err)
 	}
 }
 
