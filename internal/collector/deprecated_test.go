@@ -135,13 +135,15 @@ func TestNormalizedIAM_RootWithoutCredentialsCountsAsMFAProtected(t *testing.T) 
 
 // The counts behind the IAM percentages are 0 over an empty population,
 // where the percentage is left out, and left out where the credential
-// report was not read.
+// report was not read. user_count is the users who can sign in, as
+// members.local_member_count is, so it leaves out the users with only access
+// keys.
 func TestToCloudPosture_IAMCounts(t *testing.T) {
 	account := evaluatedAccountFixture()
-	account.IAM.IAMUserCount, account.IAM.AccessKeyUserCount, account.IAM.SAMLProviderCount = 5, 2, intPtr(1)
+	account.IAM.IAMUserCount, account.IAM.ConsoleUserCount, account.IAM.AccessKeyUserCount, account.IAM.SAMLProviderCount = 7, 5, 2, intPtr(1)
 	noUsers := evaluatedAccountFixture()
-	noUsers.IAM.IAMUserCount, noUsers.IAM.AccessKeyUserCount = 0, 0
-	noUsers.IAM.MFAEnabled, noUsers.IAM.AccessKeysRotated = nil, nil
+	noUsers.IAM.IAMUserCount, noUsers.IAM.ConsoleUserCount, noUsers.IAM.AccessKeyUserCount = 0, 0, 0
+	noUsers.IAM.ConsoleMFAEnabled, noUsers.IAM.AccessKeysRotated = nil, nil
 	unread := evaluatedAccountFixture()
 	unread.IAM.CredentialReportEvaluated = false
 	unread.IAM.SAMLProviderCount = nil

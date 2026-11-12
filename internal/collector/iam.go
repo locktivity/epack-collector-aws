@@ -64,7 +64,8 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, acc
 		c.warn("account %s: failed to collect IAM credential report: %v", accountID, reportErr)
 		c.gaps.leaveOut(reportErr, iamAt.p("iam_users_present"), iamAt.p("iam_user_count"), iamAt.p("access_key_user_count"),
 			iamAt.p("mfa_enabled"), iamAt.p("mfa_enabled_user_count"), iamAt.p("hardware_mfa_enabled"), iamAt.p("hardware_mfa_enabled_user_count"),
-			iamAt.p("access_keys_rotated"), iamAt.p("access_keys_rotated_user_count"))
+			iamAt.p("access_keys_rotated"), iamAt.p("access_keys_rotated_user_count"),
+			iamAt.p("console_user_count"), iamAt.p("console_mfa_user_count"), iamAt.p("console_mfa_enabled"))
 		if level.AtLeast(componentsdk.LevelAudit) {
 			c.gaps.leaveOut(reportErr, iamAt.p("users"))
 		}
@@ -76,6 +77,9 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, acc
 		metrics.CredentialReportEvaluated = true
 		metrics.report = report
 		metrics.usage = credentialUsage(report, c.now())
+		metrics.ConsoleUserCount = metrics.usage.consoleUsers
+		metrics.ConsoleMFAUserCount = metrics.usage.consoleMFAUsers
+		metrics.ConsoleMFAEnabled = pctOf(metrics.usage.consoleMFAUsers, metrics.usage.consoleUsers)
 	}
 
 	summary, summaryErr := client.GetAccountSummary(ctx)

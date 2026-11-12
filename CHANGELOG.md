@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.8.2
+
+- cloud-posture's deprecated `iam.user_count` and `iam.mfa_coverage_pct` count the IAM users with a console password, who can sign in, as their access-posture replacements `members.local_member_count` and `local_mfa_coverage_pct` do. A user with only access keys is left out. The detailed file adds those users as `iam.console_user_count`, `console_mfa_user_count`, and `console_mfa_enabled`.
+- cloud-posture writes `database.public_access_blocked_database_count` from the audit level, and `public_access_blocked_pct` over the databases. A DB instance outside a cluster has public access blocked when it is not publicly accessible, and a DB cluster when none of its instances is. The detailed file adds `rds.public_access_blocked_database_count` and `public_access_blocked`.
+- Each account in the access file's `scopes` counts its IAM Identity Center users as `members.sso_member_count`: the users ListAccountAssignments assigns to the account, directly or through a group, read from the account that holds the organization instance. The account's `member_count` adds them and `sso_coverage_pct` is their share. The account's admin and inactive values are left out with a `not_read` gap only when Identity Center users are assigned to it. When Identity Center has no users, every account's count is 0.
+
 ## v0.8.1
 
 - An ECS service on a capacity provider strategy counts in `fargate_service_count` when its strategy uses the `FARGATE` or `FARGATE_SPOT` provider. DescribeServices gives such a service no launch type. Each service row adds `capacity_providers` and `fargate`, and `fargate_service_count` counts the rows with `fargate` true. A service with neither a launch type nor a strategy leaves `fargate_service_count` out with an `invalid_response` gap.

@@ -20,6 +20,8 @@ func evaluatedAccountFixture() AccountPosture {
 			IAMUserCount:                    10,
 			AccessKeyUserCount:              10,
 			MFAEnabled:                      intPtr(80),
+			ConsoleUserCount:                10,
+			ConsoleMFAEnabled:               intPtr(80),
 			RootMFAEnabled:                  true,
 			RootAccessProtected:             true,
 			AccessKeysRotated:               intPtr(90),

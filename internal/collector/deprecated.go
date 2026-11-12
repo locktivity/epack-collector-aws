@@ -9,7 +9,10 @@ import (
 // The blocks in this file are the ones epack v0.10.0 moved out of
 // cloud-posture, into access-posture and vuln-scanning. The schema keeps
 // them as deprecated, and the collector writes them as v0.6 did, so profiles
-// written before v0.10.0 grade the same. A later minor removes them.
+// written before v0.10.0 grade the same. iam.user_count and mfa_coverage_pct
+// are the exception: they count the IAM users who can sign in, as the
+// access-posture values the schema names in their place do. A later minor
+// removes the blocks.
 
 // CloudPostureIAM holds an account's IAM values. Each is left out when its
 // detailed source was not read.
@@ -55,9 +58,9 @@ func mfaSource(evidence string) string {
 func normalizedIAM(iam IAMMetrics) CloudPostureIAM {
 	out := CloudPostureIAM{}
 	if iam.CredentialReportEvaluated {
-		out.MFACoveragePct = pctFloat(iam.MFAEnabled)
+		out.MFACoveragePct = pctFloat(iam.ConsoleMFAEnabled)
 		out.AccessKeyRotationCompliantPct = pctFloat(iam.AccessKeysRotated)
-		out.UserCount = intPtr(iam.IAMUserCount)
+		out.UserCount = intPtr(iam.ConsoleUserCount)
 		out.AccessKeyUserCount = intPtr(iam.AccessKeyUserCount)
 	}
 	if iam.SAMLProviderCount != nil {

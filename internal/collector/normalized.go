@@ -81,17 +81,17 @@ type CloudPostureStorage struct {
 // CloudPostureDatabase contains normalized metrics over the RDS instances and
 // clusters, omitted unless every requested region evaluated. The counts and
 // multi_az_pct are written from the audit level, and the percentages are null
-// when there are no databases. public_access_blocked_pct is written only as
-// null over no databases, since a cluster has no public access setting of its
-// own to count.
+// when there are no databases. A cluster has public access blocked when none
+// of its instances is publicly accessible.
 type CloudPostureDatabase struct {
-	DatabasesPresent       *bool            `json:"databases_present,omitempty"`
-	DatabaseCount          *int             `json:"database_count,omitempty"`
-	EncryptedDatabaseCount *int             `json:"encrypted_database_count,omitempty"`
-	EncryptionPct          Reading[float64] `json:"encryption_pct,omitzero"`
-	PublicAccessBlockedPct Reading[float64] `json:"public_access_blocked_pct,omitzero"`
-	MultiAZDatabaseCount   *int             `json:"multi_az_database_count,omitempty"`
-	MultiAZPct             Reading[float64] `json:"multi_az_pct,omitzero"`
+	DatabasesPresent                 *bool            `json:"databases_present,omitempty"`
+	DatabaseCount                    *int             `json:"database_count,omitempty"`
+	EncryptedDatabaseCount           *int             `json:"encrypted_database_count,omitempty"`
+	PublicAccessBlockedDatabaseCount *int             `json:"public_access_blocked_database_count,omitempty"`
+	EncryptionPct                    Reading[float64] `json:"encryption_pct,omitzero"`
+	PublicAccessBlockedPct           Reading[float64] `json:"public_access_blocked_pct,omitzero"`
+	MultiAZDatabaseCount             *int             `json:"multi_az_database_count,omitempty"`
+	MultiAZPct                       Reading[float64] `json:"multi_az_pct,omitzero"`
 }
 
 // CloudPostureLogging contains normalized logging configuration, omitted when
@@ -165,7 +165,8 @@ var normalizedSources = []struct {
 	{"database/database_count", []string{"rds/database_count"}, true},
 	{"database/encrypted_database_count", []string{"rds/encrypted_at_rest_database_count"}, true},
 	{"database/encryption_pct", []string{"rds/encrypted_at_rest"}, false},
-	{"database/public_access_blocked_pct", []string{"rds/database_count"}, false},
+	{"database/public_access_blocked_database_count", []string{"rds/public_access_blocked_database_count"}, true},
+	{"database/public_access_blocked_pct", []string{"rds/public_access_blocked"}, false},
 	{"database/multi_az_database_count", []string{"rds/multi_az_enabled_database_count"}, true},
 	{"database/multi_az_pct", []string{"rds/multi_az_enabled"}, true},
 	{"logging/audit_log_enabled", []string{"account_security/cloudtrail/enabled"}, false},
@@ -181,11 +182,11 @@ var normalizedSources = []struct {
 	{"backup/retention_days_min", []string{"rds/backup_retention_min"}, false},
 	{"threat_detection/enabled", []string{"account_security/guardduty/enabled_in_all_regions"}, false},
 	// The deprecated blocks in deprecated.go.
-	{"iam/mfa_coverage_pct", []string{"iam/mfa_enabled"}, false},
+	{"iam/mfa_coverage_pct", []string{"iam/console_mfa_enabled"}, false},
 	{"iam/root_mfa_enabled", []string{"iam/root_mfa_enabled", "iam/root_credentials_present"}, false},
 	{"iam/root_access_protected", []string{"iam/root_access_protected"}, false},
 	{"iam/access_key_rotation_compliant_pct", []string{"iam/access_keys_rotated"}, false},
-	{"iam/user_count", []string{"iam/iam_user_count"}, false},
+	{"iam/user_count", []string{"iam/console_user_count"}, false},
 	{"iam/access_key_user_count", []string{"iam/access_key_user_count"}, false},
 	{"iam/saml_provider_count", []string{"iam/saml_provider_count"}, false},
 	{"vuln_scanning/enabled", []string{"account_security/inspector/enabled"}, false},
@@ -314,6 +315,8 @@ func clearNormalized(account *CloudPostureAccount, field string) {
 		account.Database.DatabaseCount = nil
 	case "database/encrypted_database_count":
 		account.Database.EncryptedDatabaseCount = nil
+	case "database/public_access_blocked_database_count":
+		account.Database.PublicAccessBlockedDatabaseCount = nil
 	case "database/encryption_pct":
 		account.Database.EncryptionPct = Reading[float64]{}
 	case "database/public_access_blocked_pct":
@@ -407,12 +410,11 @@ func normalizedDatabase(rds RDSMetrics, audit bool) CloudPostureDatabase {
 	}
 	out.DatabasesPresent = boolPtr(rds.DatabaseCount > 0)
 	out.EncryptionPct = percentOf(rds.EncryptedAtRestDatabaseCount, rds.DatabaseCount, componentsdk.RoundDown)
-	if rds.DatabaseCount == 0 {
-		out.PublicAccessBlockedPct = Reading[float64]{Read: true}
-	}
+	out.PublicAccessBlockedPct = percentOf(rds.PublicAccessBlockedDatabaseCount, rds.DatabaseCount, componentsdk.RoundDown)
 	if audit {
 		out.DatabaseCount = intPtr(rds.DatabaseCount)
 		out.EncryptedDatabaseCount = intPtr(rds.EncryptedAtRestDatabaseCount)
+		out.PublicAccessBlockedDatabaseCount = intPtr(rds.PublicAccessBlockedDatabaseCount)
 		out.MultiAZDatabaseCount = intPtr(rds.MultiAZEnabledDatabaseCount)
 		out.MultiAZPct = percentOf(rds.MultiAZEnabledDatabaseCount, rds.DatabaseCount, componentsdk.RoundDown)
 	}

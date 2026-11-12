@@ -20,8 +20,11 @@ type rdsMetricsWithCounts struct {
 	clusterMembers int
 
 	// Raw counts the percentages come from once every region is merged.
+	// publicDatabases counts the databases with a publicly accessible
+	// instance: a standalone instance that is, or a cluster with one.
 	encrypted          int
 	publicAccess       int
+	publicDatabases    int
 	deletionProtection int
 	multiAZ            int
 	adequateBackup     int
@@ -135,6 +138,7 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 		}
 	}
 
+	publicClusters := map[string]bool{}
 	for _, inst := range instances {
 		if inst.PubliclyAccessible {
 			result.publicAccess++
@@ -145,10 +149,17 @@ func (c *Collector) collectRDSMetrics(ctx context.Context, client *aws.AWSClient
 		// Aurora, Multi-AZ DB clusters, DocumentDB and Neptune.
 		if inst.DBClusterIdentifier != "" && listedClusters[inst.DBClusterIdentifier] {
 			result.clusterMembers++
+			if inst.PubliclyAccessible {
+				publicClusters[inst.DBClusterIdentifier] = true
+			}
 			continue
+		}
+		if inst.PubliclyAccessible {
+			result.publicDatabases++
 		}
 		result.countDatabase(inst.StorageEncrypted, inst.DeletionProtection, inst.MultiAZ, inst.BackupRetentionPeriod)
 	}
+	result.publicDatabases += len(publicClusters)
 	for _, cluster := range clusters {
 		result.countDatabase(cluster.StorageEncrypted, cluster.DeletionProtection, cluster.MultiAZ, cluster.BackupRetentionPeriod)
 	}
@@ -184,6 +195,8 @@ func (m *rdsMetricsWithCounts) finalize() {
 	m.EncryptedAtRestDatabaseCount = m.encrypted
 	m.PubliclyAccessible = pctOf(m.publicAccess, m.instanceCount)
 	m.PubliclyAccessibleInstanceCount = m.publicAccess
+	m.PublicAccessBlocked = pctOf(total-m.publicDatabases, total)
+	m.PublicAccessBlockedDatabaseCount = total - m.publicDatabases
 	m.DeletionProtection = pctOf(m.deletionProtection, total)
 	m.DeletionProtectionDatabaseCount = m.deletionProtection
 	m.BackupRetentionAdequate = pctOf(m.adequateBackup, total)
@@ -394,6 +407,7 @@ func mergeRDSMetrics(a, b rdsMetricsWithCounts) rdsMetricsWithCounts {
 	result.clusterMembers += b.clusterMembers
 	result.encrypted += b.encrypted
 	result.publicAccess += b.publicAccess
+	result.publicDatabases += b.publicDatabases
 	result.deletionProtection += b.deletionProtection
 	result.multiAZ += b.multiAZ
 	result.adequateBackup += b.adequateBackup
