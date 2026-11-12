@@ -192,6 +192,25 @@ Parameter VALUES are NEVER collected — only metadata. Value-reading APIs are f
 | `secure_string_count` | SecureString-type parameters (the encrypted, sensitive ones) |
 | `secure_strings_without_customer_kms_count` | SecureStrings using `alias/aws/ssm` (vs a customer-managed key) |
 
+## Not Collected
+
+AWS offers the following through its APIs, and the collector does not read
+them.
+
+- **Security Hub standards other than CIS.** Security Hub also checks controls
+  for standards such as AWS Foundational Security Best Practices and PCI DSS.
+  The collector reads control results only for the CIS AWS Foundations
+  Benchmark.
+- **AWS Backup.** AWS Backup lists the resources it has backed up and the
+  backup plans that set their retention. The collector reads backup retention
+  only from RDS.
+- **Instance patch compliance.** Systems Manager Patch Manager reports how many
+  patches each managed instance is missing against its patch baseline. The
+  only Systems Manager data the collector reads is Parameter Store metadata.
+- **ECR basic scanning.** Amazon ECR's basic scanning reports vulnerabilities
+  in container images without Amazon Inspector. The collector reads image
+  findings only from Inspector.
+
 ## Testing
 
 - Unit tests validate collector math/aggregation and AWS helper logic:
