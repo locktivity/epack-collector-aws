@@ -851,6 +851,75 @@ func ecsDescribeServicesResponse(service map[string]any) collectortest.Response 
 		map[string]any{"services": []any{service}, "failures": []any{}})
 }
 
+// capacityProviderResponses answer as the kit account, with its ECS service
+// on a capacity provider strategy of providers, so DescribeServices leaves
+// its launch type out. With no providers, the service has neither.
+func capacityProviderResponses(providers ...string) []collectortest.Response {
+	service := kitECSService()
+	delete(service, "launchType")
+	if len(providers) > 0 {
+		strategy := make([]any, 0, len(providers))
+		for _, p := range providers {
+			strategy = append(strategy, map[string]any{"capacityProvider": p, "weight": 1, "base": 0})
+		}
+		service["capacityProviderStrategy"] = strategy
+	}
+	return replaceResponses(kitResponses(), ecsDescribeServicesResponse(service))
+}
+
+// idleClusterResponses answer as the kit account with a second ECS cluster
+// that runs no service.
+func idleClusterResponses() []collectortest.Response {
+	idle := "arn:aws:ecs:us-east-1:111122223333:cluster/northwind-batch"
+	return append([]collectortest.Response{
+		jsonItemResponse("aws.ecs.ListServices", regional("ecs"), map[string]any{"cluster": idle}, map[string]any{"serviceArns": []string{}}),
+	}, replaceResponses(kitResponses(),
+		jsonResponse("aws.ecs.ListClusters", regional("ecs"), map[string]any{"clusterArns": []string{kitClusterARN, idle}}),
+	)...)
+}
+
+// rootVolumeResponses answer as the kit account, with volumes as the EC2
+// volume listing.
+func rootVolumeResponses(volumes string) []collectortest.Response {
+	return replaceResponses(kitResponses(), ec2Response("aws.ec2.DescribeVolumes", volumes))
+}
+
+// kitUnencryptedRootVolume is the kit instance's root volume, unencrypted.
+const kitUnencryptedRootVolume = "<volumeSet><item><volumeId>vol-0kit</volumeId><size>8</size><encrypted>false</encrypted><status>in-use</status>" +
+	"<attachmentSet><item><volumeId>vol-0kit</volumeId><instanceId>i-0kit00000000000001</instanceId><device>/dev/xvda</device><status>attached</status></item></attachmentSet></item></volumeSet>"
+
+// securityHubResponses answer as the kit account, with hub as DescribeHub's
+// answer and cisFindings as the findings of the CIS standard. The findings
+// come first, since the replay answers with the first response whose request
+// body a call holds.
+func securityHubResponses(hub map[string]any, cisFindings ...any) []collectortest.Response {
+	return append([]collectortest.Response{
+		withRequestBody(restResponse("aws.securityhub.GetFindings", http.MethodPost, "https://securityhub.us-east-1.amazonaws.com/findings", 0, kitJSON(map[string]any{"Findings": cisFindings})),
+			map[string]any{"Filters": map[string]any{"ComplianceAssociatedStandardsId": []any{map[string]any{"Comparison": "EQUALS", "Value": "standards/cis-aws-foundations-benchmark/v/1.4.0"}}}}),
+	}, replaceResponses(kitResponses(),
+		restResponse("aws.securityhub.DescribeHub", http.MethodGet, "https://securityhub.us-east-1.amazonaws.com/accounts", 0, kitJSON(hub)),
+	)...)
+}
+
+// kitHub is the kit's Security Hub as DescribeHub answers it, with
+// AutoEnableControls set to autoEnable, or left out when it is nil.
+func kitHub(autoEnable any) map[string]any {
+	hub := map[string]any{"HubArn": "arn:aws:securityhub:us-east-1:111122223333:hub/default", "SubscribedAt": "2024-01-01T00:00:00.000Z"}
+	if autoEnable != nil {
+		hub["AutoEnableControls"] = autoEnable
+	}
+	return hub
+}
+
+// noInspectorFindingResponses answer as the kit account, where Inspector is
+// on and Security Hub holds none of its findings.
+func noInspectorFindingResponses() []collectortest.Response {
+	return append([]collectortest.Response{
+		withRequestBody(restResponse("aws.securityhub.GetFindings", http.MethodPost, "https://securityhub.us-east-1.amazonaws.com/findings", 0, kitJSON(map[string]any{"Findings": []any{}})),
+			map[string]any{"Filters": map[string]any{"ProductName": []any{map[string]any{"Comparison": "PREFIX", "Value": "Inspector"}}}}),
+	}, kitResponses()...)
+}
+
 // kitSecurityResponses answer the account security services: a logging
 // organization trail and a stopped local trail into the log bucket, AWS Config,
 // GuardDuty with two high findings routed to the alerts topic, an account

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## v0.8.1
+
+- An ECS service on a capacity provider strategy counts in `fargate_service_count` when its strategy uses the `FARGATE` or `FARGATE_SPOT` provider. DescribeServices gives such a service no launch type. Each service row adds `capacity_providers` and `fargate`, and `fargate_service_count` counts the rows with `fargate` true. A service with neither a launch type nor a strategy leaves `fargate_service_count` out with an `invalid_response` gap.
+- `ecs.cluster_count` counts every cluster that ListClusters returns, including a cluster that runs no service.
+- An EC2 instance row's `root_volume_encrypted` is false for an unencrypted root volume. When DescribeVolumes does not list the instance's root volume, the value is left out with an `invalid_response` gap.
+- `account_security.inspector.enabled` is Inspector's own status in the primary region, read with `BatchGetAccountStatus`. It is true when Inspector is on with no findings, or with Security Hub off. cloud-posture's `vuln_scanning.enabled` copies it. `status_evaluated` and `status_error_code` describe the read of Inspector's findings in Security Hub. A run whose `collect` leaves out `vuln-scanning` still calls `inspector2:BatchGetAccountStatus`, once, in the primary region.
+- Each CIS level's `enabled` is true when Security Hub has a CIS standard enabled, including one whose controls have no findings yet.
+- `security_hub.auto_enable_controls` is written as false when Security Hub leaves new controls off. When DescribeHub leaves the setting out, it is left out with an `invalid_response` gap.
+- The overview says that AWS Config and Security Hub are read in the primary region only.
+
 ## v0.8.0
 
 - In the access file, the members are the IAM users with a console password and the users of the organization's IAM Identity Center, so `member_count` adds `sso_member_count` to the IAM users, and `sso_coverage_pct` is written as their share. An IAM user with access keys and no console password is a credential, not a member, and is not checked for admin access. When Identity Center has users, the inactive member values, and each account's `member_count`, are left out with a `not_read` gap.

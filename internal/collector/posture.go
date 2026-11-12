@@ -943,11 +943,10 @@ type SecurityHubStatus struct {
 
 	// Audit: arrays present (possibly []) when collected at audit+ and
 	// SecurityHub is enabled; absent when not collected. AutoEnableControls
-	// retains its resource-conditional omitempty since false has no meaning
-	// when SecurityHub itself isn't enabled. IntegrationCount is nil below
-	// audit, when SecurityHub isn't enabled, or when the read failed, so a 0
-	// that was read is still emitted.
-	AutoEnableControls   bool     `json:"auto_enable_controls,omitempty"`
+	// and IntegrationCount are nil below audit, when SecurityHub isn't
+	// enabled, or when the read failed, so a false or 0 that was read is
+	// still emitted.
+	AutoEnableControls   *bool    `json:"auto_enable_controls,omitempty"`
 	StandardsARNs        []string `json:"standards_arns,omitzero"`
 	IntegrationCount     *int     `json:"integration_count,omitempty"`
 	ProductSubscriptions []string `json:"product_subscriptions,omitzero"`
@@ -975,11 +974,11 @@ type CISComplianceByLevel struct {
 // distinguish "no findings" from "few unpatched resources out of many" without
 // re-deriving from the percentage.
 type InspectorStatus struct {
-	// Trust: Enabled and UnpatchedServerPercent are meaningful only when
-	// status_evaluated is true. On collection failure they are left out and
-	// status_error_code carries the cause. Evaluated true with Enabled false
-	// means Inspector was genuinely observed as not enabled. The percentage
-	// is UnpatchedResources over TotalAffectedResources, null when that is 0.
+	// Trust: Enabled is Inspector's own status. StatusEvaluated says whether
+	// Inspector's findings in Security Hub were read, and the values from
+	// them are meaningful only when it is true. On a failed read they are
+	// left out and status_error_code carries the cause. The percentage is
+	// UnpatchedResources over TotalAffectedResources, null when that is 0.
 	StatusEvaluated bool   `json:"status_evaluated"`
 	StatusErrorCode string `json:"status_error_code,omitempty"`
 
@@ -1083,6 +1082,8 @@ type ECSServiceRow struct {
 	Name                          string   `json:"name"`
 	Region                        string   `json:"region"`
 	LaunchType                    string   `json:"launch_type,omitempty"`
+	CapacityProviders             []string `json:"capacity_providers,omitempty"`
+	Fargate                       bool     `json:"fargate"`
 	DesiredCount                  int32    `json:"desired_count"`
 	RunningCount                  int32    `json:"running_count"`
 	AutoScaled                    bool     `json:"auto_scaled"`
@@ -1655,8 +1656,9 @@ type EC2Metrics struct {
 // are populated when level >= internal — extracted from the same
 // DescribeInstances response with no additional API calls.
 //
-// RootVolumeEncrypted is best-effort: requires a separate DescribeVolumes call
-// joined in the collector. Left zero (false) if the join fails.
+// RootVolumeEncrypted comes from a separate DescribeVolumes call joined in
+// the collector. It is nil for an instance with no EBS root volume, and left
+// out with a gap when the join fails.
 type EC2InstanceRow struct {
 	// Audit:
 	InstanceID          string   `json:"instance_id"`
@@ -1673,7 +1675,7 @@ type EC2InstanceRow struct {
 	HTTPTokens          string   `json:"imds_http_tokens,omitempty"`
 	HTTPHopLimit        int      `json:"imds_http_hop_limit,omitempty"`
 	SecurityGroupIDs    []string `json:"security_group_ids,omitempty"`
-	RootVolumeEncrypted bool     `json:"root_volume_encrypted,omitempty"`
+	RootVolumeEncrypted *bool    `json:"root_volume_encrypted,omitempty"`
 
 	// Internal:
 	IAMInstanceProfileARN string            `json:"iam_instance_profile_arn,omitempty"`

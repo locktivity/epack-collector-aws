@@ -6,6 +6,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/locktivity/epack/componentsdk"
 )
 
 // GetEnabledStandards and ListEnabledProductsForImport answer a NextToken
@@ -47,5 +50,38 @@ func TestGetSecurityHubConfig_ReadsEveryPage(t *testing.T) {
 	}
 	if want := []string{guardDutyProduct, inspectorProduct}; !reflect.DeepEqual(cfg.ProductSubscriptions, want) || cfg.IntegrationCount != 2 {
 		t.Errorf("product subscriptions = %v (count %d), want %v", cfg.ProductSubscriptions, cfg.IntegrationCount, want)
+	}
+}
+
+// AutoEnableControls false is read as false. A hub answered without it is
+// not read, so the error says so rather than reading false.
+func TestGetSecurityHubConfig_AutoEnableControls(t *testing.T) {
+	for _, tt := range []struct {
+		name, hub string
+		want      *bool
+		missing   bool
+	}{
+		{name: "off", hub: `{"HubArn":"arn:aws:securityhub:us-east-1:111122223333:hub/default","AutoEnableControls":false}`, want: aws.Bool(false)},
+		{name: "left out", hub: `{"HubArn":"arn:aws:securityhub:us-east-1:111122223333:hub/default"}`, missing: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := testClient(func(r *http.Request, _ string) (string, string) {
+				if r.URL.Path == "/accounts" {
+					return "application/json", tt.hub
+				}
+				return "application/json", `{}`
+			})
+
+			cfg, err := client.GetSecurityHubConfig(context.Background(), "us-east-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(cfg.AutoEnableControls, tt.want) {
+				t.Errorf("AutoEnableControls = %v, want %v", cfg.AutoEnableControls, tt.want)
+			}
+			if missing := cfg.AutoEnableControlsErr != nil && componentsdk.Classify(cfg.AutoEnableControlsErr) == componentsdk.CodeInvalidResponse; missing != tt.missing {
+				t.Errorf("AutoEnableControlsErr = %v, want invalid_response %v", cfg.AutoEnableControlsErr, tt.missing)
+			}
+		})
 	}
 }

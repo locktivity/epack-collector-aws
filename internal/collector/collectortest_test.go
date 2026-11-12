@@ -285,23 +285,33 @@ func kitSuite() collectortest.Suite {
 				Name:      "empty account",
 				Responses: emptyAccountResponses(),
 				Expect: map[string]map[string]any{awsPath: {
-					"/accounts/0/iam/iam_user_count":                              0,
-					"/accounts/0/iam/mfa_enabled":                                 nil,
-					"/accounts/0/s3/bucket_count":                                 0,
-					"/accounts/0/s3/public_access_blocked":                        nil,
-					"/accounts/0/rds/database_count":                              0,
-					"/accounts/0/rds/encrypted_at_rest":                           nil,
-					"/accounts/0/iam/users":                                       []any{},
-					"/accounts/0/lambda/functions":                                []any{},
-					"/accounts/0/s3/buckets":                                      []any{},
-					"/accounts/0/account_security/security_hub/integration_count": collectortest.Absent,
-					"/accounts/0/monitoring/alarm_count":                          0,
-					"/accounts/0/iam/mfa_enabled_user_count":                      0,
-					"/accounts/0/s3/public_access_blocked_bucket_count":           0,
-					"/accounts/0/rds/encrypted_at_rest_database_count":            0,
-					"/accounts/0/network/open_to_world_ssh_security_group_count":  0,
-					"/accounts/0/waf/covered_internet_facing_alb_count":           0,
-					"/accounts/0/waf/internet_facing_alb_coverage_pct":            nil,
+					"/accounts/0/iam/iam_user_count":                                                          0,
+					"/accounts/0/iam/mfa_enabled":                                                             nil,
+					"/accounts/0/s3/bucket_count":                                                             0,
+					"/accounts/0/s3/public_access_blocked":                                                    nil,
+					"/accounts/0/rds/database_count":                                                          0,
+					"/accounts/0/rds/encrypted_at_rest":                                                       nil,
+					"/accounts/0/iam/users":                                                                   []any{},
+					"/accounts/0/lambda/functions":                                                            []any{},
+					"/accounts/0/s3/buckets":                                                                  []any{},
+					"/accounts/0/account_security/security_hub/integration_count":                             collectortest.Absent,
+					"/accounts/0/monitoring/alarm_count":                                                      0,
+					"/accounts/0/iam/mfa_enabled_user_count":                                                  0,
+					"/accounts/0/s3/public_access_blocked_bucket_count":                                       0,
+					"/accounts/0/rds/encrypted_at_rest_database_count":                                        0,
+					"/accounts/0/network/open_to_world_ssh_security_group_count":                              0,
+					"/accounts/0/waf/covered_internet_facing_alb_count":                                       0,
+					"/accounts/0/waf/internet_facing_alb_coverage_pct":                                        nil,
+					"/accounts/0/ecs/cluster_count":                                                           0,
+					"/accounts/0/account_security/security_hub/enabled":                                       false,
+					"/accounts/0/account_security/security_hub/auto_enable_controls":                          collectortest.Absent,
+					"/accounts/0/account_security/security_hub/cis_aws_foundations_benchmark_level_1/enabled": false,
+					"/accounts/0/account_security/inspector/enabled":                                          false,
+					"/accounts/0/account_security/inspector/status_evaluated":                                 false,
+					"/accounts/0/account_security/inspector/unpatched_server_percent":                         nil,
+				}, cloudPosturePath: {
+					"/accounts/0/vuln_scanning/enabled":       false,
+					"/accounts/0/vuln_scanning/unpatched_pct": nil,
 				}, accessPosturePath: {
 					"/members/members_present":         false,
 					"/admins/admins_present":           false,
@@ -356,6 +366,104 @@ func kitSuite() collectortest.Suite {
 					"/accounts/0/cloudfront/distributions/0/https_only_origin_count":         0,
 					"/accounts/0/cloudfront/distributions/0/s3_origin_count":                 0,
 					"/accounts/0/account_security/guardduty/finding_notification/rule_count": 0,
+				}},
+			},
+			{
+				// The service runs on a capacity provider strategy of
+				// FARGATE_SPOT, so DescribeServices leaves its launch type
+				// out, and it runs on Fargate.
+				Name:      "Fargate service on a capacity provider strategy",
+				Responses: capacityProviderResponses("FARGATE_SPOT"),
+				Expect: map[string]map[string]any{awsPath: {
+					"/accounts/0/ecs/fargate_service_count":         1,
+					"/accounts/0/ecs/services/0/launch_type":        collectortest.Absent,
+					"/accounts/0/ecs/services/0/capacity_providers": []any{"FARGATE_SPOT"},
+					"/accounts/0/ecs/services/0/fargate":            true,
+				}},
+			},
+			{
+				// A capacity provider of the cluster's own runs tasks on
+				// EC2 instances, not on Fargate.
+				Name:      "EC2 service on a capacity provider strategy",
+				Responses: capacityProviderResponses("northwind-asg"),
+				Expect: map[string]map[string]any{awsPath: {
+					"/accounts/0/ecs/fargate_service_count":         0,
+					"/accounts/0/ecs/services/0/capacity_providers": []any{"northwind-asg"},
+					"/accounts/0/ecs/services/0/fargate":            false,
+				}},
+			},
+			{
+				// DescribeServices answers with neither a launch type nor a
+				// capacity provider strategy, so whether the service runs on
+				// Fargate is unknown.
+				Name:      "ECS service with no launch type or capacity provider",
+				Responses: capacityProviderResponses(),
+				Expect: map[string]map[string]any{awsPath: {
+					"/accounts/0/ecs/fargate_service_count": nil,
+					"/accounts/0/ecs/services/0/fargate":    nil,
+					"/accounts/0/ecs/service_count":         1,
+				}},
+			},
+			{
+				// A cluster that runs no service is still a cluster.
+				Name:      "ECS cluster with no service",
+				Responses: idleClusterResponses(),
+				Expect: map[string]map[string]any{awsPath: {
+					"/accounts/0/ecs/cluster_count": 2,
+					"/accounts/0/ecs/service_count": 1,
+				}},
+			},
+			{
+				// An unencrypted root volume reads false.
+				Name:      "unencrypted root volume",
+				Responses: rootVolumeResponses(kitUnencryptedRootVolume),
+				Expect: map[string]map[string]any{awsPath: {
+					"/accounts/0/ec2/instances/0/root_volume_encrypted":       false,
+					"/accounts/0/ec2/instances_with_unencrypted_volume_count": 1,
+				}},
+			},
+			{
+				// DescribeVolumes leaves the instance's root volume out, so
+				// whether it is encrypted is unknown.
+				Name:      "root volume missing from the volume list",
+				Responses: rootVolumeResponses("<volumeSet/>"),
+				Expect: map[string]map[string]any{awsPath: {
+					"/accounts/0/ec2/instances/0/root_volume_encrypted": collectortest.Absent,
+				}},
+			},
+			{
+				// Inspector is on and Security Hub holds none of its
+				// findings.
+				Name:      "Inspector on with no finding in Security Hub",
+				Responses: noInspectorFindingResponses(),
+				Expect: map[string]map[string]any{awsPath: {
+					"/accounts/0/account_security/inspector/enabled":                  true,
+					"/accounts/0/account_security/inspector/total_affected_resources": 0,
+					"/accounts/0/account_security/inspector/unpatched_server_percent": nil,
+				}, cloudPosturePath: {
+					"/accounts/0/vuln_scanning/enabled": true,
+				}},
+			},
+			{
+				// The CIS standard was just enabled, and Security Hub has no
+				// finding for it yet. New controls stay off.
+				Name:      "CIS standard with no finding yet",
+				Responses: securityHubResponses(kitHub(false)),
+				Expect: map[string]map[string]any{awsPath: {
+					"/accounts/0/account_security/security_hub/auto_enable_controls":                                  false,
+					"/accounts/0/account_security/security_hub/cis_aws_foundations_benchmark_level_1/enabled":         true,
+					"/accounts/0/account_security/security_hub/cis_aws_foundations_benchmark_level_2/enabled":         true,
+					"/accounts/0/account_security/security_hub/cis_aws_foundations_benchmark_level_1/scored_controls": 0,
+					"/accounts/0/account_security/security_hub/cis_aws_foundations_benchmark_unknown_level/enabled":   true,
+				}},
+			},
+			{
+				// DescribeHub answers without AutoEnableControls.
+				Name:      "Security Hub without its auto-enable setting",
+				Responses: securityHubResponses(kitHub(nil)),
+				Expect: map[string]map[string]any{awsPath: {
+					"/accounts/0/account_security/security_hub/enabled":              true,
+					"/accounts/0/account_security/security_hub/auto_enable_controls": collectortest.Absent,
 				}},
 			},
 			{

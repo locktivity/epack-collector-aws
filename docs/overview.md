@@ -117,7 +117,8 @@ Findings without explicit level tags are reported in an explicit unknown-level b
 
 Interpretation guide:
 - `security_hub.enabled=true` means Security Hub is available in the account/region.
-- `level_1` and `level_2` values are only populated when findings include explicit level tags.
+- Each level's `enabled` is true when a CIS standard is enabled, including one that has no findings yet. Every CIS standard covers both levels.
+- `level_1` and `level_2` counts are only populated when findings include explicit level tags.
 - `unknown_level` captures CIS controls where Security Hub did not provide a level tag.
 - `compliance_percent` is over `scored_controls`, the passed, failed, and warning controls; it is null when there are none.
 
@@ -225,7 +226,8 @@ The collector automatically handles AWS's regional vs global services:
 - **Global services** (IAM, S3 bucket listing): Collected once
 - **Regional services** (RDS, EC2, GuardDuty, Lambda, CloudWatch Logs, KMS, Secrets Manager, SSM Parameters): Collected from all configured regions
 - **CloudTrail**: Trails are listed in every scanned region, since a single-region trail is listed only in its own region. A multi-region trail appears once
-- **Amazon Inspector**: Its status, coverage, and findings are read in every scanned region, for the vuln-scanning file. The Inspector values in the detailed file come from Security Hub in the primary region
+- **AWS Config and Security Hub**: Read in the primary region only. The primary region is the first configured region, or else the region the collector signs in to when it is enabled. A recorder or hub in another region is not counted, and Security Hub's CIS results cover the primary region's findings alone
+- **Amazon Inspector**: Its status, coverage, and findings are read in every scanned region, for the vuln-scanning file. In the detailed file, `enabled` is Inspector's status in the primary region, and the other Inspector values come from Security Hub there
 - **IAM Identity Center**: Looked for in every scanned region, since the instance's home region can be any of them. A member account cannot see its organization's instance, so the roles and SAML provider Identity Center creates in the account show it there
 
 Metrics from regional services are aggregated across all regions.

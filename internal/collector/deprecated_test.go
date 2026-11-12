@@ -93,22 +93,31 @@ func TestToCloudPosture_RootStateFromSummarySurvivesReportFailure(t *testing.T) 
 	}
 }
 
+// Inspector's findings in Security Hub could not be read, so the unpatched
+// share is left out. Whether Inspector is on comes from its own status, and
+// is left out only when a gap covers that read.
 func TestToCloudPosture_UncollectedVulnScanningOmitted(t *testing.T) {
 	output := &Output{
 		Accounts: []AccountPosture{{
 			AccountID: "123456789012",
 			AccountSecurity: AccountSecurity{
-				Inspector: InspectorStatus{StatusErrorCode: "AccessDenied"},
+				Inspector: InspectorStatus{Enabled: true, StatusErrorCode: "AccessDenied"},
 			},
 		}},
 	}
 
 	vuln := output.ToCloudPosture().Accounts[0].VulnScanning
-	if vuln.Enabled != nil {
-		t.Errorf("Enabled = %v, want nil", *vuln.Enabled)
+	if vuln.Enabled == nil || !*vuln.Enabled {
+		t.Errorf("Enabled = %v, want true", vuln.Enabled)
 	}
 	if vuln.UnpatchedPct != nil {
 		t.Errorf("UnpatchedPct = %v, want nil", *vuln.UnpatchedPct)
+	}
+
+	gaps := newGapLog(nil)
+	gaps.leaveOut(errors.New("AccessDenied"), "/accounts/0/account_security/inspector/enabled")
+	if vuln := toCloudPosture(output, gaps).Accounts[0].VulnScanning; vuln.Enabled != nil {
+		t.Errorf("Enabled = %v with the status unread, want nil", *vuln.Enabled)
 	}
 }
 

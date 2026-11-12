@@ -10,6 +10,7 @@ import (
 	appautoscaling "github.com/aws/aws-sdk-go-v2/service/applicationautoscaling"
 	appautoscalingtypes "github.com/aws/aws-sdk-go-v2/service/applicationautoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/locktivity/epack/componentsdk"
 )
 
@@ -17,9 +18,21 @@ import (
 // definitions are deliberately never fetched: container definitions embed
 // environment variables, which routinely hold credentials.
 type ECSService struct {
-	Cluster                string
-	Name                   string
-	LaunchType             string
+	Cluster    string
+	Name       string
+	LaunchType string
+
+	// CapacityProviders names the providers of the service's capacity
+	// provider strategy, which DescribeServices returns in place of a launch
+	// type.
+	CapacityProviders []string
+
+	// Fargate is whether the service runs on Fargate: its launch type is
+	// FARGATE, or its strategy uses the FARGATE or FARGATE_SPOT provider.
+	// FargateErr is why it is unknown.
+	Fargate    bool
+	FargateErr error
+
 	DesiredCount           int32
 	RunningCount           int32
 	CircuitBreakerEnabled  bool
@@ -62,10 +75,10 @@ type ECSServiceScaling struct {
 	dynamicScalingSuspended bool
 }
 
-// ListECSServices returns the region's services across every cluster.
-// DescribeServices accepts ten services per call, so the fan-out is one list
-// per cluster plus one describe per ten services.
-func (c *AWSClient) ListECSServices(ctx context.Context, region string) ([]ECSService, error) {
+// ListECSServices returns the number of the region's clusters and their
+// services. DescribeServices accepts ten services per call, so the fan-out
+// is one list per cluster plus one describe per ten services.
+func (c *AWSClient) ListECSServices(ctx context.Context, region string) (int, []ECSService, error) {
 	cfg := c.cfg.Copy()
 	cfg.Region = region
 	client := ecs.NewFromConfig(cfg)
@@ -75,7 +88,7 @@ func (c *AWSClient) ListECSServices(ctx context.Context, region string) ([]ECSSe
 	for clusterPaginator.HasMorePages() {
 		page, err := clusterPaginator.NextPage(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("listing ECS clusters in %s: %w", region, err)
+			return 0, nil, fmt.Errorf("listing ECS clusters in %s: %w", region, err)
 		}
 		clusters = append(clusters, page.ClusterArns...)
 	}
@@ -89,7 +102,7 @@ func (c *AWSClient) ListECSServices(ctx context.Context, region string) ([]ECSSe
 		for servicePaginator.HasMorePages() {
 			page, err := servicePaginator.NextPage(ctx)
 			if err != nil {
-				return nil, fmt.Errorf("listing ECS services in %s: %w", region, err)
+				return 0, nil, fmt.Errorf("listing ECS services in %s: %w", region, err)
 			}
 			serviceARNs = append(serviceARNs, page.ServiceArns...)
 		}
@@ -101,14 +114,14 @@ func (c *AWSClient) ListECSServices(ctx context.Context, region string) ([]ECSSe
 				Services: serviceARNs[start:end],
 			})
 			if err != nil {
-				return nil, fmt.Errorf("describing ECS services in %s: %w", region, err)
+				return 0, nil, fmt.Errorf("describing ECS services in %s: %w", region, err)
 			}
 			if len(out.Failures) > 0 {
-				return nil, inResponse(out.ResultMetadata, componentsdk.CodeError(componentsdk.CodeVendorError, fmt.Errorf("describing ECS services in %s: %d services could not be described: %s", region, len(out.Failures), aws.ToString(out.Failures[0].Reason))))
+				return 0, nil, inResponse(out.ResultMetadata, componentsdk.CodeError(componentsdk.CodeVendorError, fmt.Errorf("describing ECS services in %s: %d services could not be described: %s", region, len(out.Failures), aws.ToString(out.Failures[0].Reason))))
 			}
 			// ECS answers each service asked for, as a service or a failure.
 			if len(out.Services) < end-start {
-				return nil, errIncomplete(out.ResultMetadata, "describing ECS services in "+region, "services", len(out.Services), end-start)
+				return 0, nil, errIncomplete(out.ResultMetadata, "describing ECS services in "+region, "services", len(out.Services), end-start)
 			}
 			for _, s := range out.Services {
 				service := ECSService{
@@ -121,6 +134,19 @@ func (c *AWSClient) ListECSServices(ctx context.Context, region string) ([]ECSSe
 					EnableExecuteCommand: s.EnableExecuteCommand,
 
 					HealthCheckGracePeriodSeconds: s.HealthCheckGracePeriodSeconds,
+				}
+				for _, p := range s.CapacityProviderStrategy {
+					service.CapacityProviders = append(service.CapacityProviders, aws.ToString(p.CapacityProvider))
+				}
+				switch {
+				case s.LaunchType != "":
+					service.Fargate = s.LaunchType == ecstypes.LaunchTypeFargate
+				case len(service.CapacityProviders) > 0:
+					// ECS rejects a strategy that mixes Fargate providers
+					// with others, so one Fargate provider makes them all.
+					service.Fargate = slices.ContainsFunc(service.CapacityProviders, isFargateProvider)
+				default:
+					service.FargateErr = errMissing(out.ResultMetadata, "describing ECS services in "+region, "launchType or capacityProviderStrategy for a service")
 				}
 				if s.DeploymentConfiguration != nil {
 					service.MinimumHealthyPercent = s.DeploymentConfiguration.MinimumHealthyPercent
@@ -139,7 +165,13 @@ func (c *AWSClient) ListECSServices(ctx context.Context, region string) ([]ECSSe
 			}
 		}
 	}
-	return services, nil
+	return len(clusters), services, nil
+}
+
+// isFargateProvider reports whether a capacity provider is one of the two
+// AWS provides for Fargate.
+func isFargateProvider(name string) bool {
+	return name == "FARGATE" || name == "FARGATE_SPOT"
 }
 
 // ListECSServiceScaling returns the region's Application Auto Scaling state for

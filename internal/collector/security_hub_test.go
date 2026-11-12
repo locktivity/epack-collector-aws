@@ -120,10 +120,11 @@ func TestSecurityHub_ArchivedAndSuppressedFindingsDoNotDriveCISStatus(t *testing
 		})
 	}
 
+	// The standard is still enabled with no finding that counts.
 	t.Run("only an archived not-available finding", func(t *testing.T) {
 		cis := []any{cisFinding("config-gone", "IAM.9", "NOT_AVAILABLE", "ARCHIVED", "NEW", kitAccountID)}
 		sec := runSecurityHub(t, cisStandardARN, cisStandardID, cis, nil)
-		wantCISLevel(t, sec.SecurityHub.CISAWSFoundationsBenchmarkUnknownLevel, 0, 0, 0, "UNKNOWN", false)
+		wantCISLevel(t, sec.SecurityHub.CISAWSFoundationsBenchmarkUnknownLevel, 0, 0, 0, "UNKNOWN", true)
 	})
 }
 

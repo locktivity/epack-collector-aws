@@ -2496,7 +2496,10 @@ func (c *AWSClient) GetSecurityHubConfig(ctx context.Context, region string) (*S
 
 	config := &SecurityHubConfig{
 		Enabled:            true,
-		AutoEnableControls: aws.ToBool(hubOutput.AutoEnableControls),
+		AutoEnableControls: hubOutput.AutoEnableControls,
+	}
+	if hubOutput.AutoEnableControls == nil {
+		config.AutoEnableControlsErr = errMissing(hubOutput.ResultMetadata, "describing Security Hub", "AutoEnableControls")
 	}
 
 	// Get enabled standards, every page.
@@ -2766,7 +2769,6 @@ func (c *AWSClient) GetInspectorSummaryFromSecurityHub(ctx context.Context, regi
 				continue
 			}
 			summary.TotalFindings++
-			summary.Enabled = true
 
 			patched := isPatchedFinding(finding)
 			if patched {

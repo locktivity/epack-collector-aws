@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -48,7 +49,7 @@ func TestFinalizeCISLevelCompliance(t *testing.T) {
 			FailedControls: 1,
 		}
 
-		finalizeCISLevelCompliance(level)
+		finalizeCISLevelCompliance(level, true)
 
 		if !level.Enabled {
 			t.Fatalf("expected enabled=true")
@@ -66,7 +67,7 @@ func TestFinalizeCISLevelCompliance(t *testing.T) {
 			NotAvailableControls: 3,
 		}
 
-		finalizeCISLevelCompliance(level)
+		finalizeCISLevelCompliance(level, true)
 
 		if !level.Enabled {
 			t.Fatalf("expected enabled=true")
@@ -82,13 +83,27 @@ func TestFinalizeCISLevelCompliance(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		level := &CISComplianceByLevel{}
 
-		finalizeCISLevelCompliance(level)
+		finalizeCISLevelCompliance(level, false)
 
 		if level.Enabled {
 			t.Fatalf("expected enabled=false")
 		}
 		if level.ComplianceState != "UNKNOWN" {
 			t.Fatalf("expected compliance_state=UNKNOWN, got %s", level.ComplianceState)
+		}
+	})
+
+	// A standard just enabled has no findings yet, and is still on.
+	t.Run("enabled standard with no findings", func(t *testing.T) {
+		level := &CISComplianceByLevel{}
+
+		finalizeCISLevelCompliance(level, true)
+
+		if !level.Enabled {
+			t.Fatalf("expected enabled=true")
+		}
+		if level.CompliancePercent != nil || level.ComplianceState != "UNKNOWN" {
+			t.Fatalf("expected no compliance over no findings, got %s and %s", showPct(level.CompliancePercent), level.ComplianceState)
 		}
 	})
 }
@@ -496,8 +511,14 @@ func TestCollectCloudTrailStatus_PartialStatusStillEvaluated(t *testing.T) {
 }
 
 type fakeInspectorSummarizer struct {
-	summary *aws.InspectorSummary
-	err     error
+	account   aws.InspectorAccountStatus
+	statusErr error
+	summary   *aws.InspectorSummary
+	err       error
+}
+
+func (f fakeInspectorSummarizer) GetInspectorAccountStatus(_ context.Context, _, _ string) (aws.InspectorAccountStatus, error) {
+	return f.account, f.statusErr
 }
 
 func (f fakeInspectorSummarizer) GetInspectorSummaryFromSecurityHub(_ context.Context, _, _ string) (*aws.InspectorSummary, error) {
@@ -516,10 +537,47 @@ func TestCollectInspectorStatus_FailureSetsSentinels(t *testing.T) {
 	if status.StatusErrorCode == "" {
 		t.Error("expected StatusErrorCode set on failure")
 	}
-	for _, field := range []string{"enabled", "unpatched_server_percent", "total_affected_resources"} {
+	for _, field := range []string{"unpatched_server_percent", "total_affected_resources"} {
 		if !hasUnread(status.missing, field, 0) {
 			t.Errorf("expected %s to be left out on failure", field)
 		}
+	}
+	if hasUnread(status.missing, "enabled", 0) {
+		t.Error("expected enabled to come from Inspector's status, which was read")
+	}
+}
+
+// Inspector can be on with no finding in Security Hub, or with Security Hub
+// off, so whether it is on comes from its own status.
+func TestCollectInspectorStatus_EnabledFromInspector(t *testing.T) {
+	notLicensed := componentsdk.CodeError(componentsdk.CodeNotLicensed, errors.New("Security Hub is not enabled"))
+	tests := []struct {
+		name      string
+		inspector fakeInspectorSummarizer
+		enabled   bool
+		unread    []string
+	}{
+		{name: "on with no finding", inspector: fakeInspectorSummarizer{account: aws.InspectorAccountStatus{Enabled: true}, summary: &aws.InspectorSummary{}}, enabled: true},
+		{name: "on with Security Hub off", inspector: fakeInspectorSummarizer{account: aws.InspectorAccountStatus{Enabled: true}, err: notLicensed}, enabled: true, unread: []string{"unpatched_server_percent"}},
+		{name: "off", inspector: fakeInspectorSummarizer{summary: &aws.InspectorSummary{}}},
+		{name: "status unreadable", inspector: fakeInspectorSummarizer{statusErr: errors.New("AccessDenied"), summary: &aws.InspectorSummary{TotalAffectedResources: 1}}, unread: []string{"enabled"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestCollector(Config{})
+			status := &InspectorStatus{}
+
+			c.collectInspectorStatus(context.Background(), tt.inspector, "us-east-1", "111111111111", status, componentsdk.LevelTrust)
+
+			if status.Enabled != tt.enabled {
+				t.Errorf("Enabled = %v, want %v", status.Enabled, tt.enabled)
+			}
+			for _, field := range []string{"enabled", "unpatched_server_percent"} {
+				if want := slices.Contains(tt.unread, field); hasUnread(status.missing, field, 0) != want {
+					t.Errorf("%s left out = %v, want %v", field, !want, want)
+				}
+			}
+		})
 	}
 }
 

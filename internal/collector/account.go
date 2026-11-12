@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -589,9 +590,9 @@ func (c *Collector) collectSecurityHubStatus(ctx context.Context, client *aws.AW
 		return
 	}
 	if hubConfig == nil {
-		finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkLevel1)
-		finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkLevel2)
-		finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkUnknownLevel)
+		finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkLevel1, false)
+		finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkLevel2, false)
+		finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkUnknownLevel, false)
 		return
 	}
 
@@ -621,12 +622,15 @@ func (c *Collector) collectSecurityHubStatus(ctx context.Context, client *aws.AW
 		mergeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkLevel2, complianceByLevel.Level2)
 		mergeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkUnknownLevel, complianceByLevel.Unknown)
 	}
-	finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkLevel1)
-	finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkLevel2)
-	finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkUnknownLevel)
+	// Every CIS standard Security Hub offers covers both levels.
+	cisEnabled := slices.ContainsFunc(hubConfig.StandardsARNs, isCISStandard)
+	finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkLevel1, cisEnabled)
+	finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkLevel2, cisEnabled)
+	finalizeCISLevelCompliance(&status.CISAWSFoundationsBenchmarkUnknownLevel, cisEnabled)
 
 	if audit {
 		status.AutoEnableControls = hubConfig.AutoEnableControls
+		status.missing.add(hubConfig.AutoEnableControlsErr, "auto_enable_controls")
 		status.StandardsARNs = append([]string{}, hubConfig.StandardsARNs...)
 		if hubConfig.IntegrationsErr == nil {
 			status.IntegrationCount = intPtr(hubConfig.IntegrationCount)
@@ -640,16 +644,26 @@ func (c *Collector) collectSecurityHubStatus(ctx context.Context, client *aws.AW
 // collectInspectorStatus, extracted so the failure paths can be tested
 // without AWS.
 type inspectorSummarizer interface {
+	GetInspectorAccountStatus(ctx context.Context, region, accountID string) (aws.InspectorAccountStatus, error)
 	GetInspectorSummaryFromSecurityHub(ctx context.Context, region, accountID string) (*aws.InspectorSummary, error)
 }
 
-// collectInspectorStatus collects Inspector vulnerability posture from Security Hub findings.
+// collectInspectorStatus collects whether Inspector is on from Inspector's
+// own status, and its vulnerability posture from its findings in Security
+// Hub. Each read that fails leaves out only the values it feeds.
 func (c *Collector) collectInspectorStatus(ctx context.Context, client inspectorSummarizer, region string, accountID string, status *InspectorStatus, level componentsdk.Level) {
+	account, statusErr := client.GetInspectorAccountStatus(ctx, region, accountID)
+	if statusErr != nil {
+		c.warn("account %s: failed to read the Inspector status: %v", accountID, statusErr)
+	}
+	status.Enabled = account.Enabled
+	status.missing.add(statusErr, "enabled")
+
 	summary, err := client.GetInspectorSummaryFromSecurityHub(ctx, region, accountID)
 	if err != nil {
 		status.StatusErrorCode = apiErrorCode(err)
-		c.warn("account %s: failed to collect Inspector status: %v", accountID, err)
-		status.missing.add(err, "enabled", "unpatched_server_percent", "total_affected_resources", "unpatched_resources")
+		c.warn("account %s: failed to collect Inspector findings: %v", accountID, err)
+		status.missing.add(err, "unpatched_server_percent", "total_affected_resources", "unpatched_resources")
 		if level.AtLeast(componentsdk.LevelAudit) {
 			status.missing.add(err, "total_findings", "patched_findings", "unpatched_findings")
 		}
@@ -660,7 +674,6 @@ func (c *Collector) collectInspectorStatus(ctx context.Context, client inspector
 		summary = &aws.InspectorSummary{}
 	}
 
-	status.Enabled = summary.Enabled
 	status.TotalAffectedResources = summary.TotalAffectedResources
 	status.UnpatchedResources = summary.UnpatchedResources
 	status.UnpatchedServerPercent = pctOf(summary.UnpatchedResources, summary.TotalAffectedResources)
@@ -696,9 +709,12 @@ func mergeCISLevelCompliance(target *CISComplianceByLevel, source aws.SecurityHu
 	target.NotAvailableControls += source.NotAvailableControls
 }
 
-func finalizeCISLevelCompliance(level *CISComplianceByLevel) {
+// finalizeCISLevelCompliance scores a level from its control counts.
+// standardEnabled is whether Security Hub has a CIS standard enabled, which
+// decides whether the level is on even before it has a finding.
+func finalizeCISLevelCompliance(level *CISComplianceByLevel, standardEnabled bool) {
 	scoredControls := level.PassedControls + level.FailedControls + level.WarningControls
-	level.Enabled = scoredControls > 0 || level.NotAvailableControls > 0
+	level.Enabled = standardEnabled
 	level.ScoredControls = scoredControls
 	level.CompliancePercent = pctOf(level.PassedControls, scoredControls)
 	level.ComplianceState = cisComplianceState(level.PassedControls, level.FailedControls, level.WarningControls, level.NotAvailableControls)

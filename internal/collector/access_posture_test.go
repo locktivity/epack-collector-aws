@@ -311,7 +311,7 @@ func TestSSOConfiguredOf(t *testing.T) {
 // A collect list that leaves out the access-posture and vuln-scanning files
 // skips the calls only they need, and records each file as not shared. The
 // deprecated cloud-posture blocks that moved to them are left out too, each
-// with a not_shared gap.
+// with a not_shared gap. The detailed file still reads Inspector's status.
 func TestCollectLeavesOutAccessAndVulnScanning(t *testing.T) {
 	isolateAWSEnvironment(t)
 	config := kitConfig()
@@ -321,6 +321,9 @@ func TestCollectLeavesOutAccessAndVulnScanning(t *testing.T) {
 		t.Fatalf("run failed with exit %d: %s", res.ExitCode, res.Stderr)
 	}
 	for _, op := range res.Operations {
+		if op.Name == "aws.inspector2.BatchGetAccountStatus" {
+			continue
+		}
 		if strings.HasPrefix(op.Name, "aws.inspector2.") || strings.HasPrefix(op.Name, "aws.iam.ListAttached") || op.Name == "aws.iam.ListGroupsForUser" {
 			t.Errorf("%s was called %d times, want none", op.Name, op.Calls)
 		}
