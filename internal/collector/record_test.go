@@ -20,9 +20,10 @@ import (
 // ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN, which a
 // job with id-token: write gets, and skips when any is not set. The account
 // becomes the kit's, the value of any other SANDBOX_ variable becomes a
-// stable fake, and Record writes nothing if one remains. The recording asks
-// the kit's token URL for the identity token, so the suite replays the
-// sign-in:
+// stable fake, and Record writes nothing if one remains. recordScrubPatterns
+// also replace the S3 canonical user IDs and the Identity Center instance and
+// identity store IDs. The recording asks the kit's token URL for the identity
+// token, so the suite replays the sign-in:
 //
 //	SANDBOX_ACCOUNT_ID=... go test -tags record -run 'TestRecord/^aws$' -count=1 ./internal/collector/
 func TestRecord(t *testing.T) {
@@ -60,7 +61,7 @@ func TestRecord(t *testing.T) {
 				Literals:    map[string]string{requested.Host: kit.Host, requested.Path: kit.Path},
 				// The SDK names each role session by the time in nanoseconds,
 				// so no replay sends the recorded name.
-				Patterns: []collectortest.ScrubPattern{{Pattern: regexp.MustCompile(`,"RoleSessionName":"[0-9]+"`), Replace: ""}},
+				Patterns: append([]collectortest.ScrubPattern{{Pattern: regexp.MustCompile(`,"RoleSessionName":"[0-9]+"`), Replace: ""}}, recordScrubPatterns...),
 			},
 		})
 		if err != nil {
