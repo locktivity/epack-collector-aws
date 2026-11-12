@@ -300,20 +300,31 @@ is false, left out when any other account's is unknown, and true otherwise.
   a SAML provider. AWS has no account setting to require SSO or MFA for
   everyone, so `sso_required` and `mfa_required` are left out. So is
   `scim_enabled`.
-- Members are the IAM users in the credential report. Every IAM user can sign
-  in with its own password or access keys, so the `local_*` values count the
-  same users, with MFA from the report's `mfa_active`. A member is inactive when the password and access
-  keys were all last used more than 90 days before the run, or never.
+- Members are the IAM users with a console password in the credential
+  report, and the users of the organization's IAM Identity Center. An IAM
+  user with access keys and no console password is a credential, not a
+  member. Every IAM member can sign in with its own password, so the
+  `local_*` values count the IAM members, with MFA from the report's
+  `mfa_active`. An IAM member is inactive when the password and access keys
+  were all last used more than 90 days before the run, or never.
 - `members.sso_member_count` counts the users in the directory of the
   organization instance, when an account can read it. It is 0 when no account
   has Identity Center. People who sign in through a SAML provider an account
-  trusts directly are not counted. Identity Center users are not IAM users,
-  so `member_count` leaves them out. `sso_coverage_pct` and the external
-  member values are left out.
-- Admins are the IAM users with the AWS managed `AdministratorAccess` policy,
-  attached to the user or to one of the user's groups. Other policies are not
-  checked. When a user's policies cannot be read, the admin counts and
-  percentages are left out with a `partial` gap.
+  trusts directly are not counted. `member_count` adds them to the IAM
+  members, and `sso_coverage_pct` is their share. When Identity Center has
+  users, the inactive members are left out with a `not_read` gap, since their
+  sign-ins are in CloudTrail. So is each account's `member_count`, since who
+  is assigned to each account is not read. The external member values are
+  left out.
+- Admins are the IAM members with one of the AWS managed policies
+  `AdministratorAccess`, `PowerUserAccess`, or `IAMFullAccess`, attached to
+  the user or to one of the user's groups. A user with an inline or customer
+  managed policy and none of those three leaves the admin counts out with a
+  `partial` gap, since the collector does not read policy documents. So does
+  a user whose policies cannot be read. When Identity Center has users,
+  `admin_count` and `admin_share_pct` are left out with a `not_read` gap,
+  since the permission sets assigned to them are not read. The `local_admin_*`
+  values still count the IAM admins.
 - `root` counts one root user for each account. A root user counts as having
   MFA when it has MFA, or has no password, access key, or signing certificate
   to sign in with.

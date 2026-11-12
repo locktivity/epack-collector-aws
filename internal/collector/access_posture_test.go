@@ -11,9 +11,10 @@ import (
 )
 
 // accessAccount is an account scanned in us-east-1 with an organization
-// instance of Identity Center, users IAM users of whom mfa have MFA and
-// inactive are inactive, admins admins of whom mfaAdmins have MFA, and keys
-// active access keys of which overdue are overdue for rotation.
+// instance of Identity Center that has 5 users, users IAM users with a
+// console password of whom mfa have MFA and inactive are inactive, admins
+// admins of whom mfaAdmins have MFA, and keys active access keys of which
+// overdue are overdue for rotation.
 func accessAccount(users, mfa, inactive, admins, mfaAdmins, keys, overdue int) AccountPosture {
 	return AccountPosture{
 		AccountID: "111111111111",
@@ -22,7 +23,10 @@ func accessAccount(users, mfa, inactive, admins, mfaAdmins, keys, overdue int) A
 			CredentialReportEvaluated: true, IAMUserCount: users, MFAEnabledUserCount: mfa,
 			RootCredentialStateEvaluated: true, RootMFAEnabled: true,
 			SAMLProviderCount: intPtr(0), IdentityCenterSAMLProviderCount: intPtr(0), IdentityCenterRoleCount: intPtr(0),
-			usage: iamUsage{inactiveUsers: inactive, activeKeys: keys, rotationOverdueKeys: overdue},
+			usage: iamUsage{
+				inactiveUsers: inactive, activeKeys: keys, rotationOverdueKeys: overdue,
+				consoleUsers: users, consoleMFAUsers: mfa, consoleInactiveUsers: inactive,
+			},
 		},
 		IdentityCenter: orgInstance("d-1", 5, 0),
 		admins:         iamAdmins{read: true, admins: admins, mfaAdmins: mfaAdmins},
@@ -45,8 +49,10 @@ func pctReading(r Reading[float64], want float64) bool {
 }
 
 // Whether SSO or MFA is required, admin MFA over the admins present,
-// never-expiring keys over the keys present, and inactive members over the
-// members present.
+// never-expiring keys over the keys present, and SSO coverage over the IAM
+// users and Identity Center users. With Identity Center users, the admin
+// count and the inactive members are left out, since their account
+// assignments and sign-ins are not read.
 func TestAccessPosture_RequirementsAndCoverage(t *testing.T) {
 	gaps := newGapLog(nil)
 	output := &Output{CollectedAtLevel: string(componentsdk.LevelAudit), Accounts: []AccountPosture{accessAccount(4, 3, 1, 2, 1, 3, 1)}}
@@ -72,18 +78,22 @@ func TestAccessPosture_RequirementsAndCoverage(t *testing.T) {
 	if !samePtr(got.Credentials.CredentialsPresent, boolPtr(true)) || !pctReading(got.Credentials.NeverExpiringPct, 100) {
 		t.Errorf("credentials present %s, never expiring %+v; want true and 100", showBool(got.Credentials.CredentialsPresent), got.Credentials.NeverExpiringPct)
 	}
-	if !samePtr(got.Members.MembersPresent, boolPtr(true)) || !pctReading(got.Members.InactivePct, 25) {
-		t.Errorf("members present %s, inactive %+v; want true and 25", showBool(got.Members.MembersPresent), got.Members.InactivePct)
+	if !samePtr(got.Members.MembersPresent, boolPtr(true)) || !sameInt(got.Members.MemberCount, intPtr(9)) || !pctReading(got.Members.SSOCoveragePct, 55) {
+		t.Errorf("members present %s, count %s, SSO coverage %+v; want true, 9, and 55", showBool(got.Members.MembersPresent), showPct(got.Members.MemberCount), got.Members.SSOCoveragePct)
 	}
-	if !pctReading(got.Members.LocalMFACoveragePct, 75) || !pctReading(got.Admins.AdminSharePct, 50) || !pctReading(got.Credentials.RotationOverduePct, 34) {
-		t.Errorf("member MFA %+v, admin share %+v, overdue rotation %+v; want 75, 50, and 34",
-			got.Members.LocalMFACoveragePct, got.Admins.AdminSharePct, got.Credentials.RotationOverduePct)
+	if !pctReading(got.Members.LocalMFACoveragePct, 75) || !pctReading(got.Credentials.RotationOverduePct, 34) {
+		t.Errorf("member MFA %+v, overdue rotation %+v; want 75 and 34", got.Members.LocalMFACoveragePct, got.Credentials.RotationOverduePct)
+	}
+	for _, pointer := range []string{"/members/inactive_pct", "/admins/admin_count", "/admins/admin_share_pct", "/scopes/0/members/member_count", "/scopes/0/admins/admin_count"} {
+		if g := accessGap(gaps, pointer); g == nil || g.Code != componentsdk.CodeNotRead {
+			t.Errorf("%s: gap %+v, want not_read", pointer, g)
+		}
 	}
 	if !sameInt(got.Members.SSOMemberCount, intPtr(5)) || !sameInt(got.Root.RootAccountCount, intPtr(1)) {
 		t.Errorf("sso members %s, root accounts %s; want 5 and 1", showPct(got.Members.SSOMemberCount), showPct(got.Root.RootAccountCount))
 	}
-	if len(got.Scopes) != 1 || got.Scopes[0].ID != "111111111111" || !sameInt(got.Scopes[0].Admins.AdminCount, intPtr(2)) {
-		t.Errorf("scopes = %+v, want the account with its 2 admins", got.Scopes)
+	if len(got.Scopes) != 1 || got.Scopes[0].ID != "111111111111" || !sameInt(got.Scopes[0].Admins.LocalAdminCount, intPtr(2)) {
+		t.Errorf("scopes = %+v, want the account with its 2 IAM admins", got.Scopes)
 	}
 }
 
@@ -115,7 +125,9 @@ func TestAccessPosture_TrustLeavesOutCountsAndScopes(t *testing.T) {
 // null.
 func TestAccessPosture_EmptyPopulationsWriteNull(t *testing.T) {
 	gaps := newGapLog(nil)
-	output := &Output{CollectedAtLevel: string(componentsdk.LevelAudit), Accounts: []AccountPosture{accessAccount(0, 0, 0, 0, 0, 0, 0)}}
+	account := accessAccount(0, 0, 0, 0, 0, 0, 0)
+	account.IdentityCenter = noInstance()
+	output := &Output{CollectedAtLevel: string(componentsdk.LevelAudit), Accounts: []AccountPosture{account}}
 
 	got := toAccessPosture(output, gaps)
 
@@ -155,8 +167,8 @@ func TestAccessPosture_FoldsAccounts(t *testing.T) {
 	if !samePtr(got.SignIn.SSOConfigured, boolPtr(false)) {
 		t.Errorf("sso_configured = %s, want false since the second account has no SSO", showBool(got.SignIn.SSOConfigured))
 	}
-	if !sameInt(got.Members.MemberCount, intPtr(3)) || !pctReading(got.Members.LocalMFACoveragePct, 66) || !sameInt(got.Root.RootAccountCount, intPtr(2)) {
-		t.Errorf("members %s, MFA %+v, root accounts %s; want 3, 66, and 2", showPct(got.Members.MemberCount), got.Members.LocalMFACoveragePct, showPct(got.Root.RootAccountCount))
+	if !sameInt(got.Members.MemberCount, intPtr(8)) || !pctReading(got.Members.LocalMFACoveragePct, 66) || !sameInt(got.Root.RootAccountCount, intPtr(2)) {
+		t.Errorf("members %s, MFA %+v, root accounts %s; want 8 with Identity Center's 5, 66, and 2", showPct(got.Members.MemberCount), got.Members.LocalMFACoveragePct, showPct(got.Root.RootAccountCount))
 	}
 	if len(got.Scopes) != 2 || !samePtr(got.Scopes[1].SignIn.SSOConfigured, boolPtr(false)) {
 		t.Errorf("scopes = %+v, want the second account without SSO", got.Scopes)
