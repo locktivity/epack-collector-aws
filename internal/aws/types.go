@@ -479,8 +479,13 @@ type GuardDutyFinding struct {
 
 // SecurityHubConfig represents Security Hub configuration.
 type SecurityHubConfig struct {
-	Enabled              bool
-	AutoEnableControls   bool
+	Enabled bool
+
+	// AutoEnableControls is nil when DescribeHub leaves it out, and
+	// AutoEnableControlsErr then says so.
+	AutoEnableControls    *bool
+	AutoEnableControlsErr error
+
 	StandardsARNs        []string
 	IntegrationCount     int
 	ProductSubscriptions []string
@@ -506,7 +511,6 @@ type SecurityHubCISComplianceByLevel struct {
 
 // InspectorSummary contains Inspector posture derived from Security Hub findings.
 type InspectorSummary struct {
-	Enabled                bool
 	TotalFindings          int
 	PatchedFindings        int
 	UnpatchedFindings      int

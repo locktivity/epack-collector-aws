@@ -11,7 +11,7 @@ import (
 // A failed scaling lookup suppresses every scaling-dependent finding rather
 // than reporting the services as unscaled.
 func (c *Collector) collectECSMetrics(ctx context.Context, client *aws.AWSClient, region, accountID string, level componentsdk.Level) (*ECSMetrics, error) {
-	services, err := client.ListECSServices(ctx, region)
+	clusters, services, err := client.ListECSServices(ctx, region)
 	if err != nil {
 		return nil, err
 	}
@@ -21,7 +21,7 @@ func (c *Collector) collectECSMetrics(ctx context.Context, client *aws.AWSClient
 		c.warn("account %s region %s: failed to read ECS service scaling; capacity findings for %d service(s) are unproven: %v", accountID, region, len(services), scalingErr)
 	}
 
-	out := aggregateECS(services, scaling, scalingErr == nil)
+	out := aggregateECS(clusters, services, scaling, scalingErr == nil)
 	out.missing.addPartial(scalingErr, len(services), "services_with_autoscaling_count", "services_with_scaling_policy_count", "single_task_service_count")
 	if level.AtLeast(componentsdk.LevelAudit) {
 		byService := scalingByService(scaling)
@@ -32,6 +32,8 @@ func (c *Collector) collectECSMetrics(ctx context.Context, client *aws.AWSClient
 				Name:                          s.Name,
 				Region:                        region,
 				LaunchType:                    s.LaunchType,
+				CapacityProviders:             s.CapacityProviders,
+				Fargate:                       s.Fargate,
 				DesiredCount:                  s.DesiredCount,
 				RunningCount:                  s.RunningCount,
 				CircuitBreakerEnabled:         s.CircuitBreakerEnabled,
@@ -45,6 +47,7 @@ func (c *Collector) collectECSMetrics(ctx context.Context, client *aws.AWSClient
 				HealthCheckGracePeriodSeconds: s.HealthCheckGracePeriodSeconds,
 				ScalingUnresolved:             scalingErr != nil,
 			}
+			row.missing.add(s.FargateErr, "fargate")
 			row.missing.add(scalingErr, "auto_scaled", "min_capacity", "max_capacity", "scaling_policy_types", "scaling_metrics")
 			if sc, ok := byService[s.Cluster+"/"+s.Name]; ok {
 				row.AutoScaled = true
@@ -67,17 +70,17 @@ func scalingByService(scaling []aws.ECSServiceScaling) map[string]aws.ECSService
 	return out
 }
 
-// aggregateECS reduces a region's services and scaling registrations to the
-// capacity findings.
-func aggregateECS(services []aws.ECSService, scaling []aws.ECSServiceScaling, scalingResolved bool) *ECSMetrics {
-	out := &ECSMetrics{ServiceCount: len(services)}
+// aggregateECS reduces a region's clusters, services and scaling
+// registrations to the capacity findings.
+func aggregateECS(clusters int, services []aws.ECSService, scaling []aws.ECSServiceScaling, scalingResolved bool) *ECSMetrics {
+	out := &ECSMetrics{ClusterCount: clusters, ServiceCount: len(services)}
 	byService := scalingByService(scaling)
 
-	clusters := map[string]bool{}
 	for _, s := range services {
-		clusters[s.Cluster] = true
-
-		if s.LaunchType == "FARGATE" {
+		switch {
+		case s.FargateErr != nil:
+			out.missing.addPartial(s.FargateErr, 1, "fargate_service_count")
+		case s.Fargate:
 			out.FargateServiceCount++
 		}
 		if s.CircuitBreakerEnabled {
@@ -115,7 +118,6 @@ func aggregateECS(services []aws.ECSService, scaling []aws.ECSServiceScaling, sc
 			out.SingleTaskServiceCount++
 		}
 	}
-	out.ClusterCount = len(clusters)
 	return out
 }
 

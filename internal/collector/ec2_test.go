@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -31,14 +32,14 @@ func TestEC2InstanceToRow_AuditOmitsInternalFields(t *testing.T) {
 		AttachedVolumeIDs:     []string{"vol-1", "vol-2"},
 		Tags:                  map[string]string{"Env": "prod", "Team": "platform"},
 	}
-	row := ec2InstanceToRow(in, "us-east-1", false, true, componentsdk.LevelAudit)
+	row := ec2InstanceToRow(in, "us-east-1", false, boolPtr(true), componentsdk.LevelAudit)
 	if row.InstanceID != "i-abc" || row.Region != "us-east-1" || !row.HasPublicIP {
 		t.Errorf("audit base fields mis-projected: %+v", row)
 	}
 	if row.LaunchTime != "2026-05-14T10:00:00Z" {
 		t.Errorf("expected RFC3339 launch_time, got %q", row.LaunchTime)
 	}
-	if !row.RootVolumeEncrypted {
+	if row.RootVolumeEncrypted == nil || !*row.RootVolumeEncrypted {
 		t.Errorf("RootVolumeEncrypted should be true")
 	}
 	if row.IAMInstanceProfileARN != "" || row.KeyName != "" {
@@ -57,7 +58,7 @@ func TestEC2InstanceToRow_InternalPopulatesAllFields(t *testing.T) {
 		AttachedVolumeIDs:     []string{"vol-1"},
 		Tags:                  map[string]string{"Env": "prod"},
 	}
-	row := ec2InstanceToRow(in, "us-east-1", true, false, componentsdk.LevelInternal)
+	row := ec2InstanceToRow(in, "us-east-1", true, nil, componentsdk.LevelInternal)
 	if row.IAMInstanceProfileARN == "" || row.KeyName == "" {
 		t.Errorf("internal-level row must populate IAM profile and key name: %+v", row)
 	}
@@ -72,7 +73,7 @@ func TestEC2InstanceToRow_InternalPopulatesAllFields(t *testing.T) {
 func TestEC2InstanceToRow_DefensiveCopyOnSlices(t *testing.T) {
 	sgs := []string{"sg-1"}
 	in := aws.EC2Instance{InstanceID: "i-abc", SecurityGroupIDs: sgs}
-	row := ec2InstanceToRow(in, "us-east-1", false, false, componentsdk.LevelAudit)
+	row := ec2InstanceToRow(in, "us-east-1", false, nil, componentsdk.LevelAudit)
 	sgs[0] = "mutated"
 	if row.SecurityGroupIDs[0] == "mutated" {
 		t.Errorf("ec2InstanceToRow did not defensively copy SecurityGroupIDs")
@@ -194,5 +195,36 @@ func TestCountUnattachedVolumesEmpty(t *testing.T) {
 	total, unencrypted := countUnattachedVolumes(map[string]aws.EBSVolumeState{})
 	if total != 0 || unencrypted != 0 {
 		t.Fatalf("got %d and %d, want 0 and 0", total, unencrypted)
+	}
+}
+
+// An unencrypted root volume reads false. A root volume the volume listing
+// leaves out is unknown, so it has a gap rather than reading false.
+func TestRootVolumeEncryption(t *testing.T) {
+	volumes := map[string]aws.EBSVolumeState{"vol-plain": {Attached: true}}
+	listErr := errors.New("DescribeVolumes denied")
+
+	tests := []struct {
+		name       string
+		root       string
+		volumesErr error
+		want       *bool
+		wantErr    error
+	}{
+		{name: "unencrypted", root: "vol-plain", want: boolPtr(false)},
+		{name: "not an EBS root", root: ""},
+		{name: "volumes not listed", root: "vol-plain", volumesErr: listErr, wantErr: listErr},
+		{name: "root volume not in the listing", root: "vol-gone", wantErr: errRootVolumeUnlisted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := rootVolumeEncryption(aws.EC2Instance{RootVolumeID: tt.root}, volumes, tt.volumesErr)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("err = %v, want %v", err, tt.wantErr)
+			}
+			if (got == nil) != (tt.want == nil) || (got != nil && *got != *tt.want) {
+				t.Errorf("encrypted = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

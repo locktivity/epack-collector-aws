@@ -73,15 +73,14 @@ func normalizedIAM(iam IAMMetrics) CloudPostureIAM {
 	return out
 }
 
-// normalizedVulnScanning copies the Inspector status when it was read.
-// Enabled false then means Inspector was seen to be off.
+// normalizedVulnScanning copies whether Inspector is on, and the unpatched
+// share when Inspector's findings in Security Hub were read. A gap on either
+// detailed value leaves its copy out.
 func normalizedVulnScanning(ins InspectorStatus) CloudPostureVulnScanning {
-	out := CloudPostureVulnScanning{}
-	if !ins.StatusEvaluated {
-		return out
+	out := CloudPostureVulnScanning{Enabled: boolPtr(ins.Enabled)}
+	if ins.StatusEvaluated {
+		out.UnpatchedPct = pctFloat(ins.UnpatchedServerPercent)
 	}
-	out.Enabled = boolPtr(ins.Enabled)
-	out.UnpatchedPct = pctFloat(ins.UnpatchedServerPercent)
 	return out
 }
 

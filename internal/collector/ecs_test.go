@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/locktivity/epack-collector-aws/internal/aws"
@@ -8,8 +9,8 @@ import (
 )
 
 func TestAggregateECS(t *testing.T) {
-	api := aws.ECSService{Cluster: "prod", Name: "api", LaunchType: "FARGATE", DesiredCount: 3, LoadBalanced: true, CircuitBreakerEnabled: true}
-	jobs := aws.ECSService{Cluster: "prod", Name: "jobs", LaunchType: "FARGATE", DesiredCount: 1}
+	api := aws.ECSService{Cluster: "prod", Name: "api", LaunchType: "FARGATE", Fargate: true, DesiredCount: 3, LoadBalanced: true, CircuitBreakerEnabled: true}
+	jobs := aws.ECSService{Cluster: "prod", Name: "jobs", LaunchType: "FARGATE", Fargate: true, DesiredCount: 1}
 
 	scaled := aws.ECSServiceScaling{
 		Cluster: "prod", Service: "api",
@@ -21,7 +22,7 @@ func TestAggregateECS(t *testing.T) {
 
 	t.Run("the chain needs bounds and a policy that moves the service", func(t *testing.T) {
 		registeredOnly := aws.ECSServiceScaling{Cluster: "prod", Service: "jobs", MinCapacity: 1, MaxCapacity: 4}
-		got := aggregateECS([]aws.ECSService{api, jobs}, []aws.ECSServiceScaling{scaled, registeredOnly}, true)
+		got := aggregateECS(1, []aws.ECSService{api, jobs}, []aws.ECSServiceScaling{scaled, registeredOnly}, true)
 
 		if got.ServicesWithAutoscalingCount != 2 {
 			t.Errorf("ServicesWithAutoscalingCount = %d, want 2", got.ServicesWithAutoscalingCount)
@@ -34,7 +35,7 @@ func TestAggregateECS(t *testing.T) {
 	// The capacity floor is the scaling minimum where registered, the desired
 	// count otherwise. One task means no redundancy in either reading.
 	t.Run("the single-task floor follows scaling where it exists", func(t *testing.T) {
-		got := aggregateECS([]aws.ECSService{api, jobs}, []aws.ECSServiceScaling{scaled}, true)
+		got := aggregateECS(1, []aws.ECSService{api, jobs}, []aws.ECSServiceScaling{scaled}, true)
 
 		if got.SingleTaskServiceCount != 1 {
 			t.Errorf("SingleTaskServiceCount = %d, want 1: api floors at 2 via scaling, jobs at its desired count of 1", got.SingleTaskServiceCount)
@@ -43,7 +44,7 @@ func TestAggregateECS(t *testing.T) {
 
 	t.Run("a scaled-down minimum beats a comfortable desired count", func(t *testing.T) {
 		floorOne := aws.ECSServiceScaling{Cluster: "prod", Service: "api", MinCapacity: 1, MaxCapacity: 10, PolicyTypes: []string{"TargetTrackingScaling"}, PolicyScales: true}
-		got := aggregateECS([]aws.ECSService{api}, []aws.ECSServiceScaling{floorOne}, true)
+		got := aggregateECS(1, []aws.ECSService{api}, []aws.ECSServiceScaling{floorOne}, true)
 
 		if got.SingleTaskServiceCount != 1 {
 			t.Errorf("SingleTaskServiceCount = %d, want 1: desired 3 but scaling may take it to 1", got.SingleTaskServiceCount)
@@ -51,7 +52,7 @@ func TestAggregateECS(t *testing.T) {
 	})
 
 	t.Run("unresolved scaling suppresses capacity findings without hiding services", func(t *testing.T) {
-		got := aggregateECS([]aws.ECSService{api, jobs}, nil, false)
+		got := aggregateECS(1, []aws.ECSService{api, jobs}, nil, false)
 
 		if got.ServiceCount != 2 || got.FargateServiceCount != 2 {
 			t.Errorf("counts = %d and %d, want services still counted", got.ServiceCount, got.FargateServiceCount)
@@ -66,7 +67,7 @@ func TestAggregateECS(t *testing.T) {
 
 	t.Run("deployment and network posture count independently of scaling", func(t *testing.T) {
 		public := aws.ECSService{Cluster: "prod", Name: "edge", AssignsPublicIP: true, DesiredCount: 2}
-		got := aggregateECS([]aws.ECSService{api, public}, nil, true)
+		got := aggregateECS(1, []aws.ECSService{api, public}, nil, true)
 
 		if got.ServicesWithCircuitBreakerCount != 1 {
 			t.Errorf("ServicesWithCircuitBreakerCount = %d, want 1", got.ServicesWithCircuitBreakerCount)
@@ -79,6 +80,23 @@ func TestAggregateECS(t *testing.T) {
 		}
 		if got.ClusterCount != 1 {
 			t.Errorf("ClusterCount = %d, want 1", got.ClusterCount)
+		}
+	})
+
+	t.Run("a service with no launch type or strategy leaves the Fargate count out", func(t *testing.T) {
+		unknown := aws.ECSService{Cluster: "prod", Name: "worker", FargateErr: errors.New("no launchType")}
+		got := aggregateECS(1, []aws.ECSService{api, unknown}, nil, true)
+
+		if got.FargateServiceCount != 1 || !hasUnread(got.missing, "fargate_service_count", 1) {
+			t.Errorf("FargateServiceCount = %d, missing = %+v, want 1 counted and the count left out over 1 service", got.FargateServiceCount, got.missing)
+		}
+	})
+
+	t.Run("a cluster with no service counts", func(t *testing.T) {
+		got := aggregateECS(2, []aws.ECSService{api}, nil, true)
+
+		if got.ClusterCount != 2 {
+			t.Errorf("ClusterCount = %d, want 2", got.ClusterCount)
 		}
 	})
 }
@@ -101,7 +119,7 @@ func TestAggregateECS_CountsExecEnabledServices(t *testing.T) {
 	shell := aws.ECSService{Cluster: "prod", Name: "debug", EnableExecuteCommand: true}
 	quiet := aws.ECSService{Cluster: "prod", Name: "api"}
 
-	got := aggregateECS([]aws.ECSService{shell, quiet}, nil, true)
+	got := aggregateECS(1, []aws.ECSService{shell, quiet}, nil, true)
 
 	if got.ExecEnabledServiceCount != 1 {
 		t.Errorf("ExecEnabledServiceCount = %d, want 1", got.ExecEnabledServiceCount)

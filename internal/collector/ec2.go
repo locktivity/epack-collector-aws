@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -63,14 +64,35 @@ func (c *Collector) collectEC2Metrics(ctx context.Context, client *aws.AWSClient
 
 	out.Instances = make([]EC2InstanceRow, 0, len(instances))
 	for _, inst := range instances {
-		row := ec2InstanceToRow(inst, region, defaultVPCByID[inst.VPCID], volumes[inst.RootVolumeID].Encrypted, level)
+		rootEncrypted, rootErr := rootVolumeEncryption(inst, volumes, volumesErr)
+		row := ec2InstanceToRow(inst, region, defaultVPCByID[inst.VPCID], rootEncrypted, level)
 		row.missing.add(vpcErr, "in_default_vpc")
-		if inst.RootVolumeID != "" {
-			row.missing.add(volumesErr, "root_volume_encrypted")
-		}
+		row.missing.add(rootErr, "root_volume_encrypted")
 		out.Instances = append(out.Instances, row)
 	}
 	return out, nil
+}
+
+// errRootVolumeUnlisted is why root_volume_encrypted is left out when
+// DescribeVolumes does not list an instance's root volume.
+var errRootVolumeUnlisted = componentsdk.CodeError(componentsdk.CodeInvalidResponse, errors.New("DescribeVolumes does not list the instance's root volume"))
+
+// rootVolumeEncryption reads whether inst's EBS root volume is encrypted from
+// volumes, the region's volumes, which volumesErr says could not be listed.
+// It is nil with no error for an instance whose root device is not an EBS
+// volume.
+func rootVolumeEncryption(inst aws.EC2Instance, volumes map[string]aws.EBSVolumeState, volumesErr error) (*bool, error) {
+	if inst.RootVolumeID == "" {
+		return nil, nil
+	}
+	if volumesErr != nil {
+		return nil, volumesErr
+	}
+	state, ok := volumes[inst.RootVolumeID]
+	if !ok {
+		return nil, errRootVolumeUnlisted
+	}
+	return &state.Encrypted, nil
 }
 
 func defaultVPCLookup(ctx context.Context, client *aws.AWSClient, region string) (map[string]bool, error) {
@@ -116,7 +138,7 @@ func countUnattachedVolumes(volumes map[string]aws.EBSVolumeState) (total, unenc
 // Internal-level fields (iam_instance_profile_arn / key_name / tags /
 // attached_volume_ids) are populated when level >= internal. Tags are capped
 // at EC2InstanceTagsCap, as truncateTags keeps them.
-func ec2InstanceToRow(inst aws.EC2Instance, region string, inDefaultVPC, rootVolumeEncrypted bool, level componentsdk.Level) EC2InstanceRow {
+func ec2InstanceToRow(inst aws.EC2Instance, region string, inDefaultVPC bool, rootVolumeEncrypted *bool, level componentsdk.Level) EC2InstanceRow {
 	row := EC2InstanceRow{
 		InstanceID:          inst.InstanceID,
 		Region:              region,

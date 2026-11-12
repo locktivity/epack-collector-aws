@@ -182,7 +182,7 @@ Without `iam:ListSAMLProviders`, the SAML provider counts are left out with a `p
 
 The access-posture file's admins come from `iam:ListAttachedUserPolicies`, `iam:ListUserPolicies`, `iam:ListGroupsForUser`, `iam:ListAttachedGroupPolicies`, and `iam:ListGroupPolicies`, called for each IAM user with a console password. Without them, the admin values are left out with a `permission_denied` gap that names the missing action. A `collect` list that leaves out `access-posture` skips these calls.
 
-The vuln-scanning file comes from `inspector2:BatchGetAccountStatus`, `inspector2:ListCoverageStatistics`, and `inspector2:ListFindings`, called in each scanned region. The coverage and findings are read only where Inspector is on. Without these actions, the Inspector values are left out with a `permission_denied` gap that names the missing action. A `collect` list that leaves out `vuln-scanning` skips these calls.
+The vuln-scanning file comes from `inspector2:BatchGetAccountStatus`, `inspector2:ListCoverageStatistics`, and `inspector2:ListFindings`, called in each scanned region. The coverage and findings are read only where Inspector is on. Without these actions, the Inspector values are left out with a `permission_denied` gap that names the missing action. The detailed file's Inspector `enabled` comes from `inspector2:BatchGetAccountStatus` in the primary region. A `collect` list that leaves out `vuln-scanning` skips these calls, except that one.
 
 ### Trust level (default)
 
