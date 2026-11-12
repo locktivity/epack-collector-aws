@@ -1151,6 +1151,48 @@ func kitIdentityCenterResponses() []collectortest.Response {
 	}
 }
 
+// publicClusterMemberResponses answer as the kit account, with an instance
+// of the Aurora cluster that is publicly accessible, so the cluster can be
+// reached from the internet while the standalone instance cannot.
+func publicClusterMemberResponses() []collectortest.Response {
+	return replaceResponses(kitResponses(), queryResponse("aws.rds.DescribeDBInstances", regional("rds"), "<DBInstances>"+
+		"<DBInstance><DBInstanceIdentifier>northwind-db</DBInstanceIdentifier><Engine>postgres</Engine><EngineVersion>16.4</EngineVersion>"+
+		"<PubliclyAccessible>false</PubliclyAccessible><StorageEncrypted>true</StorageEncrypted><DeletionProtection>true</DeletionProtection>"+
+		"<BackupRetentionPeriod>7</BackupRetentionPeriod><MultiAZ>true</MultiAZ>"+
+		"<Endpoint><Address>northwind-db.kit.us-east-1.rds.amazonaws.com</Address><Port>5432</Port></Endpoint>"+
+		"<DBParameterGroups><DBParameterGroup><DBParameterGroupName>northwind-pg16</DBParameterGroupName><ParameterApplyStatus>in-sync</ParameterApplyStatus></DBParameterGroup></DBParameterGroups>"+
+		"<VpcSecurityGroups><VpcSecurityGroupMembership><VpcSecurityGroupId>sg-0db</VpcSecurityGroupId><Status>active</Status></VpcSecurityGroupMembership></VpcSecurityGroups>"+
+		"<EnabledCloudwatchLogsExports><member>postgresql</member></EnabledCloudwatchLogsExports></DBInstance>"+
+		"<DBInstance><DBInstanceIdentifier>northwind-aurora-1</DBInstanceIdentifier><DBClusterIdentifier>northwind-aurora</DBClusterIdentifier>"+
+		"<Engine>aurora-postgresql</Engine><EngineVersion>16.4</EngineVersion><PubliclyAccessible>true</PubliclyAccessible><StorageEncrypted>true</StorageEncrypted></DBInstance>"+
+		"</DBInstances>"))
+}
+
+// assignedUsersResponses answer as the kit account, with the permission set
+// provisioned to the kit account too, where it is assigned to eli and to the
+// Admins group, whose one member is dana.
+func assignedUsersResponses() []collectortest.Response {
+	sso := regional("sso")
+	return append([]collectortest.Response{
+		jsonItemResponse("aws.ssoadmin.ListAccountAssignments", sso, map[string]any{"PermissionSetArn": kitPermSetARN, "AccountId": kitAccountID}, map[string]any{"AccountAssignments": []any{
+			map[string]any{"AccountId": kitAccountID, "PermissionSetArn": kitPermSetARN, "PrincipalType": "USER", "PrincipalId": "u-2222"},
+			map[string]any{"AccountId": kitAccountID, "PermissionSetArn": kitPermSetARN, "PrincipalType": "GROUP", "PrincipalId": "g-1111"},
+		}}),
+	}, replaceResponses(kitResponses(),
+		jsonItemResponse("aws.ssoadmin.ListAccountsForProvisionedPermissionSet", sso, map[string]any{"PermissionSetArn": kitPermSetARN}, map[string]any{"AccountIds": []string{"444455556666", kitAccountID}}),
+	)...)
+}
+
+// groupMembersDeniedResponses answer as assignedUsersResponses do, except
+// that the Admins group's members cannot be listed.
+func groupMembersDeniedResponses() []collectortest.Response {
+	return replaceResponses(assignedUsersResponses(), collectortest.Response{
+		Operation: "aws.identitystore.ListGroupMemberships", Method: http.MethodPost, URL: regional("identitystore"), Status: http.StatusBadRequest,
+		Header: http.Header{"Content-Type": []string{"application/x-amz-json-1.1"}, "X-Amzn-Errortype": []string{"AccessDeniedException"}},
+		Body:   kitJSON(map[string]any{"__type": "AccessDeniedException", "Message": kitCaller + "identitystore:ListGroupMemberships because no identity-based policy allows the identitystore:ListGroupMemberships action"}),
+	})
+}
+
 // emptyAccountResponses answer an account in the same organization with no
 // IAM users, roles, or buckets, nothing deployed in its region, and no
 // security services turned on.

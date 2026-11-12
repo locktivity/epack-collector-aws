@@ -182,6 +182,13 @@ type IAMMetrics struct {
 	AccessKeysRotated           *int `json:"access_keys_rotated"`
 	AccessKeysRotatedUserCount  int  `json:"access_keys_rotated_user_count"`
 
+	// The IAM users with a console password, who can sign in, and those of
+	// them with MFA. ConsoleMFAEnabled is their share, null when there are
+	// none.
+	ConsoleUserCount    int  `json:"console_user_count"`
+	ConsoleMFAUserCount int  `json:"console_mfa_user_count"`
+	ConsoleMFAEnabled   *int `json:"console_mfa_enabled"`
+
 	// Ways into the account besides IAM users. SAMLProviderCount is the SAML
 	// identity providers the account trusts for sign-in, leaving out the
 	// ones IAM Identity Center creates, which IdentityCenterSAMLProviderCount
@@ -461,13 +468,16 @@ type RDSMetrics struct {
 
 	// The percentages are over the databases (instances and clusters), and
 	// publicly_accessible over the instances alone, since a cluster has no
-	// address of its own. Each is null when its population is empty, and
-	// each count beside it is the databases it is taken of.
+	// address of its own. A cluster has public access blocked when none of
+	// its instances is publicly accessible. Each is null when its population
+	// is empty, and each count beside it is the databases it is taken of.
 	InstanceCount                        int  `json:"instance_count"`
 	EncryptedAtRest                      *int `json:"encrypted_at_rest"`
 	EncryptedAtRestDatabaseCount         int  `json:"encrypted_at_rest_database_count"`
 	PubliclyAccessible                   *int `json:"publicly_accessible"`
 	PubliclyAccessibleInstanceCount      int  `json:"publicly_accessible_instance_count"`
+	PublicAccessBlocked                  *int `json:"public_access_blocked"`
+	PublicAccessBlockedDatabaseCount     int  `json:"public_access_blocked_database_count"`
 	DeletionProtection                   *int `json:"deletion_protection"`
 	DeletionProtectionDatabaseCount      int  `json:"deletion_protection_database_count"`
 	BackupRetentionAdequate              *int `json:"backup_retention_adequate"` // % with retention >= 7 days

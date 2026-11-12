@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/locktivity/epack/componentsdk"
@@ -102,9 +103,9 @@ var (
 	mfaRequiredUnsupported        = unsupported("AWS has no account setting to require MFA for everyone who signs in.")
 	scimUnsupported               = unsupported("Whether IAM Identity Center users are provisioned through SCIM is not available from the AWS API.")
 	externalMembersUnsupported    = unsupported("IAM has no guest or outside users. People from other accounts get access through roles.")
-	identityCenterAdminsNotRead   = notRead("Which Identity Center users can administer an account is in the permission sets ListAccountAssignments assigns them, from the account that holds the Identity Center instance, which this collector does not read.")
+	identityCenterAdminsNotRead   = notRead("Which Identity Center users can administer an account depends on the policies of the permission sets ListAccountAssignments assigns them, which this collector does not evaluate.")
 	identityCenterInactiveNotRead = notRead("When Identity Center users last signed in is in CloudTrail's sign-in events, which this collector does not read.")
-	scopeSSOMembersNotRead        = notRead("Who is assigned to each account is in ListAccountAssignments from the account that holds the Identity Center instance, which this collector does not count per account.")
+	scopeSSOMembersNotRead        = notRead("Who is assigned to each account is listed with ListAccountAssignments from the account that holds the organization's Identity Center instance, and no account collected read them.")
 	unrestrictedKeysNotRead       = notRead("An access key's IP and scope limits are in its user's policy documents, from GetUserPolicy and GetPolicyVersion, which this collector does not read.")
 	writeAccessKeysNotRead        = notRead("What an access key can change is in its user's policy documents, from GetUserPolicy and GetPolicyVersion, which this collector does not read.")
 	connectedAppsNotRead          = notRead("Third-party access goes through IAM roles that trust other accounts, from ListRoles, and Identity Center applications, from ListApplications. This collector does not count them as connected apps.")
@@ -296,8 +297,9 @@ func ssoConfiguredOf(acct AccountPosture, at at, gaps *gapLog) truth {
 // directory once. It is 0 when no account shows Identity Center in use.
 // When Identity Center is in use, a directory that could not be read leaves
 // the count unknown with its gap, and so does a failed instance listing
-// when no account could read a directory.
-func ssoMembersOf(o *Output, gaps *gapLog) count {
+// when no account could read a directory. It also returns the identity
+// stores of the directories it counted.
+func ssoMembersOf(o *Output, gaps *gapLog) (count, []string) {
 	type directory struct {
 		users  int
 		read   bool
@@ -353,34 +355,120 @@ func ssoMembersOf(o *Output, gaps *gapLog) count {
 	if !inUse {
 		switch {
 		case instanceUnknown != nil:
-			return count{why: instanceUnknown}
+			return count{why: instanceUnknown}, nil
 		case rolesUnknown != nil:
-			return count{why: rolesUnknown}
+			return count{why: rolesUnknown}, nil
 		}
-		return count{n: 0}
+		return count{n: 0}, nil
 	}
 	users := 0
 	for _, store := range stores {
 		d := directories[store]
 		if !d.read {
-			return count{why: &reason{pointer: d.unread}}
+			return count{why: &reason{pointer: d.unread}}, nil
 		}
 		users += d.users
 	}
 	switch {
 	case len(stores) > 0:
-		return count{n: users}
+		return count{n: users}, stores
 	case instanceUnknown != nil:
-		return count{why: instanceUnknown}
+		return count{why: instanceUnknown}, nil
 	}
-	return count{why: unreadDirectoryNotRead}
+	return count{why: unreadDirectoryNotRead}, nil
+}
+
+// assignedSSOMembers returns, for an account ID, the Identity Center users
+// its account assignments give it, directly or through a group, from the
+// directories in stores, which sso counted. A directory's assignments are
+// read from the account that holds its organization instance, so one no
+// account read them from leaves every account unknown. With no Identity
+// Center users, no account has any, and when they are unknown, so is each
+// account's.
+func assignedSSOMembers(o *Output, gaps *gapLog, sso count, stores []string) func(accountID string) count {
+	switch {
+	case sso.why != nil:
+		return func(string) count { return sso }
+	case sso.n == 0:
+		return func(string) count { return count{} }
+	}
+	users := map[string]map[string]bool{}
+	unknown := map[string]*reason{}
+	for _, store := range stores {
+		i, why := assignmentsHolder(o, gaps, store)
+		if why != nil {
+			return func(string) count { return count{why: why} }
+		}
+		idc := o.Accounts[i].IdentityCenter
+		idcAt := accountAt(i).sub("identity_center")
+		groups := make(map[string]int, len(idc.Groups))
+		for j, g := range idc.Groups {
+			groups[g.GroupID] = j
+		}
+		for _, a := range idc.AccountAssignments {
+			members := users[a.AccountID]
+			if members == nil {
+				members = map[string]bool{}
+				users[a.AccountID] = members
+			}
+			if a.PrincipalType != "GROUP" {
+				members[a.PrincipalID] = true
+				continue
+			}
+			j, listed := groups[a.PrincipalID]
+			switch {
+			case gaps.covered(idcAt.p("groups")):
+				unknown[a.AccountID] = &reason{pointer: idcAt.p("groups")}
+			case !listed:
+				unknown[a.AccountID] = &reason{err: componentsdk.CodeError(componentsdk.CodeInvalidResponse,
+					errors.New("an account assignment names a group that ListGroups does not list"))}
+			case gaps.covered(idcAt.p("groups", j, "member_user_ids")):
+				unknown[a.AccountID] = &reason{pointer: idcAt.p("groups", j, "member_user_ids")}
+			default:
+				for _, u := range idc.Groups[j].MemberUserIDs {
+					members[u] = true
+				}
+			}
+		}
+	}
+	return func(accountID string) count {
+		if why := unknown[accountID]; why != nil {
+			return count{why: why}
+		}
+		return count{n: len(users[accountID])}
+	}
+}
+
+// assignmentsHolder returns the index of an account that read every account
+// assignment of the directory store, or why none did.
+func assignmentsHolder(o *Output, gaps *gapLog, store string) (int, *reason) {
+	var why *reason
+	for i, acct := range o.Accounts {
+		idc := acct.IdentityCenter
+		if idc.identityStoreID != store {
+			continue
+		}
+		switch at := accountAt(i).p("identity_center", "account_assignments"); {
+		case idc.AssignmentsEvaluated && !idc.AssignmentsTruncated:
+			return i, nil
+		case idc.AssignmentsTruncated:
+			why = &reason{err: componentsdk.CodeError(componentsdk.CodeTooLarge,
+				fmt.Errorf("the account assignments run past the %d the collector keeps", IdentityCenterAssignmentsCap))}
+		case why == nil && gaps.covered(at):
+			why = &reason{pointer: at}
+		}
+	}
+	if why == nil {
+		why = scopeSSOMembersNotRead
+	}
+	return -1, why
 }
 
 // addPeople sets a's members to people, the IAM users with a console
 // password and any Identity Center users, idc. When idc is unknown, or has
 // users, the admins and the inactive members are unknown, for idc's reason
-// or else inactiveWhy and adminsWhy: Identity Center users' account
-// assignments and sign-ins are not read. A value the IAM users already
+// or else inactiveWhy and adminsWhy: Identity Center users' sign-ins and the
+// policies of their permission sets are not read. A value the IAM users already
 // leave unknown keeps its own reason, and the IAM admins still make
 // admins_present true.
 func addPeople(a accountAccess, people, idc count, inactiveWhy, adminsWhy *reason) accountAccess {
@@ -419,7 +507,8 @@ func toAccessPosture(o *Output, gaps *gapLog) *AccessPosture {
 		Provider:      "aws",
 		SystemType:    "cloud",
 	}
-	sso := ssoMembersOf(o, gaps)
+	sso, stores := ssoMembersOf(o, gaps)
+	assigned := assignedSSOMembers(o, gaps, sso, stores)
 	accounts := make([]accountAccess, 0, len(o.Accounts)+len(o.FailedAccounts))
 	for i, acct := range o.Accounts {
 		a := accessOf(acct, i, gaps)
@@ -427,14 +516,8 @@ func toAccessPosture(o *Output, gaps *gapLog) *AccessPosture {
 		if !audit {
 			continue
 		}
-		people := a.members
-		switch {
-		case sso.why != nil:
-			people = sso
-		case sso.n > 0:
-			people = count{why: scopeSSOMembersNotRead}
-		}
-		a = addPeople(a, people, sso, scopeSSOMembersNotRead, scopeSSOMembersNotRead)
+		ssoHere := assigned(acct.AccountID)
+		a = addPeople(a, sumOf(a.members, ssoHere), ssoHere, identityCenterInactiveNotRead, identityCenterAdminsNotRead)
 		scope := AccessScope{ID: acct.AccountID, Kind: "account"}
 		base := fmt.Sprintf("/scopes/%d/", len(posture.Scopes))
 		if alias := accountAt(i).p("account_alias"); gaps.covered(alias) {
@@ -443,8 +526,8 @@ func toAccessPosture(o *Output, gaps *gapLog) *AccessPosture {
 			scope.Name = *acct.AccountAlias
 		}
 		writeAccess(w, base, a, &scope.SignIn, &scope.Members, &scope.Admins, &scope.Root, &scope.Credentials)
-		w.leaveOut(scopeSSOMembersNotRead, true, base+"members/sso_member_count")
-		w.leaveOut(scopeSSOMembersNotRead, false, base+"members/sso_coverage_pct")
+		scope.Members.SSOMemberCount = w.count(ssoHere, base+"members/sso_member_count")
+		scope.Members.SSOCoveragePct = w.pct(ssoHere, a.people, componentsdk.RoundDown, base+"members/sso_coverage_pct")
 		leaveOutUnreportedAccess(w, base)
 		posture.Scopes = append(posture.Scopes, scope)
 	}

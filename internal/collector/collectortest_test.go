@@ -244,6 +244,11 @@ func kitSuite() collectortest.Suite {
 					"/accounts/0/identity_center/regions_checked":                                []any{kitRegion},
 					"/accounts/0/identity_center/external_id_user_count":                         0,
 					"/accounts/0/identity_center/mfa_evidence":                                   "manual_required",
+				}, cloudPosturePath: {
+					"/accounts/0/iam/user_count":                                2,
+					"/accounts/0/iam/mfa_coverage_pct":                          100,
+					"/accounts/0/database/public_access_blocked_database_count": 2,
+					"/accounts/0/database/public_access_blocked_pct":            100,
 				}, accessPosturePath: kitAccessPins(), vulnScanningPath: kitVulnPins(), kitResultPath: kitStepPins()},
 			},
 			{
@@ -310,13 +315,18 @@ func kitSuite() collectortest.Suite {
 					"/accounts/0/account_security/inspector/status_evaluated":                                 false,
 					"/accounts/0/account_security/inspector/unpatched_server_percent":                         nil,
 				}, cloudPosturePath: {
-					"/accounts/0/vuln_scanning/enabled":       false,
-					"/accounts/0/vuln_scanning/unpatched_pct": nil,
+					"/accounts/0/vuln_scanning/enabled":                         false,
+					"/accounts/0/vuln_scanning/unpatched_pct":                   nil,
+					"/accounts/0/iam/user_count":                                0,
+					"/accounts/0/iam/mfa_coverage_pct":                          nil,
+					"/accounts/0/database/public_access_blocked_database_count": 0,
+					"/accounts/0/database/public_access_blocked_pct":            nil,
 				}, accessPosturePath: {
-					"/members/members_present":         false,
-					"/admins/admins_present":           false,
-					"/credentials/credentials_present": false,
-					"/root/root_accounts_present":      true,
+					"/scopes/0/members/sso_member_count": 0,
+					"/members/members_present":           false,
+					"/admins/admins_present":             false,
+					"/credentials/credentials_present":   false,
+					"/root/root_accounts_present":        true,
 				}, vulnScanningPath: {
 					"/scanners/0/enabled":                false,
 					"/scanners/0/resources_present":      false,
@@ -464,6 +474,45 @@ func kitSuite() collectortest.Suite {
 				Expect: map[string]map[string]any{awsPath: {
 					"/accounts/0/account_security/security_hub/enabled":              true,
 					"/accounts/0/account_security/security_hub/auto_enable_controls": collectortest.Absent,
+				}},
+			},
+			{
+				// An instance of the Aurora cluster is publicly accessible,
+				// so the cluster can be reached from the internet. The
+				// standalone instance cannot.
+				Name:      "publicly accessible instance in a cluster",
+				Responses: publicClusterMemberResponses(),
+				Expect: map[string]map[string]any{cloudPosturePath: {
+					"/accounts/0/database/database_count":                       2,
+					"/accounts/0/database/public_access_blocked_database_count": 1,
+					"/accounts/0/database/public_access_blocked_pct":            50,
+				}},
+			},
+			{
+				// eli is assigned to the kit account directly, and dana
+				// through the Admins group, so both are its Identity Center
+				// members. Their permission set's policies are not read, so
+				// the account's admins are unknown.
+				Name:      "Identity Center users assigned to the account",
+				Responses: assignedUsersResponses(),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/members/sso_member_count":          2,
+					"/scopes/0/members/sso_member_count": 2,
+					"/scopes/0/members/member_count":     4,
+					"/scopes/0/members/sso_coverage_pct": 50,
+					"/scopes/0/admins/admin_count":       collectortest.Absent,
+				}},
+			},
+			{
+				// The Admins group's members cannot be listed, so how many
+				// people its assignment gives the account is unknown.
+				Name:      "assigned group's members denied",
+				Responses: groupMembersDeniedResponses(),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/members/sso_member_count":            2,
+					"/scopes/0/members/sso_member_count":   collectortest.Absent,
+					"/scopes/0/members/member_count":       collectortest.Absent,
+					"/scopes/0/members/local_member_count": 2,
 				}},
 			},
 			{
@@ -1154,10 +1203,12 @@ func kitAccessPins() map[string]any {
 		"/scopes/0/id":                                   kitAccountID,
 		"/scopes/0/name":                                 "northwind-prod",
 		"/scopes/0/kind":                                 "account",
-		"/scopes/0/members/member_count":                 collectortest.Absent,
+		"/scopes/0/members/member_count":                 2,
+		"/scopes/0/members/sso_coverage_pct":             0,
+		"/scopes/0/admins/admin_count":                   1,
 		"/scopes/0/members/local_member_count":           2,
 		"/scopes/0/admins/local_admin_mfa_coverage_pct":  100,
-		"/scopes/0/members/sso_member_count":             collectortest.Absent,
+		"/scopes/0/members/sso_member_count":             0,
 		"/scopes/1":                                      collectortest.Absent,
 	}
 }

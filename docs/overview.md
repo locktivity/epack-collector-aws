@@ -33,6 +33,9 @@ null; the count beside it (here `iam_user_count`) is 0.
 | `hardware_mfa_enabled_user_count` | IAM users with hardware MFA |
 | `access_keys_rotated` | Percentage of users with active access keys whose keys were all rotated within 90 days |
 | `access_keys_rotated_user_count` | Users with active access keys whose keys were all rotated within 90 days |
+| `console_user_count` | IAM users with a console password, who can sign in |
+| `console_mfa_enabled` | Percentage of the IAM users who can sign in with MFA enabled |
+| `console_mfa_user_count` | IAM users who can sign in with MFA enabled |
 | `saml_provider_count` | SAML identity providers the account trusts for sign-in, not counting the ones IAM Identity Center creates |
 | `identity_center_saml_provider_count` | SAML providers IAM Identity Center created in the account, whose names start with `AWSSSO_` |
 | `identity_center_role_count` | Roles IAM Identity Center provisioned in the account for its permission sets, named `AWSReservedSSO_` under `/aws-reserved/sso.amazonaws.com/` |
@@ -82,6 +85,7 @@ null; the count beside it (here `iam_user_count`) is 0.
 | `instance_count` | Instances across evaluated regions |
 | `encrypted_at_rest` | Percentage of instances/clusters with encryption |
 | `publicly_accessible` | Percentage of instances publicly accessible (should be 0%) |
+| `public_access_blocked` | Percentage of databases with no publicly accessible instance. A cluster counts when none of its instances is publicly accessible |
 | `deletion_protection` | Percentage with deletion protection enabled |
 | `backup_retention_adequate` | Percentage with backup retention >= 7 days |
 | `multi_az_enabled` | Percentage with Multi-AZ deployment |
@@ -283,9 +287,12 @@ the audit level. Each percentage is computed from its counts. The exposure
 percentages `network.ssh_open_to_world_pct` and
 `network.rdp_open_to_world_pct` round up, so one exposed group never reads 0.
 The other percentages round down. `database.multi_az_pct` is written from the
-audit level. `database.public_access_blocked_pct` is written only as null for
-an account with no databases, since a cluster has no public access setting of
-its own. `threat_detection.enabled` is true when every scanned region has a
+audit level. A database has public access blocked when it is a DB instance
+outside a cluster that is not publicly accessible, or a DB cluster none of
+whose instances is. The deprecated `iam.user_count` and `iam.mfa_coverage_pct`
+count the IAM users with a console password, as their access-posture
+replacements `members.local_member_count` and `local_mfa_coverage_pct` do.
+`threat_detection.enabled` is true when every scanned region has a
 GuardDuty detector whose status is `ENABLED`.
 
 ### Access posture
@@ -313,20 +320,21 @@ is false, left out when any other account's is unknown, and true otherwise.
   organization instance, when an account can read it. It is 0 when no account
   has Identity Center. People who sign in through a SAML provider an account
   trusts directly are not counted. `member_count` adds them to the IAM
-  members, and `sso_coverage_pct` is their share. When Identity Center has
-  users, the inactive members are left out with a `not_read` gap, since their
-  sign-ins are in CloudTrail. So is each account's `member_count`, since who
-  is assigned to each account is not read. The external member values are
-  left out.
+  members, and `sso_coverage_pct` is their share. An account in `scopes`
+  counts the users ListAccountAssignments assigns to it, directly or through
+  a group, read from the account that holds the organization instance. When
+  Identity Center users are counted, the inactive members are left out with a
+  `not_read` gap, since their sign-ins are in CloudTrail. The external member
+  values are left out.
 - Admins are the IAM members with one of the AWS managed policies
   `AdministratorAccess`, `PowerUserAccess`, or `IAMFullAccess`, attached to
   the user or to one of the user's groups. A user with an inline or customer
   managed policy and none of those three leaves the admin counts out with a
   `partial` gap, since the collector does not read policy documents. So does
-  a user whose policies cannot be read. When Identity Center has users,
-  `admin_count` and `admin_share_pct` are left out with a `not_read` gap,
-  since the permission sets assigned to them are not read. The `local_admin_*`
-  values still count the IAM admins.
+  a user whose policies cannot be read. When Identity Center users are
+  counted, `admin_count` and `admin_share_pct` are left out with a `not_read`
+  gap, since the policies of the permission sets assigned to them are not
+  evaluated. The `local_admin_*` values still count the IAM admins.
 - `root` counts one root user for each account. A root user counts as having
   MFA when it has MFA, or has no password, access key, or signing certificate
   to sign in with.
