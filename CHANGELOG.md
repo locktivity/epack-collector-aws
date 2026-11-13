@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.8.3
+
 - The collector is built on epack v0.11.3.
 - cloud-posture leaves `storage.network_restricted_pct` out with an `unsupported` gap, and `network_restricted_storage_resource_count` from the audit level, since S3 has no setting that turns off public network access for a bucket or an account. epack v0.10.6 added both values to the schema.
 
