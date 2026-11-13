@@ -245,10 +245,12 @@ func kitSuite() collectortest.Suite {
 					"/accounts/0/identity_center/external_id_user_count":                         0,
 					"/accounts/0/identity_center/mfa_evidence":                                   "manual_required",
 				}, cloudPosturePath: {
-					"/accounts/0/iam/user_count":                                2,
-					"/accounts/0/iam/mfa_coverage_pct":                          100,
-					"/accounts/0/database/public_access_blocked_database_count": 2,
-					"/accounts/0/database/public_access_blocked_pct":            100,
+					"/accounts/0/iam/user_count":                                    2,
+					"/accounts/0/iam/mfa_coverage_pct":                              100,
+					"/accounts/0/database/public_access_blocked_database_count":     2,
+					"/accounts/0/database/public_access_blocked_pct":                100,
+					"/accounts/0/storage/network_restricted_pct":                    collectortest.Absent,
+					"/accounts/0/storage/network_restricted_storage_resource_count": collectortest.Absent,
 				}, accessPosturePath: kitAccessPins(), vulnScanningPath: kitVulnPins(), kitResultPath: kitStepPins()},
 			},
 			{

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.8.3
+
+- The collector is built on epack v0.11.3.
+- cloud-posture leaves `storage.network_restricted_pct` out with an `unsupported` gap, and `network_restricted_storage_resource_count` from the audit level, since S3 has no setting that turns off public network access for a bucket or an account. epack v0.10.6 added both values to the schema.
+
 ## v0.8.2
 
 - cloud-posture's deprecated `iam.user_count` and `iam.mfa_coverage_pct` count the IAM users with a console password, who can sign in, as their access-posture replacements `members.local_member_count` and `local_mfa_coverage_pct` do. A user with only access keys is left out. The detailed file adds those users as `iam.console_user_count`, `console_mfa_user_count`, and `console_mfa_enabled`.

@@ -292,8 +292,10 @@ outside a cluster that is not publicly accessible, or a DB cluster none of
 whose instances is. The deprecated `iam.user_count` and `iam.mfa_coverage_pct`
 count the IAM users with a console password, as their access-posture
 replacements `members.local_member_count` and `local_mfa_coverage_pct` do.
-`threat_detection.enabled` is true when every scanned region has a
-GuardDuty detector whose status is `ENABLED`.
+S3 has no setting that turns off public network access, so
+`storage.network_restricted_pct` and its count are left out with an
+`unsupported` gap. `threat_detection.enabled` is true when every scanned
+region has a GuardDuty detector whose status is `ENABLED`.
 
 ### Access posture
 
