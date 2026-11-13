@@ -18,6 +18,7 @@ const (
 	simKey         = "epack-sandbox-1-mfa-new-key/access-key"
 	simDatabase    = "epack-sandbox-db"
 	simAdminGroup  = "epack-sandbox-admins"
+	simVendor      = "epack-sandbox-vendor"
 )
 
 // simMatrixBase is the sandbox with an IAM user who signs in with a
@@ -40,6 +41,7 @@ func simMatrixBase(t testing.TB) *roster.Roster {
 	terms.KeySources["none"] = roster.NoKey
 	terms.CloudNetworkAccess["private"] = roster.NetworkOff
 	terms.CloudIdentityProviders = map[string]string{"saml": roster.IdPSAML}
+	terms.AppPublishers = map[string]string{"vendor": roster.PublisherThirdParty}
 	r.Accounts = append(r.Accounts, roster.Account{
 		Key: simConsoleUser, Kind: "iam_user_console_password", Enabled: true, CloudAccount: "sandbox",
 		Methods: []string{"virtual_mfa_device"}, Logins: []string{"console_password"}, SignedInDaysAgo: new(3),
@@ -236,6 +238,20 @@ func simMatrixAxes() []roster.Axis {
 			{Name: "none"},
 			{Name: "okta", Change: func(r *roster.Roster) {
 				r.Cloud.Accounts[0].IdentityProviders = append(r.Cloud.Accounts[0].IdentityProviders, roster.IdentityProvider{Key: "okta", Kind: "saml"})
+			}},
+		}},
+		{Name: "connected_app", Values: []roster.Value{
+			{Name: "none"},
+			{Name: "one_role", Change: func(r *roster.Roster) {
+				r.Apps = append(r.Apps, roster.App{Key: simVendor, Enabled: true, Publisher: "vendor", CloudRoles: []string{"ReadOnlyAccess"}})
+			}},
+			{Name: "two_roles", Change: func(r *roster.Roster) {
+				r.Apps = append(r.Apps, roster.App{Key: simVendor, Enabled: true, Publisher: "vendor", CloudRoles: []string{"ReadOnlyAccess", "PowerUserAccess"}})
+			}},
+			{Name: "two_apps", Change: func(r *roster.Roster) {
+				r.Apps = append(r.Apps,
+					roster.App{Key: simVendor, Enabled: true, Publisher: "vendor", CloudRoles: []string{"ReadOnlyAccess"}},
+					roster.App{Key: simVendor + "-2", Enabled: true, Publisher: "vendor", CloudRoles: []string{"AdministratorAccess"}})
 			}},
 		}},
 	}

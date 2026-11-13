@@ -71,7 +71,11 @@ quote AWS's message, and name the resource.
   access feature evidence when the caller is the Organizations management
   account or delegated administrator, the count of SAML providers the account
   trusts, and the counts of roles and SAML providers IAM Identity Center
-  created in the account.
+  created in the account. When the access-posture file is collected, every
+  role and the organization's accounts are also listed for its connected
+  apps, and `organization_accounts_evaluated` says whether the organization's
+  accounts were read. The role inventory itself is written from the audit
+  level.
 - **audit**: `root_organization_id`, the organization the centralized root
   access features were read from. `users[]` (per-user MFA + access-key +
   console flags),

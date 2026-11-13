@@ -32,9 +32,6 @@ var simStanding = simulate.Same(simulate.Gap,
 	"unrestrictedKeysNotRead and writeAccessKeysNotRead in access_posture.go: what a key can do and where from is in its user's policy documents, which the collector doesn't read, so it leaves these out with a not_read gap. expectations.yaml lists them as an open bug.",
 	simAccessBoth("/credentials/unrestricted_credential_count", "/credentials/unrestricted_pct",
 		"/credentials/write_access_credential_count", "/credentials/write_access_pct")...,
-), simulate.Same(simulate.Gap,
-	"connectedAppsNotRead in access_posture.go: the collector doesn't count third-party roles or Identity Center applications as connected apps, so it leaves them out with a not_read gap. expectations.yaml lists them as an open bug.",
-	"access-posture:/connected_apps/app_count", "access-posture:/connected_apps/apps_present",
 ))
 
 // simAccessBoth is each access-posture pointer in the totals and in the
