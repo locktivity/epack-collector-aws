@@ -346,21 +346,85 @@ func unrotatableKeyResponses() []collectortest.Response {
 	}}))
 }
 
-func kitTrustPolicy(principal string) string {
-	return url.QueryEscape(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":` + principal + `,"Action":"sts:AssumeRole"}]}`)
+// kitTrustPolicy is a role's trust policy, URL-encoded as IAM lists it, with
+// statements.
+func kitTrustPolicy(statements ...string) string {
+	return url.QueryEscape(`{"Version":"2012-10-17","Statement":[` + strings.Join(statements, ",") + `]}`)
 }
 
-func kitIAMResponses(report string) []collectortest.Response {
-	roles := []struct{ name, principal string }{
-		{"epack-collector", `{"Federated":"arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"}`},
-		{"vendor-audit", `{"AWS":"arn:aws:iam::999988887777:root"}`},
-		{"deploy", `{"AWS":"444455556666"}`},
+// kitStatement is a trust policy statement that lets principal assume a
+// role, with condition as its Condition unless condition is "".
+func kitStatement(principal, condition string) string {
+	statement := `{"Effect":"Allow","Principal":` + principal + `,"Action":"sts:AssumeRole"`
+	if condition != "" {
+		statement += `,"Condition":` + condition
 	}
+	return statement + "}"
+}
+
+// The conditions a statement that lets another account in may carry: MFA,
+// which people signing in have, and the external ID a vendor's integration
+// sends.
+const (
+	kitMFACondition        = `{"Bool":{"aws:MultiFactorAuthPresent":"true"}}`
+	kitExternalIDCondition = `{"StringEquals":{"sts:ExternalId":"northwind-vendor-audit"}}`
+)
+
+// kitRole is an IAM role in the kit account, with the statements of its
+// trust policy.
+type kitRole struct {
+	name       string
+	statements []string
+}
+
+// kitTrusting is a role whose trust policy lets principal assume it.
+func kitTrusting(name, principal string) kitRole {
+	return kitRole{name, []string{kitStatement(principal, "")}}
+}
+
+// The kit account's roles. The collector's own role trusts the account's
+// GitHub Actions OIDC provider, vendor-audit an account outside the
+// organization, and deploy one in it.
+var (
+	kitCollectorRole = kitTrusting("epack-collector", `{"Federated":"arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"}`)
+	kitVendorRole    = kitTrusting("vendor-audit", `{"AWS":"arn:aws:iam::999988887777:root"}`)
+	kitDeployRole    = kitTrusting("deploy", `{"AWS":"444455556666"}`)
+)
+
+// kitRolesResponse answers the listing of every role with roles.
+func kitRolesResponse(roles ...kitRole) collectortest.Response {
 	var roleXML strings.Builder
 	for i, r := range roles {
 		fmt.Fprintf(&roleXML, "<member><Path>/</Path><RoleName>%s</RoleName><RoleId>AROAKITROLE%04d</RoleId><Arn>arn:aws:iam::111122223333:role/%s</Arn>"+
-			"<CreateDate>2024-01-01T00:00:00Z</CreateDate><AssumeRolePolicyDocument>%s</AssumeRolePolicyDocument></member>", r.name, i, r.name, kitTrustPolicy(r.principal))
+			"<CreateDate>2024-01-01T00:00:00Z</CreateDate><AssumeRolePolicyDocument>%s</AssumeRolePolicyDocument></member>", r.name, i, r.name, kitTrustPolicy(r.statements...))
 	}
+	return queryResponse("aws.iam.ListRoles", kitIAMURL, "<Roles>"+roleXML.String()+"</Roles><IsTruncated>false</IsTruncated>")
+}
+
+// rolesResponses answer as kitResponses does, with roles as every role in
+// the account.
+func rolesResponses(roles ...kitRole) []collectortest.Response {
+	return replaceResponses(kitResponses(), kitRolesResponse(roles...))
+}
+
+// rolesDeniedResponses answer as kitResponses does, except that the listing
+// of every role is denied. Identity Center's roles are still listed.
+func rolesDeniedResponses() []collectortest.Response {
+	return append([]collectortest.Response{identityCenterRolesResponse()}, replaceResponses(kitResponses(),
+		iamDenied("aws.iam.ListRoles", "iam:ListRoles", "because no identity-based policy allows the iam:ListRoles action"))...)
+}
+
+// orgAccountsDeniedResponses answer as kitResponses does, except that
+// Organizations denies ListAccounts, as it does a member account.
+func orgAccountsDeniedResponses() []collectortest.Response {
+	return replaceResponses(kitResponses(), collectortest.Response{
+		Operation: "aws.organizations.ListAccounts", Method: http.MethodPost, URL: "https://organizations.us-east-1.amazonaws.com/",
+		Status: http.StatusBadRequest, Header: jsonHeader("application/x-amz-json-1.1"),
+		Body: kitJSON(map[string]any{"__type": "AccessDeniedException", "Message": "You don't have permissions to access this resource."}),
+	})
+}
+
+func kitIAMResponses(report string) []collectortest.Response {
 	return []collectortest.Response{
 		queryResponse("aws.iam.ListAccountAliases", kitIAMURL, "<AccountAliases><member>northwind-prod</member></AccountAliases><IsTruncated>false</IsTruncated>"),
 		queryResponse("aws.iam.GenerateCredentialReport", kitIAMURL, "<State>COMPLETE</State><Description>Report generated</Description>"),
@@ -386,7 +450,7 @@ func kitIAMResponses(report string) []collectortest.Response {
 		queryItemResponse("aws.iam.ListMFADevices", kitIAMURL, map[string]string{"UserName": "bob"},
 			"<MFADevices><member><UserName>bob</UserName><SerialNumber>arn:aws:iam::111122223333:mfa/bob</SerialNumber>"+
 				"<EnableDate>2024-06-01T00:00:00Z</EnableDate></member></MFADevices><IsTruncated>false</IsTruncated>"),
-		queryResponse("aws.iam.ListRoles", kitIAMURL, "<Roles>"+roleXML.String()+"</Roles><IsTruncated>false</IsTruncated>"),
+		kitRolesResponse(kitCollectorRole, kitVendorRole, kitDeployRole),
 		samlProvidersResponse(),
 		// alice has AdministratorAccess attached, and carol has it through
 		// the platform-admins group. bob's developers group can only read,
@@ -1291,7 +1355,7 @@ func identityCenterRolesResponse(permissionSets ...string) collectortest.Respons
 		name := fmt.Sprintf("AWSReservedSSO_%s_%016x", ps, i+1)
 		fmt.Fprintf(&roles, "<member><Path>%sus-east-1/</Path><RoleName>%s</RoleName><RoleId>AROAKITSSO%04d</RoleId><Arn>arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/us-east-1/%s</Arn>"+
 			"<CreateDate>2024-01-01T00:00:00Z</CreateDate><AssumeRolePolicyDocument>%s</AssumeRolePolicyDocument></member>",
-			identityCenterRolePath, name, i, name, kitTrustPolicy(`{"Federated":"arn:aws:iam::111122223333:saml-provider/AWSSSO_kit1111222233334444_DO_NOT_DELETE"}`))
+			identityCenterRolePath, name, i, name, kitTrustPolicy(kitStatement(`{"Federated":"arn:aws:iam::111122223333:saml-provider/AWSSSO_kit1111222233334444_DO_NOT_DELETE"}`, "")))
 	}
 	return queryItemResponse("aws.iam.ListRoles", kitIAMURL, map[string]string{"PathPrefix": identityCenterRolePath}, "<Roles>"+roles.String()+"</Roles><IsTruncated>false</IsTruncated>")
 }

@@ -13,19 +13,22 @@ import (
 // with a console password in each account's credential report, and the
 // users of the organization's IAM Identity Center. Admins are the IAM users
 // with an AWS managed policy in adminPolicies. Credentials are the IAM
-// users' active access keys. A value left out has a gap, and the counts and
-// scopes are written from the audit level only.
+// users' active access keys. Connected apps are the AWS accounts outside the
+// organization that a role's trust policy lets assume the role without MFA.
+// A value left out has a gap, and the counts and scopes are written from the
+// audit level only.
 type AccessPosture struct {
-	SchemaVersion string            `json:"schema_version"`
-	CollectedAt   string            `json:"collected_at"`
-	Provider      string            `json:"provider"`
-	SystemType    string            `json:"system_type"`
-	SignIn        AccessSignIn      `json:"sign_in,omitzero"`
-	Members       AccessMembers     `json:"members,omitzero"`
-	Admins        AccessAdmins      `json:"admins,omitzero"`
-	Root          AccessRoot        `json:"root,omitzero"`
-	Credentials   AccessCredentials `json:"credentials,omitzero"`
-	Scopes        []AccessScope     `json:"scopes,omitempty"`
+	SchemaVersion string              `json:"schema_version"`
+	CollectedAt   string              `json:"collected_at"`
+	Provider      string              `json:"provider"`
+	SystemType    string              `json:"system_type"`
+	SignIn        AccessSignIn        `json:"sign_in,omitzero"`
+	Members       AccessMembers       `json:"members,omitzero"`
+	Admins        AccessAdmins        `json:"admins,omitzero"`
+	Root          AccessRoot          `json:"root,omitzero"`
+	Credentials   AccessCredentials   `json:"credentials,omitzero"`
+	ConnectedApps AccessConnectedApps `json:"connected_apps,omitzero"`
+	Scopes        []AccessScope       `json:"scopes,omitempty"`
 }
 
 // AccessSignIn is how people sign in. AWS has no setting that requires SSO
@@ -84,6 +87,15 @@ type AccessCredentials struct {
 	RotationOverduePct             Reading[float64] `json:"rotation_overdue_pct,omitzero"`
 }
 
+// AccessConnectedApps counts the AWS accounts outside the organization that
+// an IAM role's trust policy lets assume the role without MFA, across every
+// account. An account that only statements requiring MFA admit is people
+// signing in, not an app. The schema has no connected apps for a scope.
+type AccessConnectedApps struct {
+	AppsPresent *bool `json:"apps_present,omitempty"`
+	AppCount    *int  `json:"app_count,omitempty"`
+}
+
 // AccessScope is one account's own sections, written from the audit level.
 type AccessScope struct {
 	ID          string            `json:"id"`
@@ -108,7 +120,7 @@ var (
 	scopeSSOMembersNotRead        = notRead("Who is assigned to each account is listed with ListAccountAssignments from the account that holds the organization's Identity Center instance, and no account collected read them.")
 	unrestrictedKeysNotRead       = notRead("An access key's IP and scope limits are in its user's policy documents, from GetUserPolicy and GetPolicyVersion, which this collector does not read.")
 	writeAccessKeysNotRead        = notRead("What an access key can change is in its user's policy documents, from GetUserPolicy and GetPolicyVersion, which this collector does not read.")
-	connectedAppsNotRead          = notRead("Third-party access goes through IAM roles that trust other accounts, from ListRoles, and Identity Center applications, from ListApplications. This collector does not count them as connected apps.")
+	wildcardTrustNotRead          = notRead("A role whose trust policy lets every principal, *, assume it without MFA admits whoever the policy's other conditions allow, and this collector evaluates only the MFA conditions of the trust policies ListRoles returns.")
 	unreadDirectoryNotRead        = notRead("The organization's Identity Center users are listed with ListUsers from the account that holds the instance or a delegated administrator, and no account collected is one.")
 	accessPostureLeftOut          = []struct {
 		why      *reason
@@ -541,8 +553,61 @@ func toAccessPosture(o *Output, gaps *gapLog) *AccessPosture {
 	posture.Members.SSOMemberCount = w.count(sso, "/members/sso_member_count")
 	posture.Members.SSOCoveragePct = w.pct(sso, total.people, componentsdk.RoundDown, "/members/sso_coverage_pct")
 	leaveOutUnreportedAccess(w, "/")
-	w.leaveOut(connectedAppsNotRead, false, "/connected_apps")
+	apps, appsPresent := connectedAppsOf(o)
+	posture.ConnectedApps.AppsPresent = w.truth(appsPresent, "/connected_apps/apps_present")
+	posture.ConnectedApps.AppCount = w.count(apps, "/connected_apps/app_count")
 	return posture
+}
+
+// connectedAppsOf counts the AWS accounts outside the organization that a
+// role's trust policy lets assume the role without MFA, each once however
+// many roles in however many accounts trust it. An account the run collects
+// is the organization's own, whatever organization it is in. The count is
+// unknown when an account's roles could not be listed, a role lets every
+// principal in without MFA, or a role lets in an account the organization's
+// roster could not place, and apps_present is still true when an account is
+// known to be outside.
+func connectedAppsOf(o *Output) (count, truth) {
+	own := map[string]bool{}
+	for _, acct := range o.Accounts {
+		own[acct.IAM.trusted.self] = true
+	}
+	outside := map[string]bool{}
+	for _, acct := range o.Accounts {
+		for _, id := range acct.IAM.trusted.outside {
+			if !own[id] {
+				outside[id] = true
+			}
+		}
+	}
+	var why *reason
+	unknown := func(r *reason) {
+		if why == nil {
+			why = r
+		}
+	}
+	for _, acct := range o.Accounts {
+		t := acct.IAM.trusted
+		switch {
+		case t.err != nil:
+			unknown(&reason{err: t.err})
+		case t.wildcard:
+			unknown(wildcardTrustNotRead)
+		}
+		for _, id := range t.unknown {
+			if !own[id] && !outside[id] {
+				unknown(&reason{err: t.rosterErr})
+			}
+		}
+	}
+	for _, failed := range o.FailedAccounts {
+		unknown(&reason{err: failed.err})
+	}
+	known := count{n: len(outside)}
+	if why == nil {
+		return known, presentIn(known)
+	}
+	return count{why: why}, presentIn(known, count{why: why})
 }
 
 // foldAccess totals the accounts' evidence. Counts add up, a present flag or

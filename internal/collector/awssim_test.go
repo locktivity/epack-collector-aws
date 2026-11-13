@@ -1,11 +1,14 @@
 package collector
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -188,8 +191,9 @@ var simDriven = map[string]bool{
 	"aws.kms.DescribeKey":                    true,
 	"aws.kms.GetKeyRotationStatus":           true,
 	// Identity Center's roles, which the collector lists under their own
-	// path. The recording answers the full role listing.
+	// path, and every role.
 	"aws.iam.ListRoles/" + identityCenterRolePath: true,
+	"aws.iam.ListRoles/":                          true,
 }
 
 const (
@@ -513,8 +517,8 @@ func (s *awsSim) credentialReport() string {
 func (s *awsSim) userARN(name string) string { return "arn:aws:iam::" + s.account.ID + ":user/" + name }
 
 // iam answers the credential report, the account summary, the IAM users'
-// MFA devices and policies, and the SAML providers and Identity Center
-// roles the account's identity providers make.
+// MFA devices and policies, the SAML providers and Identity Center roles
+// the account's identity providers make, and every role.
 func (s *awsSim) iam() {
 	r, body := s.recorded("aws.iam.GetCredentialReport", nil)
 	result := simFirst(body, "GetCredentialReportResponse", "GetCredentialReportResult")
@@ -573,6 +577,7 @@ func (s *awsSim) iam() {
 
 	s.policies(users)
 	s.signInPaths()
+	s.roles()
 }
 
 // mfaSerial is an IAM user's MFA device serial: a FIDO security key's ARN
@@ -700,6 +705,50 @@ func (s *awsSim) signInPaths() {
 	r, body = s.recorded("aws.iam.ListRoles", func(r collectortest.Response) bool { return simPathPrefix(r) == identityCenterRolePath })
 	simFirst(body, "ListRolesResponse", "ListRolesResult")["Roles"] = simList("member", roles)
 	s.add(r, body)
+}
+
+// roles answers the listing of every role, after signInPaths answers the
+// narrower listing of Identity Center's. An enabled third-party app with
+// cloud roles is an AWS account outside the organization, and the account
+// has a role for each of the app's cloud roles that trusts it, as a
+// vendor's integration asks for, with an external ID. A recorded role
+// keeps its answer when it lets no other account in without MFA, as a
+// service-linked role, one a workflow job's OIDC token signs in to, or one
+// people from another account assume with MFA does, since the roster has no
+// term for it and no derived value counts it. A recorded role that lets
+// another account in without MFA is left out, since the roster's apps are
+// the accounts the simulated account lets in.
+func (s *awsSim) roles() {
+	r, body := s.recorded("aws.iam.ListRoles", func(r collectortest.Response) bool { return simPathPrefix(r) == "" })
+	var roles []any
+	for _, role := range simItems(body, "ListRolesResponse", "ListRolesResult", "Roles", "member") {
+		if trust := analyzeTrustPolicy(simText(role["AssumeRolePolicyDocument"]), s.account.ID); len(trust.appAccountIDs) == 0 && !trust.appWildcard {
+			roles = append(roles, role)
+		}
+	}
+	for _, app := range s.r.Apps {
+		if !app.Enabled || s.r.Terms.AppPublishers[app.Publisher] != roster.PublisherThirdParty {
+			continue
+		}
+		trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::` + simAccountID(app.Key) +
+			`:root"},"Action":"sts:AssumeRole","Condition":{"StringEquals":{"sts:ExternalId":"` + simulate.UUID("external-id", app.Key) + `"}}}]}`
+		for _, cloudRole := range app.CloudRoles {
+			name := app.Key + "-" + cloudRole
+			roles = append(roles, map[string]any{
+				"Path": "/", "RoleName": name, "RoleId": "AROA" + simulate.Base62("", 17, "role", name),
+				"Arn": "arn:aws:iam::" + s.account.ID + ":role/" + name, "CreateDate": s.days(30), "MaxSessionDuration": "3600",
+				"AssumeRolePolicyDocument": url.QueryEscape(trust),
+			})
+		}
+	}
+	simFirst(body, "ListRolesResponse", "ListRolesResult")["Roles"] = simList("member", roles)
+	s.add(r, body)
+}
+
+// simAccountID is a stable 12-digit AWS account ID for a roster key.
+func simAccountID(key string) string {
+	sum := sha256.Sum256([]byte("aws-account/" + key))
+	return fmt.Sprintf("%012d", binary.BigEndian.Uint64(sum[:8])%1_000_000_000_000)
 }
 
 // directory are the people in Identity Center's directory: the enabled

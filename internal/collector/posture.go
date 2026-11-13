@@ -219,10 +219,12 @@ type IAMMetrics struct {
 	RootSessionsFeatureEnabled              bool   `json:"root_sessions_feature_enabled"`
 	RootOrganizationsFeaturesErrorCode      string `json:"root_organizations_features_error_code,omitempty"`
 
-	// Audit: the per-role external_trust_in_org determinations are meaningful
-	// only when organization_accounts_evaluated is true. Expected failures
-	// (member accounts without Organizations visibility) record the error code
-	// without a warning.
+	// The organization's account roster is read at every level when the
+	// access-posture artifact is collected, and at audit for the role
+	// inventory. The per-role external_trust_in_org determinations are
+	// meaningful only when organization_accounts_evaluated is true. Expected
+	// failures (member accounts without Organizations visibility) record the
+	// error code without a warning.
 	OrganizationAccountsEvaluated bool   `json:"organization_accounts_evaluated"`
 	OrganizationAccountsErrorCode string `json:"organization_accounts_error_code,omitempty"`
 
@@ -241,6 +243,10 @@ type IAMMetrics struct {
 	// usage is what the credential report shows of the users' activity and
 	// access keys, for the access-posture artifact.
 	usage iamUsage
+
+	// trusted is what the role listing shows of the other accounts the roles
+	// trust, for the access-posture artifact's connected apps.
+	trusted trustedAccounts
 }
 
 // IAMCredentialReport is the internal-level per-user activity inventory derived
@@ -307,6 +313,12 @@ type IAMRole struct {
 
 	// Internal:
 	TrustPolicyJSON string `json:"trust_policy_json,omitempty"`
+
+	// appAccountIDs and appWildcard are the foreign accounts, and whether
+	// every principal, a statement lets assume the role without requiring
+	// MFA, for the access-posture artifact's connected apps.
+	appAccountIDs []string
+	appWildcard   bool
 }
 
 // S3Metrics contains S3 security posture.

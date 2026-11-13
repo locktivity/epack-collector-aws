@@ -346,7 +346,34 @@ is false, left out when any other account's is unknown, and true otherwise.
   is overdue for rotation when it was last rotated more than 90 days before
   the run. The unrestricted and write access values need the users' policy
   documents, which are not read, so they are left out with a `not_read` gap.
-  So is `connected_apps`.
+- Connected apps are the AWS accounts outside the organization that an IAM
+  role's trust policy lets assume the role without MFA. `app_count` counts
+  each such account once, however many roles in however many accounts trust
+  it. A trust policy statement that requires MFA lets in people who sign in
+  from the other account, not an app, so an account only such statements
+  admit is not counted. A statement requires MFA when it has a `Bool`
+  condition that `aws:MultiFactorAuthPresent` is true, or a numeric condition
+  on `aws:MultiFactorAuthAge`. `BoolIfExists` with `aws:MultiFactorAuthPresent`
+  true does not count, since AWS lets requests signed with an IAM user's
+  access keys through it. An account that any other statement admits, such as
+  one with a vendor's `sts:ExternalId` condition, is counted. The detailed
+  file's `roles[]` still shows every account a role trusts. The
+  organization's accounts come from AWS Organizations' `ListAccounts`, and an
+  account in no organization has none but itself. A role that trusts only its
+  own account, a service principal, or a SAML or OIDC provider, such as IAM
+  Identity Center's `AWSSSO_` provider or a GitHub Actions OIDC provider, adds
+  none, since those let in the account's own people and workloads. An account
+  the run collects is not counted either, and neither are IAM Identity Center
+  applications, since users signing in to an application gives it no access
+  to the account. When an account's roles cannot be listed, both values are
+  left out with that call's gap. When a role lets another account in without
+  MFA and `ListAccounts` fails, as it does outside the management account and
+  a delegated administrator, they are left out with its gap. When a role lets
+  every principal, `*`, assume it without MFA, they are left out with a
+  `not_read` gap, since the trust policy's other conditions decide whom it
+  admits and are not evaluated. In each case `apps_present` is still true
+  when an account is known to be outside. The roles are listed at every
+  level, and `app_count` is written from the audit level.
 
 ### Vulnerability scanning
 

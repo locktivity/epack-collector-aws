@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -560,6 +561,58 @@ func TestAnalyzeTrustPolicy(t *testing.T) {
 	}
 }
 
+// A statement that requires MFA lets people sign in, so the accounts it
+// alone admits are external but no app's. Bool on aws:MultiFactorAuthPresent
+// true and a numeric condition on aws:MultiFactorAuthAge require MFA.
+// BoolIfExists admits long-term access keys, which carry no MFA, and an
+// IfExists numeric condition admits requests without the key.
+func TestAnalyzeTrustPolicy_MFAStatements(t *testing.T) {
+	current := "203984714075"
+	statement := func(principal, condition string) string {
+		s := `{"Effect":"Allow","Principal":` + principal + `,"Action":"sts:AssumeRole"`
+		if condition != "" {
+			s += `,"Condition":` + condition
+		}
+		return s + "}"
+	}
+	outside := `{"AWS":"arn:aws:iam::111111111111:root"}`
+	cases := []struct {
+		name         string
+		statements   []string
+		apps         []string
+		appsWildcard bool
+	}{
+		{"Bool true", []string{statement(outside, `{"Bool":{"aws:MultiFactorAuthPresent":"true"}}`)}, nil, false},
+		{"Bool true in another case and as a JSON list", []string{statement(outside, `{"Bool":{"AWS:MultiFactorAuthPresent":[true]}}`)}, nil, false},
+		{"MFA age", []string{statement(outside, `{"NumericLessThan":{"aws:MultiFactorAuthAge":"3600"}}`)}, nil, false},
+		{"MFA and an external ID", []string{statement(outside, `{"Bool":{"aws:MultiFactorAuthPresent":"true"},"StringEquals":{"sts:ExternalId":"x"}}`)}, nil, false},
+		{"no condition", []string{statement(outside, "")}, []string{"111111111111"}, false},
+		{"external ID", []string{statement(outside, `{"StringEquals":{"sts:ExternalId":"x"}}`)}, []string{"111111111111"}, false},
+		{"BoolIfExists true", []string{statement(outside, `{"BoolIfExists":{"aws:MultiFactorAuthPresent":"true"}}`)}, []string{"111111111111"}, false},
+		{"Bool false", []string{statement(outside, `{"Bool":{"aws:MultiFactorAuthPresent":"false"}}`)}, []string{"111111111111"}, false},
+		{"Bool true or false", []string{statement(outside, `{"Bool":{"aws:MultiFactorAuthPresent":["true","false"]}}`)}, []string{"111111111111"}, false},
+		{"MFA age if it exists", []string{statement(outside, `{"NumericLessThanIfExists":{"aws:MultiFactorAuthAge":"3600"}}`)}, []string{"111111111111"}, false},
+		{"an MFA statement and an external ID statement", []string{
+			statement(outside, `{"Bool":{"aws:MultiFactorAuthPresent":"true"}}`),
+			statement(`{"AWS":"arn:aws:iam::111111111111:role/integration"}`, `{"StringEquals":{"sts:ExternalId":"x"}}`),
+		}, []string{"111111111111"}, false},
+		{"every principal with MFA", []string{statement(`"*"`, `{"Bool":{"aws:MultiFactorAuthPresent":"true"}}`)}, nil, false},
+		{"every principal", []string{statement(`"*"`, "")}, nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := `{"Version":"2012-10-17","Statement":[` + strings.Join(tc.statements, ",") + `]}`
+			got := analyzeTrustPolicy(url.QueryEscape(policy), current)
+			if !got.hasExternalTrust {
+				t.Errorf("expected external trust whatever the conditions, got %+v", got)
+			}
+			if !slices.Equal(got.appAccountIDs, tc.apps) || got.appWildcard != tc.appsWildcard {
+				t.Errorf("apps %v, wildcard %v; want %v and %v", got.appAccountIDs, got.appWildcard, tc.apps, tc.appsWildcard)
+			}
+		})
+	}
+}
+
 func TestExtractPrincipals(t *testing.T) {
 	if got := extractPrincipals("arn:aws:iam::111111111111:root"); len(got) != 1 {
 		t.Fatalf("expected 1 principal from string, got %v", got)
@@ -811,6 +864,7 @@ type fakeIAMClient struct {
 	summaryErr             error
 	features               *aws.OrganizationFeatures
 	featuresErr            error
+	roles                  []aws.Role
 	rolesErr               error
 	identityCenterRoles    []aws.Role
 	identityCenterRolesErr error
@@ -848,7 +902,10 @@ func (f fakeIAMClient) ListMFADevices(_ context.Context, _ string) ([]aws.MFADev
 
 func (f fakeIAMClient) ListRoles(_ context.Context, pathPrefix string, callback func([]aws.Role) error) error {
 	if pathPrefix != identityCenterRolePath {
-		return f.rolesErr
+		if f.rolesErr != nil {
+			return f.rolesErr
+		}
+		return callback(f.roles)
 	}
 	if f.identityCenterRolesErr != nil {
 		return f.identityCenterRolesErr
@@ -1039,6 +1096,87 @@ func TestCollectIAMRoles_InOrgDetermination(t *testing.T) {
 	}
 	if mixed.TrustPolicyJSON != "" {
 		t.Errorf("audit level must not carry the trust policy document, got %q", mixed.TrustPolicyJSON)
+	}
+}
+
+// The accounts the roles let in without MFA are sorted by the
+// organization's roster: one outside it, one in it, and, without the
+// roster, one it cannot place. A role whose accounts are all in the
+// organization adds none, a role that lets an outside account in only with
+// MFA adds none, and a role trusting every principal sets wildcard.
+func TestTrustedAccountsOf(t *testing.T) {
+	current := "203984714075"
+	trust := func(name, principal string) aws.Role {
+		return aws.Role{RoleName: name, AssumeRolePolicyDocument: url.QueryEscape(`{"Statement":[{"Effect":"Allow","Principal":` + principal + `}]}`)}
+	}
+	client := fakeRoleLister{roles: []aws.Role{
+		trust("mixed", `{"AWS":["arn:aws:iam::111111111111:root","arn:aws:iam::333333333333:role/vendor"]}`),
+		trust("in-org", `{"AWS":"111111111111"}`),
+		trust("vendor", `{"AWS":"333333333333"}`),
+		trust("service", `{"Service":"ec2.amazonaws.com"}`),
+		trust("oidc", `{"Federated":"arn:aws:iam::203984714075:oidc-provider/token.actions.githubusercontent.com"}`),
+		trust("self", `{"AWS":"arn:aws:iam::203984714075:root"}`),
+		{RoleName: "people", AssumeRolePolicyDocument: url.QueryEscape(
+			`{"Statement":[{"Effect":"Allow","Principal":{"AWS":"444444444444"},"Condition":{"Bool":{"aws:MultiFactorAuthPresent":"true"}}}]}`)},
+	}}
+	org := &organizationAccounts{evaluated: true, ids: map[string]struct{}{current: {}, "111111111111": {}}}
+	c := newTestCollector(Config{})
+	roles, err := c.collectIAMRoles(context.Background(), client, current, componentsdk.LevelTrust, org)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := trustedAccountsOf(current, roles, org, nil, nil)
+
+	if !slices.Equal(got.outside, []string{"333333333333", "333333333333"}) || got.unknown != nil || got.wildcard || got.self != current {
+		t.Errorf("trusted = %+v, want 333333333333 outside once for each role that trusts it", got)
+	}
+
+	rosterErr := errors.New("AccessDeniedException")
+	unread := &organizationAccounts{}
+	roles, err = c.collectIAMRoles(context.Background(), client, current, componentsdk.LevelTrust, unread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = trustedAccountsOf(current, roles, unread, nil, rosterErr)
+	if got.outside != nil || !slices.Equal(got.unknown, []string{"111111111111", "333333333333", "111111111111", "333333333333"}) || got.rosterErr != rosterErr {
+		t.Errorf("without the roster, trusted = %+v, want every other account unknown for the roster's error", got)
+	}
+
+	open, err := c.collectIAMRoles(context.Background(), fakeRoleLister{roles: []aws.Role{trust("open", `"*"`)}}, current, componentsdk.LevelTrust, org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := trustedAccountsOf(current, open, org, nil, nil); !got.wildcard || got.outside != nil {
+		t.Errorf("trusted = %+v, want wildcard and no account", got)
+	}
+}
+
+// At trust, the roles and the organization's accounts are read for the
+// access-posture artifact's connected apps, and the role inventory is not
+// written. A run that leaves the artifact out does not read them.
+func TestCollectIAMMetrics_ConnectedAppsAtTrust(t *testing.T) {
+	client := fakeIAMClient{
+		report:        &aws.CredentialReport{},
+		orgAccountIDs: []string{"123456789012"},
+		roles: []aws.Role{{RoleName: "vendor", AssumeRolePolicyDocument: url.QueryEscape(
+			`{"Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::999999999999:root"}}]}`)}},
+	}
+
+	c := newTestCollector(Config{})
+	metrics := c.collectIAMMetrics(context.Background(), client, "123456789012", accountAt(0), componentsdk.LevelTrust)
+
+	if metrics.Roles != nil || !slices.Equal(metrics.trusted.outside, []string{"999999999999"}) || !metrics.OrganizationAccountsEvaluated {
+		t.Errorf("roles %v, trusted %+v, roster read %v; want no inventory, 999999999999 outside, and the roster read", metrics.Roles, metrics.trusted, metrics.OrganizationAccountsEvaluated)
+	}
+
+	client.rolesErr = errors.New("ListRoles must not be called")
+	client.orgAccountsErr = errors.New("ListAccounts must not be called")
+	c = newTestCollector(Config{SkipAccessPosture: true})
+	metrics = c.collectIAMMetrics(context.Background(), client, "123456789012", accountAt(0), componentsdk.LevelTrust)
+
+	if metrics.trusted.err != nil || metrics.OrganizationAccountsErrorCode != "" || len(c.warnings) != 0 {
+		t.Errorf("trusted %+v, roster error %q, warnings %v; want neither read", metrics.trusted, metrics.OrganizationAccountsErrorCode, c.warnings)
 	}
 }
 
