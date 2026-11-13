@@ -122,9 +122,11 @@ type CloudPostureNetwork struct {
 }
 
 // CloudPostureBackup contains normalized backup configuration, omitted unless
-// every requested region evaluated and at least one database exists.
+// every requested region evaluated and at least one database exists. The
+// minimum is over the databases with automated backups on, and null when
+// none has them on.
 type CloudPostureBackup struct {
-	RetentionDaysMin *int `json:"retention_days_min,omitempty"`
+	RetentionDaysMin Reading[int] `json:"retention_days_min,omitzero"`
 }
 
 // CloudPostureThreatDetection contains whether GuardDuty is on in every
@@ -148,8 +150,9 @@ func (c *Collector) cloudPosture(o *Output) *CloudPosture {
 
 // normalizedSources pairs each normalized metric with the detailed values it
 // is derived from, by pointer under the account's entry. The first source is
-// the one the metric copies. audit is true for the counts the schema marks
-// audit-level, which are written from the audit level only.
+// the one the metric copies, unless countedNormalized has it. audit is true
+// for the counts the schema marks audit-level, which are written from the
+// audit level only.
 var normalizedSources = []struct {
 	field   string
 	sources []string
@@ -191,6 +194,17 @@ var normalizedSources = []struct {
 	{"iam/saml_provider_count", []string{"iam/saml_provider_count"}, false},
 	{"vuln_scanning/enabled", []string{"account_security/inspector/enabled"}, false},
 	{"vuln_scanning/unpatched_pct", []string{"account_security/inspector/unpatched_server_percent"}, false},
+}
+
+// countedNormalized are the metrics counted from the same reads as their
+// detailed sources rather than copied from them: the deprecated access key
+// values count the root user's keys too, and the retention minimum leaves
+// out the databases with automated backups off. They carry their sources'
+// gaps, and methods.json says how each is counted.
+var countedNormalized = map[string]bool{
+	"iam/access_key_user_count":             true,
+	"iam/access_key_rotation_compliant_pct": true,
+	"backup/retention_days_min":             true,
 }
 
 // storageNetworkUnsupported is why the storage network restriction values
@@ -281,8 +295,9 @@ func toCloudPosture(o *Output, gaps *gapLog) *CloudPosture {
 
 // mirrorNormalizedGaps leaves out each of account i's normalized metrics
 // whose detailed source a gap covers, recording the source's gap at it. A
-// metric no gap covers is recorded as a copy of its first source. The counts
-// are passed over below the audit level, where they are not written.
+// metric no gap covers is recorded as a copy of its first source, unless it
+// is counted. The counts are passed over below the audit level, where they
+// are not written.
 func mirrorNormalizedGaps(gaps *gapLog, i int, account *CloudPostureAccount, audit bool) {
 	for _, metric := range normalizedSources {
 		if metric.audit && !audit {
@@ -297,7 +312,7 @@ func mirrorNormalizedGaps(gaps *gapLog, i int, account *CloudPostureAccount, aud
 				break
 			}
 		}
-		if !covered {
+		if !covered && !countedNormalized[metric.field] {
 			gaps.copied(fmt.Sprintf("/accounts/%d/%s", i, metric.sources[0]), to)
 		}
 	}
@@ -355,7 +370,7 @@ func clearNormalized(account *CloudPostureAccount, field string) {
 	case "network/rdp_open_to_world_pct":
 		account.Network.RDPOpenToWorldPct = Reading[float64]{}
 	case "backup/retention_days_min":
-		account.Backup.RetentionDaysMin = nil
+		account.Backup.RetentionDaysMin = Reading[int]{}
 	case "threat_detection/enabled":
 		account.ThreatDetection.Enabled = nil
 	case "iam/mfa_coverage_pct":
@@ -472,15 +487,14 @@ func normalizedNetwork(n NetworkMetrics, audit bool) CloudPostureNetwork {
 }
 
 // normalizedBackup emits the retention minimum only when every requested
-// region evaluated and at least one database exists; a minimum over zero
-// databases would read as "no backups".
+// region evaluated and at least one database exists. It is the shortest
+// retention among the databases with automated backups on, and null when
+// none has them on, since a database with backups off keeps none.
 func normalizedBackup(rds RDSMetrics) CloudPostureBackup {
-	out := CloudPostureBackup{}
 	if rds.RegionsEvaluatedCount == 0 || len(rds.RegionsFailed) > 0 || rds.DatabaseCount == 0 {
-		return out
+		return CloudPostureBackup{}
 	}
-	out.RetentionDaysMin = rds.BackupRetentionMin
-	return out
+	return CloudPostureBackup{RetentionDaysMin: Reading[int]{Value: rds.backedUpRetentionMin, Read: true}}
 }
 
 // normalizedThreatDetection emits whether GuardDuty is on in every scanned

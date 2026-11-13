@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,6 +34,11 @@ var kitOperations = []string{
 	"aws.iam.ListGroupsForUser",
 	"aws.iam.ListAttachedGroupPolicies",
 	"aws.iam.ListGroupPolicies",
+	"aws.iam.GetPolicy",
+	"aws.iam.GetPolicyVersion",
+	"aws.iam.GetUserPolicy",
+	"aws.iam.GetGroupPolicy",
+	"aws.iam.GetUser",
 	"aws.organizations.ListAccounts",
 	"aws.s3.ListBuckets",
 	"aws.s3.GetBucketLocation",
@@ -814,7 +820,7 @@ func kitSuite() collectortest.Suite {
 				// PowerUserAccess on bob's developers group can change or
 				// delete any resource, so bob is an admin too.
 				Name: "PowerUserAccess through a group",
-				Responses: replaceResponses(noIdentityCenterResponses(kitCredentialReport),
+				Responses: replaceItems(noIdentityCenterResponses(kitCredentialReport),
 					attachedGroupPolicies("developers", "arn:aws:iam::aws:policy/PowerUserAccess")),
 				Expect: map[string]map[string]any{accessPosturePath: {
 					"/admins/admin_count":     2,
@@ -826,7 +832,7 @@ func kitSuite() collectortest.Suite {
 				// whether he is an admin is unknown. alice still makes
 				// admins_present true.
 				Name:      "inline policy",
-				Responses: replaceResponses(noIdentityCenterResponses(kitCredentialReport), inlineUserPolicies("bob", "deploy")),
+				Responses: replaceItems(noIdentityCenterResponses(kitCredentialReport), inlineUserPolicies("bob", "deploy")),
 				Expect: map[string]map[string]any{accessPosturePath: {
 					"/admins/admins_present":    true,
 					"/admins/admin_count":       collectortest.Absent,
@@ -844,6 +850,155 @@ func kitSuite() collectortest.Suite {
 					"/admins/admins_present":               collectortest.Absent,
 					"/admins/admin_count":                  collectortest.Absent,
 					"/admins/local_admin_mfa_coverage_pct": collectortest.Absent,
+				}},
+			},
+			{
+				// carol's key has AdministratorAccess on her alone, so it is
+				// unrestricted. alice's is limited to the office's addresses.
+				Name:      "access key with full access",
+				Responses: carolKeyResponses([]string{kitAdminPolicy}, nil, ""),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/credentials/unrestricted_credential_count": 1,
+					"/credentials/unrestricted_pct":              50,
+					"/credentials/write_access_credential_count": 2,
+					"/credentials/write_access_pct":              100,
+				}},
+			},
+			{
+				// ReadOnlyAccess only reads, so carol's key can neither
+				// write nor do everything.
+				Name:      "read-only access key",
+				Responses: carolKeyResponses([]string{kitReadOnlyPolicy}, nil, ""),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/credentials/unrestricted_credential_count":          0,
+					"/credentials/unrestricted_pct":                       0,
+					"/credentials/write_access_credential_count":          1,
+					"/credentials/write_access_pct":                       50,
+					"/scopes/0/credentials/write_access_credential_count": 1,
+				}},
+			},
+			{
+				// carol's inline policy lets her key put objects in one
+				// bucket, which writes, and is no full access.
+				Name: "access key that writes to one bucket",
+				Responses: carolKeyResponses([]string{kitReadOnlyPolicy}, map[string]string{"deploy": `{"Version":"2012-10-17","Statement":[` +
+					`{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":"arn:aws:s3:::northwind-app/*"}]}`}, ""),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/credentials/unrestricted_credential_count": 0,
+					"/credentials/write_access_credential_count": 2,
+					"/credentials/write_access_pct":              100,
+				}},
+			},
+			{
+				// The no-access group's inline policy denies every action,
+				// which takes back what platform-admins allows, so carol's
+				// key can do nothing, as the sandbox's keys can.
+				Name:      "access key denied everything",
+				Responses: deniedCarolResponses(),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/credentials/unrestricted_credential_count": 0,
+					"/credentials/unrestricted_pct":              0,
+					"/credentials/write_access_credential_count": 1,
+					"/credentials/write_access_pct":              50,
+				}},
+			},
+			{
+				// carol's one allow holds only from the office's addresses,
+				// so her key's full access is limited to them.
+				Name: "access key limited to a source by its allow",
+				Responses: carolKeyResponses(nil, map[string]string{"from-office": `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*",` +
+					`"Condition":{"IpAddress":{"aws:SourceIp":"203.0.113.0/24"}}}}`}, ""),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/credentials/unrestricted_credential_count": 0,
+					"/credentials/write_access_credential_count": 2,
+				}},
+			},
+			{
+				// carol's deny from outside a set of addresses lists every
+				// IPv4 address, so it limits nothing.
+				Name: "access key with every address as its source",
+				Responses: carolKeyResponses([]string{kitAdminPolicy}, map[string]string{"anywhere": `{"Version":"2012-10-17","Statement":{"Effect":"Deny","Action":"*","Resource":"*",` +
+					`"Condition":{"NotIpAddress":{"aws:SourceIp":["0.0.0.0/0"]}}}}`}, ""),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/credentials/unrestricted_credential_count": 1,
+					"/credentials/unrestricted_pct":              50,
+				}},
+			},
+			{
+				// carol's permissions boundary may take back what
+				// AdministratorAccess allows, and it is not evaluated, so
+				// both values are left out. alice's key still counts.
+				Name:      "access key of a user with a permissions boundary",
+				Responses: carolKeyResponses([]string{kitAdminPolicy}, nil, "arn:aws:iam::111122223333:policy/developer-boundary"),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/credentials/credential_count":                       2,
+					"/credentials/unrestricted_credential_count":          collectortest.Absent,
+					"/credentials/unrestricted_pct":                       collectortest.Absent,
+					"/credentials/write_access_credential_count":          collectortest.Absent,
+					"/credentials/write_access_pct":                       collectortest.Absent,
+					"/scopes/0/credentials/unrestricted_credential_count": collectortest.Absent,
+				}},
+			},
+			{
+				// The root user's access key can do everything, whatever
+				// the account's policies, so it counts with the IAM users'
+				// keys. It is overdue for rotation and was never used.
+				Name:      "access key on the root user",
+				Responses: rootKeyResponses(),
+				Expect: map[string]map[string]any{
+					accessPosturePath: {
+						"/root/root_access_keys_present":                 true,
+						"/credentials/credential_count":                  3,
+						"/credentials/unused_credential_count":           1,
+						"/credentials/rotation_overdue_credential_count": 2,
+						"/credentials/rotation_overdue_pct":              67,
+						"/credentials/unrestricted_credential_count":     2,
+						"/credentials/unrestricted_pct":                  67,
+						"/credentials/write_access_credential_count":     3,
+						"/credentials/write_access_pct":                  100,
+					},
+					cloudPosturePath: {
+						"/accounts/0/iam/access_key_user_count":             3,
+						"/accounts/0/iam/access_key_rotation_compliant_pct": 33,
+					},
+					awsPath: {"/accounts/0/iam/access_key_user_count": 2},
+				},
+			},
+			{
+				// AdministratorAccess's document cannot be read, so carol's
+				// key is unknown. alice's is known not to be unrestricted,
+				// since her own policy limits its source, and whether it
+				// can write is unknown. The admins are still counted by
+				// the policies' names.
+				Name: "policy document denied",
+				Responses: replaceResponses(kitResponses(),
+					iamDenied("aws.iam.GetPolicyVersion", "iam:GetPolicyVersion", "because no identity-based policy allows the iam:GetPolicyVersion action")),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/credentials/credential_count":              2,
+					"/credentials/unrestricted_credential_count": collectortest.Absent,
+					"/credentials/write_access_pct":              collectortest.Absent,
+					"/admins/local_admin_count":                  1,
+				}},
+			},
+			{
+				// The PostgreSQL instance keeps no automated backups, so the
+				// shortest retention is the Aurora cluster's. The detailed
+				// minimum still shows the instance's 0 days.
+				Name:      "database with backups off",
+				Responses: backupsOffResponses(true),
+				Expect: map[string]map[string]any{
+					cloudPosturePath: {"/accounts/0/backup/retention_days_min": 14},
+					awsPath:          {"/accounts/0/rds/backup_retention_min": 0},
+				},
+			},
+			{
+				// The one database keeps no automated backups, so no
+				// database has any, and the minimum is null.
+				Name:      "only database with backups off",
+				Responses: backupsOffResponses(false),
+				Expect: map[string]map[string]any{cloudPosturePath: {
+					"/accounts/0/database/database_count": 1,
+					"/accounts/0/backup":                  map[string]any{"retention_days_min": nil},
 				}},
 			},
 			{
@@ -994,8 +1149,11 @@ func kitSuite() collectortest.Suite {
 				Expect: map[string]map[string]any{
 					awsPath: {"/accounts/0/iam/roles": collectortest.Absent},
 					accessPosturePath: {
-						"/connected_apps/apps_present": true,
-						"/connected_apps/app_count":    collectortest.Absent,
+						"/connected_apps/apps_present":               true,
+						"/connected_apps/app_count":                  collectortest.Absent,
+						"/credentials/unrestricted_pct":              50,
+						"/credentials/unrestricted_credential_count": collectortest.Absent,
+						"/credentials/write_access_pct":              100,
 					},
 				},
 			},
@@ -1299,7 +1457,8 @@ func kitIgnore() []string {
 }
 
 // kitRecordings loads the scenarios TestRecord in record_test.go records
-// from sandboxes, and logs each one not recorded yet.
+// from sandboxes, with the answers kitUnrecorded adds, and logs each one not
+// recorded yet.
 func kitRecordings(t *testing.T, names ...string) []collectortest.Scenario {
 	t.Helper()
 	var out []collectortest.Scenario
@@ -1312,10 +1471,36 @@ func kitRecordings(t *testing.T, names ...string) []collectortest.Scenario {
 		case err != nil:
 			t.Fatal(err)
 		default:
+			for _, r := range kitUnrecorded[name] {
+				if slices.ContainsFunc(sc.Responses, func(recorded collectortest.Response) bool { return recorded.Operation == r.Operation }) {
+					t.Errorf("%s now records %s, so kitUnrecorded need not answer it", path, r.Operation)
+				}
+			}
+			sc.Responses = append(sc.Responses, kitUnrecorded[name]...)
 			out = append(out, sc)
 		}
 	}
 	return out
+}
+
+// kitUnrecorded answers, by recording, the calls a collector change made
+// after the recording was. The aws sandbox's recording predates the reads of
+// the policies of the IAM users with access keys, so these answer them as
+// terraform/iam.tf in epack-collector-sandboxes sets them: users 1 and 2
+// hold the keys, attach no policy and have no inline one, and belong to the
+// no-access group, whose inline deny-all policy denies every action. Neither
+// has a permissions boundary. The sandbox's next recording holds them,
+// once bootstrap/aws/collector_policy.tf grants the reads.
+var kitUnrecorded = map[string][]collectortest.Response{
+	"aws": func() []collectortest.Response {
+		const group = "epack-sandbox-no-access"
+		var out []collectortest.Response
+		for _, user := range []string{"epack-sandbox-1-mfa-new-key", "epack-sandbox-2-no-mfa-old-key"} {
+			out = append(out, attachedUserPolicies(user), inlineUserPolicies(user), groupsForUser(user, group), iamUser(user, ""))
+		}
+		return append(out, attachedGroupPolicies(group), inlineGroupPolicies(group, "deny-all"), groupPolicyDocument(group, "deny-all",
+			`{"Version":"2012-10-17","Statement":[{"Sid":"SandboxUsersCannotActOnAnything","Effect":"Deny","Action":"*","Resource":"*"}]}`))
+	}(),
 }
 
 // kitAccessPins are the clean run's access-posture values. alice, bob, and
@@ -1324,6 +1509,10 @@ func kitRecordings(t *testing.T, names ...string) []collectortest.Scenario {
 // access key, so she is a credential. alice is the IAM admin. Identity
 // Center has users, so the admin count and the inactive members are left
 // out. Two access keys are active, and carol's is overdue for rotation.
+// Both keys can write. carol's has full access through platform-admins,
+// whose deny without MFA never applies to an access key, so it is
+// unrestricted. alice's own policy denies every request from outside the
+// office's addresses, so hers is limited to them.
 // vendor-audit's account is outside the organization, so it is the one
 // connected app. deploy's account is in it, and the collector's role
 // trusts the account's own OIDC provider.
@@ -1357,6 +1546,12 @@ func kitAccessPins() map[string]any {
 		"/credentials/unused_pct":                        0,
 		"/credentials/rotation_overdue_credential_count": 1,
 		"/credentials/rotation_overdue_pct":              50,
+		"/credentials/unrestricted_credential_count":     1,
+		"/credentials/unrestricted_pct":                  50,
+		"/credentials/write_access_credential_count":     2,
+		"/credentials/write_access_pct":                  100,
+		"/scopes/0/credentials/unrestricted_pct":         50,
+		"/scopes/0/credentials/write_access_pct":         100,
 		"/connected_apps/apps_present":                   true,
 		"/connected_apps/app_count":                      1,
 		"/scopes/0/id":                                   kitAccountID,

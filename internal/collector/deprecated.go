@@ -11,8 +11,10 @@ import (
 // them as deprecated, and the collector writes them as v0.6 did, so profiles
 // written before v0.10.0 grade the same. iam.user_count and mfa_coverage_pct
 // are the exception: they count the IAM users who can sign in, as the
-// access-posture values the schema names in their place do. A later minor
-// removes the blocks.
+// access-posture values the schema names in their place do. So are
+// iam.access_key_user_count and access_key_rotation_compliant_pct, which
+// count the users with an active access key, the root user included, as
+// credential_count counts its keys. A later minor removes the blocks.
 
 // CloudPostureIAM holds an account's IAM values. Each is left out when its
 // detailed source was not read.
@@ -59,9 +61,9 @@ func normalizedIAM(iam IAMMetrics) CloudPostureIAM {
 	out := CloudPostureIAM{}
 	if iam.CredentialReportEvaluated {
 		out.MFACoveragePct = pctFloat(iam.ConsoleMFAEnabled)
-		out.AccessKeyRotationCompliantPct = pctFloat(iam.AccessKeysRotated)
+		out.AccessKeyRotationCompliantPct = pctFloat(accessKeyRotationPercent(iam.usage.rotatedKeyUsers, iam.usage.keyUsers))
 		out.UserCount = intPtr(iam.ConsoleUserCount)
-		out.AccessKeyUserCount = intPtr(iam.AccessKeyUserCount)
+		out.AccessKeyUserCount = intPtr(iam.usage.keyUsers)
 	}
 	if iam.SAMLProviderCount != nil {
 		out.SAMLProviderCount = intPtr(*iam.SAMLProviderCount)

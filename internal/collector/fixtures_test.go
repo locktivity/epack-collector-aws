@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -425,7 +427,7 @@ func orgAccountsDeniedResponses() []collectortest.Response {
 }
 
 func kitIAMResponses(report string) []collectortest.Response {
-	return []collectortest.Response{
+	return append([]collectortest.Response{
 		queryResponse("aws.iam.ListAccountAliases", kitIAMURL, "<AccountAliases><member>northwind-prod</member></AccountAliases><IsTruncated>false</IsTruncated>"),
 		queryResponse("aws.iam.GenerateCredentialReport", kitIAMURL, "<State>COMPLETE</State><Description>Report generated</Description>"),
 		queryResponse("aws.iam.GetCredentialReport", kitIAMURL,
@@ -455,8 +457,8 @@ func kitIAMResponses(report string) []collectortest.Response {
 		// alice has AdministratorAccess attached, and carol has it through
 		// the platform-admins group. bob's developers group can only read,
 		// and neither bob nor the group has an inline policy. carol has no
-		// console password, so she is a credential and her policies are
-		// not read.
+		// console password, so she is a credential and is not checked for
+		// administrator access.
 		attachedUserPolicies("alice", kitAdminPolicy),
 		attachedUserPolicies("bob"),
 		attachedUserPolicies("carol", kitReadOnlyPolicy),
@@ -466,13 +468,27 @@ func kitIAMResponses(report string) []collectortest.Response {
 		attachedGroupPolicies("developers", kitReadOnlyPolicy),
 		attachedGroupPolicies("platform-admins", kitAdminPolicy),
 		inlineGroupPolicies("developers"),
+		// alice and carol have access keys, so their policies are read for
+		// what the keys can do. alice's inline policy denies every request
+		// from outside the office's addresses. platform-admins' inline
+		// policy denies changing the password policy without MFA, which no
+		// request signed with an access key has, so it never applies to
+		// carol's key. Neither has a permissions boundary.
+		inlineUserPolicies("alice", "office-network"),
+		inlineUserPolicies("carol"),
+		groupsForUser("alice"),
+		inlineGroupPolicies("platform-admins", "password-policy-needs-mfa"),
+		userPolicyDocument("alice", "office-network", kitOfficeNetworkPolicy),
+		groupPolicyDocument("platform-admins", "password-policy-needs-mfa", kitPasswordPolicyMFAPolicy),
+		iamUser("alice", ""),
+		iamUser("carol", ""),
 		jsonResponse("aws.organizations.ListAccounts", "https://organizations.us-east-1.amazonaws.com/", map[string]any{
 			"Accounts": []any{
 				map[string]any{"Id": kitAccountID, "Arn": "arn:aws:organizations::111122223333:account/o-kit12345678/111122223333", "Name": "Northwind Prod", "Email": "aws-prod@northwind.example", "Status": "ACTIVE"},
 				map[string]any{"Id": "444455556666", "Arn": "arn:aws:organizations::111122223333:account/o-kit12345678/444455556666", "Name": "Northwind Deploy", "Email": "aws-deploy@northwind.example", "Status": "ACTIVE"},
 			},
 		}),
-	}
+	}, managedPolicyDocument(kitAdminPolicy, kitAdministratorDocument)...)
 }
 
 // The AWS managed policies the kit's IAM users and groups have attached.
@@ -480,6 +496,76 @@ const (
 	kitAdminPolicy    = "arn:aws:iam::aws:policy/AdministratorAccess"
 	kitReadOnlyPolicy = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 )
+
+// The documents of the kit's policies: AdministratorAccess as AWS writes it,
+// a deny of every request from outside the office's addresses, and a deny
+// of changing the password policy without MFA.
+const (
+	kitAdministratorDocument   = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
+	kitOfficeNetworkPolicy     = `{"Version":"2012-10-17","Statement":{"Sid":"OfficeOnly","Effect":"Deny","Action":"*","Resource":"*","Condition":{"NotIpAddress":{"aws:SourceIp":["203.0.113.0/24"]}}}}`
+	kitPasswordPolicyMFAPolicy = `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":["iam:UpdateAccountPasswordPolicy","iam:DeleteAccountPasswordPolicy"],"Resource":"*","Condition":{"Bool":{"aws:MultiFactorAuthPresent":"false"}}}]}`
+)
+
+// encodedPolicy is a policy document as IAM returns it, URL-encoded.
+func encodedPolicy(document string) string { return url.QueryEscape(document) }
+
+// managedPolicyDocument answers the reads of a managed policy's default
+// version, v1, whose document is document: GetPolicy, then
+// GetPolicyVersion.
+func managedPolicyDocument(arn, document string) []collectortest.Response {
+	name := arn[strings.LastIndex(arn, "/")+1:]
+	return []collectortest.Response{
+		queryItemResponse("aws.iam.GetPolicy", kitIAMURL, map[string]string{"PolicyArn": arn},
+			"<Policy><PolicyName>"+name+"</PolicyName><PolicyId>ANPAKIT"+strings.ToUpper(name)+"</PolicyId><Arn>"+arn+"</Arn><Path>/</Path>"+
+				"<DefaultVersionId>v1</DefaultVersionId><AttachmentCount>2</AttachmentCount><IsAttachable>true</IsAttachable>"+
+				"<CreateDate>2015-02-06T18:39:46Z</CreateDate><UpdateDate>2015-02-06T18:39:46Z</UpdateDate></Policy>"),
+		queryItemResponse("aws.iam.GetPolicyVersion", kitIAMURL, map[string]string{"PolicyArn": arn, "VersionId": "v1"},
+			"<PolicyVersion><Document>"+encodedPolicy(document)+"</Document><VersionId>v1</VersionId><IsDefaultVersion>true</IsDefaultVersion>"+
+				"<CreateDate>2015-02-06T18:39:46Z</CreateDate></PolicyVersion>"),
+	}
+}
+
+// userPolicyDocument answers the read of a user's inline policy.
+func userPolicyDocument(user, name, document string) collectortest.Response {
+	return queryItemResponse("aws.iam.GetUserPolicy", kitIAMURL, map[string]string{"UserName": user, "PolicyName": name},
+		"<UserName>"+user+"</UserName><PolicyName>"+name+"</PolicyName><PolicyDocument>"+encodedPolicy(document)+"</PolicyDocument>")
+}
+
+// groupPolicyDocument answers the read of a group's inline policy.
+func groupPolicyDocument(group, name, document string) collectortest.Response {
+	return queryItemResponse("aws.iam.GetGroupPolicy", kitIAMURL, map[string]string{"GroupName": group, "PolicyName": name},
+		"<GroupName>"+group+"</GroupName><PolicyName>"+name+"</PolicyName><PolicyDocument>"+encodedPolicy(document)+"</PolicyDocument>")
+}
+
+// iamUser answers the read of an IAM user, with boundary as its
+// permissions boundary, or none when it is "".
+func iamUser(user, boundary string) collectortest.Response {
+	limit := ""
+	if boundary != "" {
+		limit = "<PermissionsBoundary><PermissionsBoundaryType>Policy</PermissionsBoundaryType><PermissionsBoundaryArn>" + boundary +
+			"</PermissionsBoundaryArn></PermissionsBoundary>"
+	}
+	return queryItemResponse("aws.iam.GetUser", kitIAMURL, map[string]string{"UserName": user},
+		"<User><Path>/</Path><UserName>"+user+"</UserName><UserId>AIDAKIT"+strings.ToUpper(user)+"</UserId><Arn>arn:aws:iam::111122223333:user/"+user+"</Arn>"+
+			"<CreateDate>2023-01-01T00:00:00Z</CreateDate>"+limit+"</User>")
+}
+
+// replaceItems swaps in each replacement for the responses with the same
+// operation, URL, and request body, so one item's answer changes and the
+// others' stay.
+func replaceItems(responses []collectortest.Response, replacements ...collectortest.Response) []collectortest.Response {
+	out := append([]collectortest.Response(nil), responses...)
+	for _, r := range replacements {
+		i := slices.IndexFunc(out, func(o collectortest.Response) bool {
+			return o.Operation == r.Operation && o.URL == r.URL && o.RequestBody == r.RequestBody
+		})
+		if i < 0 {
+			panic("no response to replace for " + r.Operation + " " + r.RequestBody)
+		}
+		out[i] = r
+	}
+	return out
+}
 
 // policyMembers lists policy ARNs as IAM's AttachedPolicies members.
 func policyMembers(arns []string) string {
@@ -1501,6 +1587,66 @@ func coveragePagesResponses() []collectortest.Response {
 		page("kit-coverage-2", "", group("AWS_ECR_CONTAINER_IMAGE"), group("AWS_LAMBDA_FUNCTION")),
 		page("", "kit-coverage-2", group("AWS_EC2_INSTANCE")),
 	}, kitResponses()...)
+}
+
+// carolKeyResponses answer as the kit account, with carol in no group, the
+// managed policies arns attached to her, the inline policies documents by
+// name, and boundary as her permissions boundary, or none when it is "".
+// The kit answers the reads of AdministratorAccess, and ReadOnlyAccess is
+// not read.
+func carolKeyResponses(arns []string, documents map[string]string, boundary string) []collectortest.Response {
+	names := slices.Sorted(maps.Keys(documents))
+	responses := replaceItems(kitResponses(),
+		attachedUserPolicies("carol", arns...),
+		inlineUserPolicies("carol", names...),
+		groupsForUser("carol"),
+		iamUser("carol", boundary))
+	for _, name := range names {
+		responses = append(responses, userPolicyDocument("carol", name, documents[name]))
+	}
+	return responses
+}
+
+// deniedCarolResponses answer as the kit account, with carol in the
+// no-access group, whose inline policy denies every action, as the
+// sandbox's users are, besides platform-admins.
+func deniedCarolResponses() []collectortest.Response {
+	return append(replaceItems(kitResponses(), groupsForUser("carol", "platform-admins", "no-access")),
+		attachedGroupPolicies("no-access"),
+		inlineGroupPolicies("no-access", "deny-all"),
+		groupPolicyDocument("no-access", "deny-all", `{"Version":"2012-10-17","Statement":[{"Sid":"NoAccess","Effect":"Deny","Action":"*","Resource":"*"}]}`))
+}
+
+// rootKeyResponses answer as the kit account, with an active access key on
+// the root user, created and never rotated or used since mid-2025.
+func rootKeyResponses() []collectortest.Response {
+	rows := strings.Split(kitCredentialReport, "\n")
+	rows[1] = "<root_account>,arn:aws:iam::111122223333:root,2020-01-01T00:00:00+00:00,not_supported,2025-12-01T00:00:00+00:00,not_supported,not_supported," +
+		"true,true,2025-06-01T00:00:00+00:00,N/A,N/A,N/A,false,N/A,N/A,N/A,N/A,false,N/A,false,N/A"
+	responses := kitResponsesWithReport(strings.Join(rows, "\n"))
+	for i, r := range responses {
+		if r.Operation == "aws.iam.GetAccountSummary" {
+			responses[i].Body = strings.Replace(r.Body, "<key>AccountAccessKeysPresent</key><value>0</value>", "<key>AccountAccessKeysPresent</key><value>1</value>", 1)
+		}
+	}
+	return responses
+}
+
+// backupsOffResponses answer as the kit account, with automated backups off
+// for the PostgreSQL instance. Without the Aurora cluster, no database has
+// them on.
+func backupsOffResponses(cluster bool) []collectortest.Response {
+	var out []collectortest.Response
+	for _, r := range kitResponses() {
+		switch {
+		case r.Operation == "aws.rds.DescribeDBInstances":
+			r.Body = strings.Replace(r.Body, "<BackupRetentionPeriod>7</BackupRetentionPeriod>", "<BackupRetentionPeriod>0</BackupRetentionPeriod>", 1)
+		case r.Operation == "aws.rds.DescribeDBClusters" && !cluster:
+			r = queryResponse("aws.rds.DescribeDBClusters", regional("rds"), "<DBClusters/>")
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // adminPolicyPagesResponses answer as the kit account, with bob's attached

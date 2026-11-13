@@ -31,6 +31,7 @@ func evaluatedAccountFixture() AccountPosture {
 			SAMLProviderCount:               intPtr(0),
 			IdentityCenterSAMLProviderCount: intPtr(0),
 			IdentityCenterRoleCount:         intPtr(0),
+			usage:                           iamUsage{keyUsers: 10, rotatedKeyUsers: 9},
 		},
 		IdentityCenter: IdentityCenterStatus{RegionsChecked: []string{"us-east-1", "us-west-2"}},
 		S3: S3Metrics{
@@ -52,6 +53,7 @@ func evaluatedAccountFixture() AccountPosture {
 			MultiAZEnabledDatabaseCount:  1,
 			BackupRetentionAdequate:      intPtr(100),
 			BackupRetentionMin:           intPtr(14),
+			backedUpRetentionMin:         intPtr(14),
 		},
 		Network: NetworkMetrics{
 			RegionsEvaluatedCount:            2,
@@ -146,8 +148,8 @@ func TestToCloudPosture(t *testing.T) {
 		t.Errorf("Network.RDPOpenToWorldPct = %v, want 0", v)
 	}
 
-	if acct.Backup.RetentionDaysMin == nil || *acct.Backup.RetentionDaysMin != 14 {
-		t.Errorf("Backup.RetentionDaysMin = %v, want 14", acct.Backup.RetentionDaysMin)
+	if v := acct.Backup.RetentionDaysMin.Value; v == nil || *v != 14 {
+		t.Errorf("Backup.RetentionDaysMin = %v, want 14", v)
 	}
 
 }
@@ -428,8 +430,8 @@ func TestToCloudPosture_BackupOmittedWithZeroDatabases(t *testing.T) {
 	}
 
 	backup := output.ToCloudPosture().Accounts[0].Backup
-	if backup.RetentionDaysMin != nil {
-		t.Errorf("RetentionDaysMin = %v, want nil with zero databases", *backup.RetentionDaysMin)
+	if backup.RetentionDaysMin.Read {
+		t.Errorf("RetentionDaysMin = %+v, want it left out with zero databases", backup.RetentionDaysMin)
 	}
 }
 
@@ -449,28 +451,44 @@ func TestToCloudPosture_EmptyAccounts(t *testing.T) {
 	}
 }
 
-func TestToCloudPosture_ZeroRetention(t *testing.T) {
-	// Zero retention on a real database (backups disabled) is genuine evidence
-	// and passes through, distinct from the omitted zero-database case.
-	output := &Output{
-		SchemaVersion: "1.0.0",
-		Accounts: []AccountPosture{
-			{
-				AccountID: "123456789012",
-				RDS: RDSMetrics{
-					RegionsEvaluatedCount: 1,
-					DatabaseCount:         1,
-					BackupRetentionMin:    intPtr(0),
-				},
-			},
-		},
-	}
+// A database with automated backups off, whose retention is 0 days, keeps
+// no backup, so the minimum is over the databases that keep them, and null
+// when none does. The detailed minimum still counts it as 0.
+func TestToCloudPosture_RetentionOverBackedUpDatabases(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		retention []int
+		want      *int
+	}{
+		{"one with backups off", []int{0, 7, 14}, intPtr(7)},
+		{"every one with backups off", []int{0, 0}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rds := rdsMetricsWithCounts{minRetention: -1}
+			for _, days := range tc.retention {
+				rds.countDatabase(true, true, true, days)
+			}
+			rds.instanceCount = len(tc.retention)
+			rds.RegionsEvaluatedCount = 1
+			rds.finalize()
+			output := &Output{Accounts: []AccountPosture{{AccountID: "123456789012", RDS: rds.RDSMetrics}}}
 
-	cloudPosture := output.ToCloudPosture()
+			got := output.ToCloudPosture().Accounts[0].Backup.RetentionDaysMin
 
-	got := cloudPosture.Accounts[0].Backup.RetentionDaysMin
-	if got == nil || *got != 0 {
-		t.Errorf("Backup.RetentionDaysMin = %v, want 0", got)
+			if !got.Read || !sameInt(got.Value, tc.want) {
+				t.Errorf("retention_days_min = %+v, want %s", got, showPct(tc.want))
+			}
+			if !sameInt(rds.BackupRetentionMin, intPtr(0)) {
+				t.Errorf("detailed backup_retention_min = %s, want 0", showPct(rds.BackupRetentionMin))
+			}
+			body, err := json.Marshal(output.ToCloudPosture().Accounts[0].Backup)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == nil && string(body) != `{"retention_days_min":null}` {
+				t.Errorf("backup = %s, want a null minimum", body)
+			}
+		})
 	}
 }
 

@@ -289,9 +289,16 @@ percentages `network.ssh_open_to_world_pct` and
 The other percentages round down. `database.multi_az_pct` is written from the
 audit level. A database has public access blocked when it is a DB instance
 outside a cluster that is not publicly accessible, or a DB cluster none of
-whose instances is. The deprecated `iam.user_count` and `iam.mfa_coverage_pct`
-count the IAM users with a console password, as their access-posture
-replacements `members.local_member_count` and `local_mfa_coverage_pct` do.
+whose instances is. `backup.retention_days_min` is the shortest automated
+backup retention among the databases that keep automated backups, and null
+when none does, since a database whose retention period is 0 days has them
+off. The group is left out for an account with no database. The deprecated
+`iam.user_count` and `iam.mfa_coverage_pct` count the IAM users with a
+console password, as their access-posture replacements
+`members.local_member_count` and `local_mfa_coverage_pct` do. The deprecated
+`iam.access_key_user_count` and `access_key_rotation_compliant_pct` count the
+users with an active access key, the root user included, as
+`credentials.credential_count` counts the keys.
 S3 has no setting that turns off public network access, so
 `storage.network_restricted_pct` and its count are left out with an
 `unsupported` gap. `threat_detection.enabled` is true when every scanned
@@ -332,20 +339,50 @@ is false, left out when any other account's is unknown, and true otherwise.
   `AdministratorAccess`, `PowerUserAccess`, or `IAMFullAccess`, attached to
   the user or to one of the user's groups. A user with an inline or customer
   managed policy and none of those three leaves the admin counts out with a
-  `partial` gap, since the collector does not read policy documents. So does
-  a user whose policies cannot be read. When Identity Center users are
+  `partial` gap, since the admin check does not evaluate policy documents.
+  So does a user whose policies cannot be read. When Identity Center users are
   counted, `admin_count` and `admin_share_pct` are left out with a `not_read`
   gap, since the policies of the permission sets assigned to them are not
   evaluated. The `local_admin_*` values still count the IAM admins.
 - `root` counts one root user for each account. A root user counts as having
   MFA when it has MFA, or has no password, access key, or signing certificate
   to sign in with.
-- Credentials are the IAM users' active access keys. AWS access keys never
-  expire, so `never_expiring_pct` is 100 whenever there is one. A key is
-  unused when it was last used more than 90 days before the run, or never. It
-  is overdue for rotation when it was last rotated more than 90 days before
-  the run. The unrestricted and write access values need the users' policy
-  documents, which are not read, so they are left out with a `not_read` gap.
+- Credentials are the active access keys in the credential report, the root
+  user's included. AWS access keys never expire, so `never_expiring_pct` is
+  100 whenever there is one. A key is unused when it was last used more than
+  90 days before the run, or never. It is overdue for rotation when it was
+  last rotated more than 90 days before the run.
+- A key's unrestricted and write access values come from its IAM user's
+  identity policies: the managed policies attached to the user and to its
+  groups, read at their default version, and the inline policies of each. A
+  key is unrestricted when an allow of every action on every resource, `*` on
+  `*`, holds with no deny taking any of it back, and its requests are not
+  limited to a set of source addresses. A deny of every action with a
+  `NotIpAddress` condition on `aws:SourceIp` limits them, and so does an
+  `IpAddress` condition on `aws:SourceIp` on every allow, unless the set of
+  addresses holds `0.0.0.0/0` or `::/0`. A key can write when it is allowed
+  every action, or an action that is not read-only. An action is read-only
+  when its name after the service prefix starts with Get, List, Describe,
+  Head, BatchGet, Search, Lookup, Scan, Query, Select, or View, as `s3:Get*`
+  does, and the AWS managed `ReadOnlyAccess`, `ViewOnlyAccess`, and
+  `SecurityAudit` policies are read-only. A deny of every action on every
+  resource with no condition leaves a key no permission, so it counts in
+  neither value. A request signed with an access key carries no MFA, so a
+  statement that requires MFA does not apply to it, and one that applies only
+  without MFA, such as a deny with a `BoolIfExists` condition that
+  `aws:MultiFactorAuthPresent` is false, does. Other conditions are not
+  evaluated: an allow with one still counts, and a deny with one still takes
+  back full access. The root user's keys are unrestricted and can write,
+  since no IAM policy limits the root user.
+- A key whose user has a permissions boundary leaves out each value its
+  identity policies allow, with a `not_read` gap, since the boundary can take
+  it back and is not evaluated. When a policy or a boundary cannot be read,
+  the values it could change are left out with that read's gap, unless the
+  policies that were read decide them: a deny of everything decides both, and
+  a deny that takes back full access, or limits the source addresses,
+  decides that the key is not unrestricted. Service control policies, which
+  can narrow what a key can do in an account in AWS Organizations, are not
+  read or evaluated, and neither are resource-based policies.
 - Connected apps are the AWS accounts outside the organization that an IAM
   role's trust policy lets assume the role without MFA. `app_count` counts
   each such account once, however many roles in however many accounts trust

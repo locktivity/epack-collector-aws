@@ -134,9 +134,10 @@ type AccountPosture struct {
 	SecretsManager  SecretsManagerMetrics `json:"secrets_manager"`
 	SSMParameters   SSMParametersMetrics  `json:"ssm_parameters"`
 
-	// admins is which IAM users have administrator access, for the
-	// access-posture artifact.
+	// admins is which IAM users have administrator access, and keys what
+	// the active access keys can do, for the access-posture artifact.
 	admins iamAdmins
+	keys   iamKeyAccess
 
 	// inspector is what Amazon Inspector reports in each scanned region, for
 	// the vuln-scanning artifact.
@@ -497,6 +498,11 @@ type RDSMetrics struct {
 	BackupRetentionMin                   *int `json:"backup_retention_min"` // Minimum retention days across all databases
 	MultiAZEnabled                       *int `json:"multi_az_enabled"`
 	MultiAZEnabledDatabaseCount          int  `json:"multi_az_enabled_database_count"`
+
+	// backedUpRetentionMin is the shortest retention among the databases
+	// with automated backups on, whose retention is above 0 days, or nil
+	// when none has them on. It is the normalized retention_days_min.
+	backedUpRetentionMin *int
 
 	// Database-port ingress across instances: whether any security group
 	// allows ingress from the internet on the database's listening port.

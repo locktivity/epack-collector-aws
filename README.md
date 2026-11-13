@@ -330,8 +330,8 @@ The collector also writes three files in shared formats. See
   detection for each account.
 - `artifacts/aws.access-posture.json`, in the `evidencepack/access-posture@v1`
   format, has how people sign in, the IAM users and admins, the root users,
-  the IAM users' access keys, and the AWS accounts outside the organization
-  that a role lets in without MFA.
+  the access keys, the root user's included, with what each can do, and the
+  AWS accounts outside the organization that a role lets in without MFA.
 - `artifacts/aws.vuln-scanning.json`, in the `evidencepack/vuln-scanning@v1`
   format, has Amazon Inspector's coverage and open findings for EC2
   instances, ECR images, and Lambda functions.

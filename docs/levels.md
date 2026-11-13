@@ -75,7 +75,10 @@ quote AWS's message, and name the resource.
   role and the organization's accounts are also listed for its connected
   apps, and `organization_accounts_evaluated` says whether the organization's
   accounts were read. The role inventory itself is written from the audit
-  level.
+  level. The policies of each IAM user with an active access key, and of its
+  groups, are read then too, with the user's permissions boundary, for the
+  file's unrestricted and write access percentages at every level and their
+  counts from the audit level.
 - **audit**: `root_organization_id`, the organization the centralized root
   access features were read from. `users[]` (per-user MFA + access-key +
   console flags),

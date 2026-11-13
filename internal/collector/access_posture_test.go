@@ -30,6 +30,7 @@ func accessAccount(users, mfa, inactive, admins, mfaAdmins, keys, overdue int) A
 		},
 		IdentityCenter: orgInstance("d-1", 5, 0),
 		admins:         iamAdmins{read: true, admins: admins, mfaAdmins: mfaAdmins},
+		keys:           iamKeyAccess{read: true},
 	}
 }
 
@@ -55,7 +56,9 @@ func pctReading(r Reading[float64], want float64) bool {
 // assignments and sign-ins are not read.
 func TestAccessPosture_RequirementsAndCoverage(t *testing.T) {
 	gaps := newGapLog(nil)
-	output := &Output{CollectedAtLevel: string(componentsdk.LevelAudit), Accounts: []AccountPosture{accessAccount(4, 3, 1, 2, 1, 3, 1)}}
+	account := accessAccount(4, 3, 1, 2, 1, 3, 1)
+	account.keys = iamKeyAccess{read: true, unrestricted: 1, write: 2}
+	output := &Output{CollectedAtLevel: string(componentsdk.LevelAudit), Accounts: []AccountPosture{account}}
 
 	got := toAccessPosture(output, gaps)
 
@@ -67,10 +70,14 @@ func TestAccessPosture_RequirementsAndCoverage(t *testing.T) {
 			t.Errorf("%s: gap %+v, want unsupported", pointer, g)
 		}
 	}
-	for _, pointer := range []string{"/credentials/unrestricted_pct", "/credentials/write_access_pct", "/scopes/0/members/sso_member_count"} {
-		if g := accessGap(gaps, pointer); g == nil || g.Code != componentsdk.CodeNotRead {
-			t.Errorf("%s: gap %+v, want not_read", pointer, g)
-		}
+	if g := accessGap(gaps, "/scopes/0/members/sso_member_count"); g == nil || g.Code != componentsdk.CodeNotRead {
+		t.Errorf("/scopes/0/members/sso_member_count: gap %+v, want not_read", g)
+	}
+	if !sameInt(got.Credentials.UnrestrictedCredentialCount, intPtr(1)) || !pctReading(got.Credentials.UnrestrictedPct, 34) ||
+		!sameInt(got.Credentials.WriteAccessCredentialCount, intPtr(2)) || !pctReading(got.Credentials.WriteAccessPct, 67) ||
+		!sameInt(got.Scopes[0].Credentials.UnrestrictedCredentialCount, intPtr(1)) {
+		t.Errorf("unrestricted %s (%+v), write %s (%+v); want 1 (34) and 2 (67), the scope's too", showPct(got.Credentials.UnrestrictedCredentialCount),
+			got.Credentials.UnrestrictedPct, showPct(got.Credentials.WriteAccessCredentialCount), got.Credentials.WriteAccessPct)
 	}
 	if !samePtr(got.Admins.LocalAdminsPresent, boolPtr(true)) || !pctReading(got.Admins.LocalAdminMFACoveragePct, 50) {
 		t.Errorf("local admins present %s, MFA coverage %+v; want true and 50", showBool(got.Admins.LocalAdminsPresent), got.Admins.LocalAdminMFACoveragePct)
@@ -322,20 +329,57 @@ func TestAccessPosture_UnmeasuredAdmins(t *testing.T) {
 	}
 }
 
+// A key whose user's policies could not be read, or whose user has a
+// permissions boundary, leaves the counts it does not decide out with a
+// partial gap that has the read's code, or not_read for a boundary. A
+// count every key decides is written.
+func TestAccessPosture_UnknownKeys(t *testing.T) {
+	denied := componentsdk.CodeError(componentsdk.CodePermissionDenied, errors.New("AccessDenied"))
+	for _, tc := range []struct {
+		name string
+		err  error
+		code componentsdk.Code
+	}{
+		{"failed read", denied, componentsdk.CodePermissionDenied},
+		{"boundary", errBoundaryNotEvaluated, componentsdk.CodeNotRead},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := accessAccount(1, 1, 0, 0, 0, 3, 0)
+			account.keys = iamKeyAccess{read: true, unrestricted: 1, write: 1, unknownWrite: 2, err: tc.err}
+			gaps := newGapLog(nil)
+
+			got := toAccessPosture(&Output{CollectedAtLevel: string(componentsdk.LevelAudit), Accounts: []AccountPosture{account}}, gaps)
+
+			if !sameInt(got.Credentials.UnrestrictedCredentialCount, intPtr(1)) || !pctReading(got.Credentials.UnrestrictedPct, 34) {
+				t.Errorf("unrestricted %s (%+v), want 1 (34)", showPct(got.Credentials.UnrestrictedCredentialCount), got.Credentials.UnrestrictedPct)
+			}
+			for _, pointer := range []string{"/credentials/write_access_credential_count", "/credentials/write_access_pct", "/scopes/0/credentials/write_access_pct"} {
+				g := accessGap(gaps, pointer)
+				if g == nil || g.Status != componentsdk.GapPartial || g.Unmeasured != 2 || g.Code != tc.code {
+					t.Errorf("%s: gap %+v, want partial %s with 2 unmeasured", pointer, g, tc.code)
+				}
+			}
+			if got.Credentials.WriteAccessCredentialCount != nil || got.Credentials.WriteAccessPct.Read {
+				t.Error("an unknown write access value was written")
+			}
+		})
+	}
+}
+
 // Without the credential report, the members, admins, and keys are left out
 // with the report's gap, and the root user is still read from the account
 // summary.
 func TestAccessPosture_CredentialReportFailed(t *testing.T) {
 	account := accessAccount(0, 0, 0, 0, 0, 0, 0)
 	account.IAM.CredentialReportEvaluated = false
-	account.admins = iamAdmins{}
+	account.admins, account.keys = iamAdmins{}, iamKeyAccess{}
 	gaps := newGapLog(nil)
 	timeout := componentsdk.CodeError(componentsdk.CodeTimeout, errors.New("credential report not ready"))
 	gaps.leaveOut(timeout, "/accounts/0/iam/iam_user_count", "/accounts/0/iam/access_key_user_count", "/accounts/0/iam/mfa_enabled_user_count")
 
 	got := toAccessPosture(&Output{CollectedAtLevel: string(componentsdk.LevelAudit), Accounts: []AccountPosture{account}}, gaps)
 
-	for _, pointer := range []string{"/members/members_present", "/members/inactive_pct", "/admins/admins_present", "/admins/local_admin_mfa_coverage_pct", "/credentials/credentials_present", "/credentials/never_expiring_pct"} {
+	for _, pointer := range []string{"/members/members_present", "/members/inactive_pct", "/admins/admins_present", "/admins/local_admin_mfa_coverage_pct", "/credentials/credentials_present", "/credentials/never_expiring_pct", "/credentials/unrestricted_pct", "/credentials/write_access_credential_count"} {
 		if g := accessGap(gaps, pointer); g == nil || g.Code != componentsdk.CodeTimeout {
 			t.Errorf("%s: gap %+v, want the report's timeout", pointer, g)
 		}

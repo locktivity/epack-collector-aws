@@ -183,6 +183,21 @@ func (m *rdsMetricsWithCounts) countDatabase(encrypted, deletionProtection, mult
 	if m.minRetention == -1 || retention < m.minRetention {
 		m.minRetention = retention
 	}
+	if retention > 0 {
+		m.backedUpRetentionMin = shorterRetention(m.backedUpRetentionMin, &retention)
+	}
+}
+
+// shorterRetention is the shorter of two retentions, either of which may be
+// nil when no database has backups on.
+func shorterRetention(a, b *int) *int {
+	switch {
+	case a == nil:
+		return b
+	case b == nil || *a <= *b:
+		return a
+	}
+	return b
 }
 
 // finalize computes the percentages and the minimum retention from the
@@ -414,6 +429,7 @@ func mergeRDSMetrics(a, b rdsMetricsWithCounts) rdsMetricsWithCounts {
 	if b.minRetention >= 0 && (result.minRetention == -1 || b.minRetention < result.minRetention) {
 		result.minRetention = b.minRetention
 	}
+	result.backedUpRetentionMin = shorterRetention(a.backedUpRetentionMin, b.backedUpRetentionMin)
 
 	result.EventSubscriptionCount += b.EventSubscriptionCount
 	result.BackupFailureAlertingSubscriptionCount += b.BackupFailureAlertingSubscriptionCount

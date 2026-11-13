@@ -36,7 +36,8 @@ const (
 // and pab-combined blocks public ACLs and leaves public policies to the
 // account's block (s3.tf). trail-2 records write events alone, with event
 // selectors of its own, and leaves out global service events
-// (cloudtrail.tf).
+// (cloudtrail.tf). The no-access group's inline policy deny-all denies every
+// action, which gives the users' keys their deny-all term (iam.tf).
 func simBase(t testing.TB) *roster.Roster {
 	t.Helper()
 	r, err := roster.Load(simRosterPath)
@@ -51,6 +52,11 @@ func simBase(t testing.TB) *roster.Roster {
 			simulate.SetExtra(&st.Extra, "public_access_block", "acls")
 		}
 	}
+	for i := range r.Groups {
+		if g := &r.Groups[i]; g.Key == simNoAccessGroup {
+			simulate.SetExtra(&g.Extra, "inline_policies", []string{"deny-all"})
+		}
+	}
 	for i := range r.Cloud.Accounts[0].AuditLogs {
 		if l := &r.Cloud.Accounts[0].AuditLogs[i]; l.Key == "epack-sandbox-trail-2-single-region" {
 			simulate.SetExtra(&l.Extra, "event_selectors", "write_only")
@@ -59,6 +65,10 @@ func simBase(t testing.TB) *roster.Roster {
 	}
 	return r
 }
+
+// simNoAccessGroup is the sandbox's group whose inline policy denies its
+// users every action.
+const simNoAccessGroup = "epack-sandbox-no-access"
 
 // simXMLHeader marks a response whose body is an XML body in the JSON form,
 // which Collect writes back as XML.
@@ -176,6 +186,11 @@ var simDriven = map[string]bool{
 	"aws.iam.ListGroupsForUser":              true,
 	"aws.iam.ListAttachedGroupPolicies":      true,
 	"aws.iam.ListGroupPolicies":              true,
+	"aws.iam.GetPolicy":                      true,
+	"aws.iam.GetPolicyVersion":               true,
+	"aws.iam.GetUserPolicy":                  true,
+	"aws.iam.GetGroupPolicy":                 true,
+	"aws.iam.GetUser":                        true,
 	"aws.identitystore.ListUsers":            true,
 	"aws.identitystore.ListGroups":           true,
 	"aws.identitystore.ListGroupMemberships": true,
@@ -620,54 +635,229 @@ func (s *awsSim) simPolicyARN(name string, e roster.Extra) string {
 	return "arn:aws:iam::aws:policy/" + name
 }
 
-// policies answers the policy reads of the IAM users with a password,
-// whom the collector checks for administrator access. A user's or group's
-// cloud roles are its attached managed policies, and its inline_policies
-// extra names its inline policies. The groups are those that hold IAM
-// users.
+// simPolicyDocuments are the documents of the policies the rosters name,
+// the AWS managed ones as AWS writes them. ReadOnlyAccess is read-only by
+// name, so its document is never read.
+var simPolicyDocuments = map[string]string{
+	"AdministratorAccess": `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`,
+	"PowerUserAccess": `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","NotAction":["iam:*","organizations:*","account:*"],"Resource":"*"},` +
+		`{"Effect":"Allow","Action":["account:GetAccountInformation","account:GetPrimaryEmail","account:ListRegions","iam:CreateServiceLinkedRole",` +
+		`"iam:DeleteServiceLinkedRole","iam:ListRoles","organizations:DescribeOrganization"],"Resource":"*"}]}`,
+	"AWSDenyAll":     `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":["*"],"Resource":"*"}]}`,
+	"deny-all":       `{"Version":"2012-10-17","Statement":[{"Sid":"SandboxUsersCannotActOnAnything","Effect":"Deny","Action":"*","Resource":"*"}]}`,
+	"s3-full-access": `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`,
+}
+
+// simPolicyDocument is the document of the policy called name.
+func simPolicyDocument(name string) string {
+	doc, ok := simPolicyDocuments[name]
+	if !ok {
+		panic("simulator: no document for policy " + name)
+	}
+	return doc
+}
+
+// simLimited is a policy document whose every statement holds only from
+// sources, as an aws:SourceIp condition.
+func simLimited(document string, sources []string) string {
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(document), &doc); err != nil {
+		panic(err)
+	}
+	statements, ok := doc["Statement"].([]any)
+	if !ok {
+		statements = []any{doc["Statement"]}
+	}
+	for _, st := range statements {
+		st.(map[string]any)["Condition"] = map[string]any{"IpAddress": map[string]any{"aws:SourceIp": sources}}
+	}
+	doc["Statement"] = statements
+	return simJSON(doc)
+}
+
+// simUserPolicies are an IAM user's own policies: the ARNs of its attached
+// managed policies and its inline policies' documents by name.
+type simUserPolicies struct {
+	attached []string
+	inline   map[string]string
+}
+
+// userPolicies are an IAM user's own policies. Its cloud roles are its
+// attached managed policies, and its inline_policies extra names its inline
+// policies. Its active access keys add the AWS managed policy their
+// permissions term names, unless the user or one of its groups has a policy
+// of that name already, as the sandbox's users have deny-all through their
+// group. Keys with allowed sources add a source limit: an inline deny of
+// every action from outside them, or, with the key's ip_limit extra
+// "allow", the term's policy as an inline policy whose statements hold only
+// from them. A user's keys share its policies, so they must agree.
+func (s *awsSim) userPolicies(a roster.Account, groups []roster.Group) simUserPolicies {
+	out := simUserPolicies{inline: map[string]string{}}
+	for _, role := range a.CloudRoles {
+		out.attached = append(out.attached, s.simPolicyARN(role, a.Extra))
+	}
+	var names []string
+	simulate.Extra(a.Extra, "inline_policies", &names)
+	for _, name := range names {
+		out.inline[name] = simPolicyDocument(name)
+	}
+	var key *roster.MachineCredential
+	for _, m := range s.keysOf(a.Key) {
+		if !m.Active {
+			continue
+		}
+		if key != nil && (key.Permissions != m.Permissions || !slices.Equal(key.AllowedSources, m.AllowedSources)) {
+			panic("simulator: the access keys of IAM user " + a.Key + " have different permissions")
+		}
+		key = &m
+	}
+	if key == nil {
+		return out
+	}
+	held := slices.Contains(names, key.Permissions) || slices.Contains(a.CloudRoles, key.Permissions)
+	for _, g := range groups {
+		var groupInline []string
+		simulate.Extra(g.Extra, "inline_policies", &groupInline)
+		held = held || slices.Contains(g.CloudRoles, key.Permissions) || slices.Contains(groupInline, key.Permissions)
+	}
+	var form string
+	simulate.Extra(key.Extra, "ip_limit", &form)
+	switch {
+	case held:
+	case len(key.AllowedSources) > 0 && form == "allow":
+		out.inline[key.Permissions+"-from-sources"] = simLimited(simPolicyDocument(key.Permissions), key.AllowedSources)
+	default:
+		out.attached = append(out.attached, "arn:aws:iam::aws:policy/"+key.Permissions)
+	}
+	if len(key.AllowedSources) > 0 && form != "allow" {
+		out.inline["source-limit"] = simJSON(map[string]any{"Version": "2012-10-17", "Statement": []any{map[string]any{
+			"Effect": "Deny", "Action": "*", "Resource": "*", "Condition": map[string]any{"NotIpAddress": map[string]any{"aws:SourceIp": key.AllowedSources}},
+		}}})
+	}
+	return out
+}
+
+// hasActiveKey reports whether an IAM user has an active access key, so
+// the collector reads what its policies let the key do.
+func (s *awsSim) hasActiveKey(a roster.Account) bool {
+	return slices.ContainsFunc(s.keysOf(a.Key), func(m roster.MachineCredential) bool { return m.Active })
+}
+
+// policies answers the policy reads of the IAM users with a password, whom
+// the collector checks for administrator access, and of those with an
+// active access key, whose policies' documents it reads for what the key
+// can do, with the user itself for its permissions boundary. A user's or
+// group's cloud roles are its attached managed policies, and its
+// inline_policies extra names its inline policies. The groups are those that
+// hold IAM users. A user's permissions_boundary extra names the customer
+// managed policy that is its permissions boundary.
 func (s *awsSim) policies(users []roster.Account) {
-	attached := func(op, field, name string, roles []string, e roster.Extra) {
+	attached := func(op, field, name string, arns []string) {
 		var items []any
-		for _, role := range roles {
-			items = append(items, map[string]any{"PolicyName": role, "PolicyArn": s.simPolicyARN(role, e)})
+		for _, arn := range arns {
+			items = append(items, map[string]any{"PolicyName": arn[strings.LastIndex(arn, "/")+1:], "PolicyArn": arn})
 		}
 		r, body := simQuery(op, simIAMURL, simIAMNamespace, map[string]any{field: name},
 			map[string]any{"IsTruncated": "false", "AttachedPolicies": simList("member", items)})
 		s.add(r, body)
 	}
-	inline := func(op, field, name string, e roster.Extra) {
-		var names []string
-		simulate.Extra(e, "inline_policies", &names)
+	inline := func(op, field, name string, names []string) {
 		r, body := simQuery(op, simIAMURL, simIAMNamespace, map[string]any{field: name},
 			map[string]any{"IsTruncated": "false", "PolicyNames": simList("member", simulate.Each(names, func(n string) any { return n }))})
 		s.add(r, body)
 	}
+	documents := map[string]bool{}
+	managed := func(arn string) {
+		name := arn[strings.LastIndex(arn, "/")+1:]
+		if documents[arn] || awsManaged(arn, readOnlyPolicies) {
+			return
+		}
+		documents[arn] = true
+		r, body := simQuery("aws.iam.GetPolicy", simIAMURL, simIAMNamespace, map[string]any{"PolicyArn": arn}, map[string]any{"Policy": map[string]any{
+			"PolicyName": name, "PolicyId": "ANPA" + simulate.Base62("", 17, "policy", arn), "Arn": arn, "Path": "/", "DefaultVersionId": "v1",
+			"AttachmentCount": "1", "PermissionsBoundaryUsageCount": "0", "IsAttachable": "true", "CreateDate": s.days(400), "UpdateDate": s.days(400),
+		}})
+		s.add(r, body)
+		r, body = simQuery("aws.iam.GetPolicyVersion", simIAMURL, simIAMNamespace, map[string]any{"PolicyArn": arn, "VersionId": "v1"},
+			map[string]any{"PolicyVersion": map[string]any{
+				"Document": url.QueryEscape(simPolicyDocument(name)), "VersionId": "v1", "IsDefaultVersion": "true", "CreateDate": s.days(400),
+			}})
+		s.add(r, body)
+	}
+	document := func(op, field, owner, name, doc string) {
+		r, body := simQuery(op, simIAMURL, simIAMNamespace, map[string]any{field: owner, "PolicyName": name},
+			map[string]any{field: owner, "PolicyName": name, "PolicyDocument": url.QueryEscape(doc)})
+		s.add(r, body)
+	}
 	groups := s.iamGroups()
+	checked := func(a roster.Account) bool { return s.hasPassword(a) || s.hasActiveKey(a) }
 	for _, a := range users {
-		if !s.hasPassword(a) {
+		if !checked(a) {
 			continue
 		}
-		attached("aws.iam.ListAttachedUserPolicies", "UserName", a.Key, a.CloudRoles, a.Extra)
-		inline("aws.iam.ListUserPolicies", "UserName", a.Key, a.Extra)
-		var items []any
+		var mine []roster.Group
 		for _, g := range groups {
 			if slices.Contains(g.Members, a.Key) {
-				items = append(items, map[string]any{
-					"Path": "/", "GroupName": g.Key, "GroupId": "AGPA" + simulate.Base62("", 17, "group", g.Key),
-					"Arn": "arn:aws:iam::" + s.account.ID + ":group/" + g.Key, "CreateDate": s.days(400),
-				})
+				mine = append(mine, g)
 			}
+		}
+		own := s.userPolicies(a, mine)
+		names := slices.Sorted(maps.Keys(own.inline))
+		attached("aws.iam.ListAttachedUserPolicies", "UserName", a.Key, own.attached)
+		inline("aws.iam.ListUserPolicies", "UserName", a.Key, names)
+		var items []any
+		for _, g := range mine {
+			items = append(items, map[string]any{
+				"Path": "/", "GroupName": g.Key, "GroupId": "AGPA" + simulate.Base62("", 17, "group", g.Key),
+				"Arn": "arn:aws:iam::" + s.account.ID + ":group/" + g.Key, "CreateDate": s.days(400),
+			})
 		}
 		r, body := simQuery("aws.iam.ListGroupsForUser", simIAMURL, simIAMNamespace, map[string]any{"UserName": a.Key},
 			map[string]any{"IsTruncated": "false", "Groups": simList("member", items)})
 		s.add(r, body)
-	}
-	for _, g := range groups {
-		if !slices.ContainsFunc(users, func(a roster.Account) bool { return s.hasPassword(a) && slices.Contains(g.Members, a.Key) }) {
+		if !s.hasActiveKey(a) {
 			continue
 		}
-		attached("aws.iam.ListAttachedGroupPolicies", "GroupName", g.Key, g.CloudRoles, g.Extra)
-		inline("aws.iam.ListGroupPolicies", "GroupName", g.Key, g.Extra)
+		for _, arn := range own.attached {
+			managed(arn)
+		}
+		for _, name := range names {
+			document("aws.iam.GetUserPolicy", "UserName", a.Key, name, own.inline[name])
+		}
+		user := map[string]any{
+			"Path": "/", "UserName": a.Key, "UserId": "AIDA" + simulate.Base62("", 17, "user", a.Key), "Arn": s.userARN(a.Key), "CreateDate": s.days(400),
+		}
+		var boundary string
+		simulate.Extra(a.Extra, "permissions_boundary", &boundary)
+		if boundary != "" {
+			user["PermissionsBoundary"] = map[string]any{
+				"PermissionsBoundaryType": "Policy", "PermissionsBoundaryArn": "arn:aws:iam::" + s.account.ID + ":policy/" + boundary,
+			}
+		}
+		r, body = simQuery("aws.iam.GetUser", simIAMURL, simIAMNamespace, map[string]any{"UserName": a.Key}, map[string]any{"User": user})
+		s.add(r, body)
+	}
+	for _, g := range groups {
+		members := slices.DeleteFunc(slices.Clone(users), func(a roster.Account) bool { return !checked(a) || !slices.Contains(g.Members, a.Key) })
+		if len(members) == 0 {
+			continue
+		}
+		var arns, names []string
+		for _, role := range g.CloudRoles {
+			arns = append(arns, s.simPolicyARN(role, g.Extra))
+		}
+		simulate.Extra(g.Extra, "inline_policies", &names)
+		attached("aws.iam.ListAttachedGroupPolicies", "GroupName", g.Key, arns)
+		inline("aws.iam.ListGroupPolicies", "GroupName", g.Key, names)
+		if !slices.ContainsFunc(members, s.hasActiveKey) {
+			continue
+		}
+		for _, arn := range arns {
+			managed(arn)
+		}
+		for _, name := range names {
+			document("aws.iam.GetGroupPolicy", "GroupName", g.Key, name, simPolicyDocument(name))
+		}
 	}
 }
 
