@@ -49,7 +49,9 @@ const (
 // At trust, only aggregates and root-account flags are populated.
 // At audit, per-user and per-role inventory rows are populated from the same
 // credential report (no extra API calls for users) plus ListRoles for the role
-// inventory.
+// inventory. Every level lists the roles and the organization's accounts for
+// the access-posture artifact's connected apps, unless the run leaves that
+// artifact out.
 //
 // Failures never abort the surface: each source degrades independently, and
 // every value a failed read leaves unknown is left out with a gap, so a
@@ -124,19 +126,23 @@ func (c *Collector) collectIAMMetrics(ctx context.Context, client iamClient, acc
 
 	c.collectSignInPaths(ctx, client, accountID, iamAt, metrics)
 
-	if level.AtLeast(componentsdk.LevelAudit) {
-		if report != nil {
-			metrics.Users = c.iamUsersFromReport(report)
-		}
+	audit := level.AtLeast(componentsdk.LevelAudit)
+	if audit && report != nil {
+		metrics.Users = c.iamUsersFromReport(report)
+	}
+	if audit || !c.config.SkipAccessPosture {
 		orgAccounts, rosterErr := c.collectOrganizationAccounts(ctx, client, accountID, metrics)
 		roles, err := c.collectIAMRoles(ctx, client, accountID, level, orgAccounts)
-		if err != nil {
-			c.gaps.leaveOut(err, iamAt.p("roles"))
-		}
-		metrics.Roles = roles
-		for i, role := range roles {
-			if role.ExternalTrustInOrg == nil && len(role.ExternalTrustAccountIDs) > 0 {
-				c.gaps.leaveOut(rosterErr, iamAt.p("roles", i, "external_trust_in_org"))
+		metrics.trusted = trustedAccountsOf(accountID, roles, orgAccounts, err, rosterErr)
+		if audit {
+			if err != nil {
+				c.gaps.leaveOut(err, iamAt.p("roles"))
+			}
+			metrics.Roles = roles
+			for i, role := range roles {
+				if role.ExternalTrustInOrg == nil && len(role.ExternalTrustAccountIDs) > 0 {
+					c.gaps.leaveOut(rosterErr, iamAt.p("roles", i, "external_trust_in_org"))
+				}
 			}
 		}
 	}
@@ -387,6 +393,8 @@ func (c *Collector) collectIAMRoles(ctx context.Context, client roleLister, acco
 				HasExternalTrust:        analysis.hasExternalTrust,
 				HasWildcardPrincipal:    analysis.hasWildcardPrincipal,
 				ExternalTrustAccountIDs: analysis.externalAccountIDs,
+				appAccountIDs:           analysis.appAccountIDs,
+				appWildcard:             analysis.appWildcard,
 			}
 			if len(analysis.externalAccountIDs) > 0 {
 				row.ExternalTrustInOrg = orgAccounts.membership(analysis.externalAccountIDs)
@@ -431,6 +439,38 @@ func (o *organizationAccounts) membership(accountIDs []string) *bool {
 		}
 	}
 	return boolPtr(true)
+}
+
+// trustedAccounts is what one account's role listing shows of the other
+// accounts its roles let assume them without MFA. outside are those the
+// organization's roster does not list, and unknown those it could not
+// place, because of rosterErr. wildcard is true when a role lets every
+// principal in without MFA. err is why the listing failed, and self is the
+// account's own ID.
+type trustedAccounts struct {
+	self             string
+	outside, unknown []string
+	wildcard         bool
+	err, rosterErr   error
+}
+
+// trustedAccountsOf sorts the other accounts the roles let in without MFA by
+// whether they are in the organization. An account may appear once for each
+// role that trusts it.
+func trustedAccountsOf(self string, roles []IAMRole, org *organizationAccounts, err, rosterErr error) trustedAccounts {
+	t := trustedAccounts{self: self, err: err, rosterErr: rosterErr}
+	for _, role := range roles {
+		t.wildcard = t.wildcard || role.appWildcard
+		for _, id := range role.appAccountIDs {
+			switch in := org.membership([]string{id}); {
+			case in == nil:
+				t.unknown = append(t.unknown, id)
+			case !*in:
+				t.outside = append(t.outside, id)
+			}
+		}
+	}
+	return t
 }
 
 // collectOrganizationAccounts fetches the organization account roster used to
@@ -703,17 +743,23 @@ func isHardwareMFASerial(serial string) bool {
 // trustAnalysis is the parsed external-trust view of one role's trust policy.
 // externalAccountIDs is sorted and deduplicated; decodedPolicy is the
 // URL-decoded document ("" when the document was absent or undecodable).
+// appAccountIDs, sorted and deduplicated too, are the external accounts an
+// allow statement admits without requiring MFA, and appWildcard is whether
+// such a statement admits every principal.
 type trustAnalysis struct {
 	hasExternalTrust     bool
 	hasWildcardPrincipal bool
 	externalAccountIDs   []string
 	decodedPolicy        string
+	appAccountIDs        []string
+	appWildcard          bool
 }
 
 // analyzeTrustPolicy extracts the external-trust facts from a role's trust
 // policy: which foreign accounts appear as principals in allow statements
 // (as full ARNs or bare account IDs) and whether a wildcard principal grants
-// to everyone. Service principals are never external.
+// to everyone, and which of them a statement admits without requiring MFA.
+// Service principals are never external.
 func analyzeTrustPolicy(policyDoc string, currentAccount string) trustAnalysis {
 	analysis := trustAnalysis{}
 	if policyDoc == "" {
@@ -731,37 +777,54 @@ func analyzeTrustPolicy(policyDoc string, currentAccount string) trustAnalysis {
 		return analysis
 	}
 
-	seen := map[string]struct{}{}
+	seen, apps := map[string]struct{}{}, map[string]struct{}{}
 	for _, stmt := range policy.Statement {
 		if stmt.Effect != TrustPolicyEffectAllow {
 			continue
 		}
+		mfa := stmt.requiresMFA()
 		for _, p := range extractPrincipals(stmt.Principal) {
+			account := ""
 			switch {
 			case p == TrustPolicyPrincipalAll:
 				analysis.hasExternalTrust = true
 				analysis.hasWildcardPrincipal = true
+				analysis.appWildcard = analysis.appWildcard || !mfa
 			case isAccountPrincipalARN(p):
 				parts := strings.Split(p, ":")
 				if len(parts) >= 5 && parts[4] != "" && parts[4] != currentAccount {
-					analysis.hasExternalTrust = true
-					seen[parts[4]] = struct{}{}
+					account = parts[4]
 				}
 			case isBareAccountID(p) && p != currentAccount:
-				analysis.hasExternalTrust = true
-				seen[p] = struct{}{}
+				account = p
+			}
+			if account == "" {
+				continue
+			}
+			analysis.hasExternalTrust = true
+			seen[account] = struct{}{}
+			if !mfa {
+				apps[account] = struct{}{}
 			}
 		}
 	}
 
-	if len(seen) > 0 {
-		analysis.externalAccountIDs = make([]string, 0, len(seen))
-		for id := range seen {
-			analysis.externalAccountIDs = append(analysis.externalAccountIDs, id)
-		}
-		sort.Strings(analysis.externalAccountIDs)
-	}
+	analysis.externalAccountIDs = sortedIDs(seen)
+	analysis.appAccountIDs = sortedIDs(apps)
 	return analysis
+}
+
+// sortedIDs returns the IDs in set sorted, or nil when it is empty.
+func sortedIDs(set map[string]struct{}) []string {
+	if len(set) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(set))
+	for id := range set {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // isAccountPrincipalARN reports whether a principal is an IAM or STS ARN in
@@ -813,10 +876,58 @@ func (s *trustStatements) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// trustStatement represents a single statement in a trust policy.
+// trustStatement represents a single statement in a trust policy. Condition
+// maps each condition operator to its keys and their values.
 type trustStatement struct {
-	Effect    string `json:"Effect"`
-	Principal any    `json:"Principal"`
+	Effect    string                    `json:"Effect"`
+	Principal any                       `json:"Principal"`
+	Condition map[string]map[string]any `json:"Condition"`
+}
+
+// requiresMFA reports whether the statement admits only principals that
+// signed in with MFA: a Bool condition that aws:MultiFactorAuthPresent is
+// true, or a numeric condition on aws:MultiFactorAuthAge, which is not
+// present when MFA was not used. BoolIfExists does not count, since it also
+// admits requests signed with long-term access keys, which carry neither key
+// (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-multifactorauthpresent,
+// https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_mfa_configure-api-require.html).
+// Condition key names are not case-sensitive.
+func (s trustStatement) requiresMFA() bool {
+	for operator, keys := range s.Condition {
+		for key, value := range keys {
+			switch {
+			case strings.EqualFold(key, "aws:MultiFactorAuthPresent") && operator == "Bool" && allTrue(value):
+				return true
+			case strings.EqualFold(key, "aws:MultiFactorAuthAge") && strings.HasPrefix(operator, "Numeric") && !strings.HasSuffix(operator, "IfExists"):
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// allTrue reports whether a condition's value, one value or a list that
+// matches when any of its values does, is true in every form it takes.
+func allTrue(value any) bool {
+	values, ok := value.([]any)
+	if !ok {
+		values = []any{value}
+	}
+	for _, v := range values {
+		switch v := v.(type) {
+		case bool:
+			if !v {
+				return false
+			}
+		case string:
+			if !strings.EqualFold(v, "true") {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return len(values) > 0
 }
 
 // extractPrincipals extracts principal strings from the Principal field.

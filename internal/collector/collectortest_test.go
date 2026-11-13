@@ -847,6 +847,159 @@ func kitSuite() collectortest.Suite {
 				}},
 			},
 			{
+				// vendor-audit trusts an account outside the organization,
+				// so the account is a connected app.
+				Name:      "role trusting an account outside the organization",
+				Responses: rolesResponses(kitVendorRole),
+				Expect: map[string]map[string]any{
+					awsPath: {"/accounts/0/iam/roles/0/external_trust_in_org": false},
+					accessPosturePath: {
+						"/connected_apps/apps_present": true,
+						"/connected_apps/app_count":    1,
+					},
+				},
+			},
+			{
+				// Two roles trust one outside account, through its root and
+				// through a role in it, so it counts once. The second role
+				// also trusts deploy's account, which is in the
+				// organization.
+				Name: "two roles trusting one outside account",
+				Responses: rolesResponses(kitVendorRole,
+					kitTrusting("vendor-scan", `{"AWS":["arn:aws:iam::999988887777:role/scanner","444455556666"]}`)),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/connected_apps/apps_present": true,
+					"/connected_apps/app_count":    1,
+				}},
+			},
+			{
+				// deploy trusts an account in the organization, which is
+				// the organization's own.
+				Name:      "role trusting an account in the organization",
+				Responses: rolesResponses(kitDeployRole),
+				Expect: map[string]map[string]any{
+					awsPath: {"/accounts/0/iam/roles/0/external_trust_in_org": true},
+					accessPosturePath: {
+						"/connected_apps/apps_present": false,
+						"/connected_apps/app_count":    0,
+					},
+				},
+			},
+			{
+				// The roles trust a service, the account's GitHub Actions
+				// OIDC provider, Identity Center's SAML provider, and the
+				// account itself, which let in the account's own workloads
+				// and people.
+				Name: "roles trusting only services, identity providers, and the account",
+				Responses: rolesResponses(kitCollectorRole,
+					kitTrusting("key-rotator", `{"Service":["lambda.amazonaws.com","scheduler.amazonaws.com"]}`),
+					kitTrusting("sso-admins", `{"Federated":"arn:aws:iam::111122223333:saml-provider/AWSSSO_kit1111222233334444_DO_NOT_DELETE"}`),
+					kitTrusting("break-glass", `{"AWS":"arn:aws:iam::111122223333:root"}`)),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/connected_apps/apps_present": false,
+					"/connected_apps/app_count":    0,
+				}},
+			},
+			{
+				// A role trusts every principal, and whom it admits depends
+				// on its conditions, which are not evaluated, so the count
+				// is left out. vendor-audit's account still makes
+				// apps_present true.
+				Name:      "role trusting every principal",
+				Responses: rolesResponses(kitVendorRole, kitTrusting("open", `"*"`)),
+				Expect: map[string]map[string]any{
+					awsPath: {"/accounts/0/iam/roles/1/has_wildcard_principal": true},
+					accessPosturePath: {
+						"/connected_apps/apps_present": true,
+						"/connected_apps/app_count":    collectortest.Absent,
+					},
+				},
+			},
+			{
+				// vendor-admins lets people in an outside account assume it
+				// only with MFA, so they sign in as people and the account
+				// is no connected app. The role inventory still shows the
+				// trust.
+				Name: "role trusting an outside account with MFA",
+				Responses: rolesResponses(kitRole{"vendor-admins", []string{
+					kitStatement(`{"AWS":"arn:aws:iam::999988887777:root"}`, kitMFACondition),
+				}}),
+				Expect: map[string]map[string]any{
+					awsPath: {
+						"/accounts/0/iam/roles/0/has_external_trust":         true,
+						"/accounts/0/iam/roles/0/external_trust_account_ids": []any{"999988887777"},
+						"/accounts/0/iam/roles/0/external_trust_in_org":      false,
+					},
+					accessPosturePath: {
+						"/connected_apps/apps_present": false,
+						"/connected_apps/app_count":    0,
+					},
+				},
+			},
+			{
+				// vendor-ops lets people in an outside account in with MFA,
+				// and the vendor's integration with its external ID and no
+				// MFA, so the account is a connected app.
+				Name: "MFA and external ID statements for one outside account",
+				Responses: rolesResponses(kitRole{"vendor-ops", []string{
+					kitStatement(`{"AWS":"arn:aws:iam::999988887777:root"}`, kitMFACondition),
+					kitStatement(`{"AWS":"arn:aws:iam::999988887777:role/integration"}`, kitExternalIDCondition),
+				}}),
+				Expect: map[string]map[string]any{accessPosturePath: {
+					"/connected_apps/apps_present": true,
+					"/connected_apps/app_count":    1,
+				}},
+			},
+			{
+				// The listing of every role is denied, so whether a role
+				// lets another account in is unknown. Identity Center's
+				// roles are still listed.
+				Name:      "role list refused",
+				Responses: rolesDeniedResponses(),
+				Expect: map[string]map[string]any{
+					awsPath: {
+						"/accounts/0/iam/roles":                      nil,
+						"/accounts/0/iam/identity_center_role_count": 0,
+					},
+					accessPosturePath: {
+						"/connected_apps/apps_present": collectortest.Absent,
+						"/connected_apps/app_count":    collectortest.Absent,
+					},
+				},
+			},
+			{
+				// Organizations denies ListAccounts, so whether
+				// vendor-audit's and deploy's accounts are in the
+				// organization is unknown, and so are the connected apps.
+				Name:      "organization roster refused with an outside trust",
+				Responses: orgAccountsDeniedResponses(),
+				Expect: map[string]map[string]any{
+					awsPath: {
+						"/accounts/0/iam/organization_accounts_evaluated":    false,
+						"/accounts/0/iam/roles/1/external_trust_account_ids": []any{"999988887777"},
+						"/accounts/0/iam/roles/1/external_trust_in_org":      collectortest.Absent,
+					},
+					accessPosturePath: {
+						"/connected_apps/apps_present": collectortest.Absent,
+						"/connected_apps/app_count":    collectortest.Absent,
+					},
+				},
+			},
+			{
+				// A trust run lists the roles for apps_present, and leaves
+				// out the count and the role inventory.
+				Name:      "connected apps at trust",
+				Responses: kitResponses(),
+				Config:    map[string]any{"level": "trust"},
+				Expect: map[string]map[string]any{
+					awsPath: {"/accounts/0/iam/roles": collectortest.Absent},
+					accessPosturePath: {
+						"/connected_apps/apps_present": true,
+						"/connected_apps/app_count":    collectortest.Absent,
+					},
+				},
+			},
+			{
 				Name:          "token rejected",
 				ExpectFailure: componentsdk.CodeAuthFailed,
 				Responses: []collectortest.Response{
@@ -1171,6 +1324,9 @@ func kitRecordings(t *testing.T, names ...string) []collectortest.Scenario {
 // access key, so she is a credential. alice is the IAM admin. Identity
 // Center has users, so the admin count and the inactive members are left
 // out. Two access keys are active, and carol's is overdue for rotation.
+// vendor-audit's account is outside the organization, so it is the one
+// connected app. deploy's account is in it, and the collector's role
+// trusts the account's own OIDC provider.
 func kitAccessPins() map[string]any {
 	return map[string]any{
 		"/sign_in/sso_configured":                        true,
@@ -1201,8 +1357,10 @@ func kitAccessPins() map[string]any {
 		"/credentials/unused_pct":                        0,
 		"/credentials/rotation_overdue_credential_count": 1,
 		"/credentials/rotation_overdue_pct":              50,
-		"/connected_apps":                                collectortest.Absent,
+		"/connected_apps/apps_present":                   true,
+		"/connected_apps/app_count":                      1,
 		"/scopes/0/id":                                   kitAccountID,
+		"/scopes/0/connected_apps":                       collectortest.Absent,
 		"/scopes/0/name":                                 "northwind-prod",
 		"/scopes/0/kind":                                 "account",
 		"/scopes/0/members/member_count":                 2,

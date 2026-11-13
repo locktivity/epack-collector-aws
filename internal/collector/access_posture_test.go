@@ -67,7 +67,7 @@ func TestAccessPosture_RequirementsAndCoverage(t *testing.T) {
 			t.Errorf("%s: gap %+v, want unsupported", pointer, g)
 		}
 	}
-	for _, pointer := range []string{"/credentials/unrestricted_pct", "/credentials/write_access_pct", "/connected_apps", "/scopes/0/members/sso_member_count"} {
+	for _, pointer := range []string{"/credentials/unrestricted_pct", "/credentials/write_access_pct", "/scopes/0/members/sso_member_count"} {
 		if g := accessGap(gaps, pointer); g == nil || g.Code != componentsdk.CodeNotRead {
 			t.Errorf("%s: gap %+v, want not_read", pointer, g)
 		}
@@ -190,6 +190,107 @@ func TestAccessPosture_FoldsAccounts(t *testing.T) {
 	}
 	if len(got.Scopes) != 2 {
 		t.Errorf("%d scopes, want the 2 accounts collected", len(got.Scopes))
+	}
+}
+
+// The connected apps are the accounts outside the organization that a
+// role trusts, each counted once across the accounts collected. An account
+// the run collects is the organization's own. The count is left out when a
+// role list failed, a role trusts every principal, a role trusts an
+// account the organization's roster could not place, or an account failed,
+// and apps_present is still true when an account is known to be outside.
+func TestAccessPosture_ConnectedApps(t *testing.T) {
+	listErr := componentsdk.CodeError(componentsdk.CodePermissionDenied, errors.New("AccessDenied: iam:ListRoles"))
+	rosterErr := componentsdk.CodeError(componentsdk.CodePermissionDenied, errors.New("AccessDeniedException: organizations:ListAccounts"))
+	failure := componentsdk.CodeError(componentsdk.CodeAuthFailed, errors.New("AccessDenied"))
+	trusting := func(id string, t trustedAccounts) AccountPosture {
+		account := accessAccount(0, 0, 0, 0, 0, 0, 0)
+		account.AccountID = id
+		t.self = id
+		account.IAM.trusted = t
+		return account
+	}
+	cases := []struct {
+		name     string
+		accounts []AccountPosture
+		failed   bool
+		present  *bool
+		count    *int
+		code     componentsdk.Code
+	}{
+		{name: "no trust", accounts: []AccountPosture{trusting("111111111111", trustedAccounts{})}, present: boolPtr(false), count: intPtr(0)},
+		{name: "one account trusted by two roles and two accounts",
+			accounts: []AccountPosture{
+				trusting("111111111111", trustedAccounts{outside: []string{"999999999999", "999999999999"}}),
+				trusting("222222222222", trustedAccounts{outside: []string{"999999999999"}}),
+			}, present: boolPtr(true), count: intPtr(1)},
+		{name: "two outside accounts", accounts: []AccountPosture{trusting("111111111111", trustedAccounts{outside: []string{"999999999999", "888888888888"}})},
+			present: boolPtr(true), count: intPtr(2)},
+		{name: "an account collected in another organization",
+			accounts: []AccountPosture{
+				trusting("111111111111", trustedAccounts{outside: []string{"222222222222"}}),
+				trusting("222222222222", trustedAccounts{unknown: []string{"111111111111"}, rosterErr: rosterErr}),
+			}, present: boolPtr(false), count: intPtr(0)},
+		{name: "role list failed", accounts: []AccountPosture{trusting("111111111111", trustedAccounts{err: listErr})}, code: componentsdk.CodePermissionDenied},
+		{name: "roster refused", accounts: []AccountPosture{trusting("111111111111", trustedAccounts{unknown: []string{"999999999999"}, rosterErr: rosterErr})},
+			code: componentsdk.CodePermissionDenied},
+		{name: "roster refused for an account another one places outside",
+			accounts: []AccountPosture{
+				trusting("111111111111", trustedAccounts{outside: []string{"999999999999"}}),
+				trusting("222222222222", trustedAccounts{unknown: []string{"999999999999"}, rosterErr: rosterErr}),
+			}, present: boolPtr(true), count: intPtr(1)},
+		{name: "roster refused with another account outside",
+			accounts: []AccountPosture{
+				trusting("111111111111", trustedAccounts{outside: []string{"999999999999"}}),
+				trusting("222222222222", trustedAccounts{unknown: []string{"888888888888"}, rosterErr: rosterErr}),
+			}, present: boolPtr(true), code: componentsdk.CodePermissionDenied},
+		{name: "every principal", accounts: []AccountPosture{trusting("111111111111", trustedAccounts{wildcard: true})}, code: componentsdk.CodeNotRead},
+		{name: "every principal and an outside account", accounts: []AccountPosture{trusting("111111111111", trustedAccounts{wildcard: true, outside: []string{"999999999999"}})},
+			present: boolPtr(true), code: componentsdk.CodeNotRead},
+		{name: "failed account", accounts: []AccountPosture{trusting("111111111111", trustedAccounts{})}, failed: true, code: componentsdk.CodeAuthFailed},
+		{name: "failed account with an outside account", accounts: []AccountPosture{trusting("111111111111", trustedAccounts{outside: []string{"999999999999"}})}, failed: true,
+			present: boolPtr(true), code: componentsdk.CodeAuthFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gaps := newGapLog(nil)
+			output := &Output{CollectedAtLevel: string(componentsdk.LevelAudit), Accounts: tc.accounts}
+			if tc.failed {
+				output.FailedAccounts = []FailedAccountRecord{{ErrorCode: "AccessDenied", err: failure}}
+			}
+
+			got := toAccessPosture(output, gaps).ConnectedApps
+
+			if !samePtr(got.AppsPresent, tc.present) || !sameInt(got.AppCount, tc.count) {
+				t.Errorf("apps present %s, count %s; want %s and %s", showBool(got.AppsPresent), showPct(got.AppCount), showBool(tc.present), showPct(tc.count))
+			}
+			for pointer, written := range map[string]bool{"/connected_apps/apps_present": tc.present != nil, "/connected_apps/app_count": tc.count != nil} {
+				g := accessGap(gaps, pointer)
+				switch {
+				case written && g != nil:
+					t.Errorf("%s: gap %+v on a value written", pointer, g)
+				case !written && (g == nil || g.Code != tc.code):
+					t.Errorf("%s: gap %+v, want %s", pointer, g, tc.code)
+				}
+			}
+		})
+	}
+}
+
+// At the trust level, apps_present is written and the count is not.
+func TestAccessPosture_ConnectedAppsAtTrust(t *testing.T) {
+	account := accessAccount(0, 0, 0, 0, 0, 0, 0)
+	account.IAM.trusted = trustedAccounts{outside: []string{"999999999999"}, wildcard: true}
+	gaps := newGapLog(nil)
+	output := &Output{CollectedAtLevel: string(componentsdk.LevelTrust), Accounts: []AccountPosture{account}}
+
+	got := toAccessPosture(output, gaps).ConnectedApps
+
+	if !samePtr(got.AppsPresent, boolPtr(true)) || got.AppCount != nil {
+		t.Errorf("apps present %s, count %s; want true and no count", showBool(got.AppsPresent), showPct(got.AppCount))
+	}
+	if g := accessGap(gaps, "/connected_apps/app_count"); g != nil {
+		t.Errorf("a gap at app_count, which the trust level does not write: %+v", g)
 	}
 }
 

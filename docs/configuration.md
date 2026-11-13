@@ -182,6 +182,8 @@ Without `iam:ListSAMLProviders`, the SAML provider counts are left out with a `p
 
 The access-posture file's admins come from `iam:ListAttachedUserPolicies`, `iam:ListUserPolicies`, `iam:ListGroupsForUser`, `iam:ListAttachedGroupPolicies`, and `iam:ListGroupPolicies`, called for each IAM user with a console password. Without them, the admin values are left out with a `permission_denied` gap that names the missing action. A `collect` list that leaves out `access-posture` skips these calls.
 
+The access-posture file's connected apps come from `iam:ListRoles`, which the trust-level policy already allows for IAM Identity Center's roles, and `organizations:ListAccounts`, which is optional and best effort: it succeeds only from the Organizations management account or a delegated administrator. Every level calls both, except a run below the audit level whose `collect` list leaves out `access-posture`. Without `organizations:ListAccounts`, a role that lets another account in without MFA leaves the connected app values out with a `permission_denied` gap, and `apps_present` is still true when another account the run collects shows an account outside its organization.
+
 The vuln-scanning file comes from `inspector2:BatchGetAccountStatus`, `inspector2:ListCoverageStatistics`, and `inspector2:ListFindings`, called in each scanned region. The coverage and findings are read only where Inspector is on. Without these actions, the Inspector values are left out with a `permission_denied` gap that names the missing action. The detailed file's Inspector `enabled` comes from `inspector2:BatchGetAccountStatus` in the primary region. A `collect` list that leaves out `vuln-scanning` skips these calls, except that one.
 
 ### Trust level (default)
@@ -296,6 +298,8 @@ The minimum policy. Required for every collection level.
         "identitystore:ListGroups",
         "identitystore:ListUsers",
 
+        "organizations:ListAccounts",
+
         "lambda:ListFunctions",
         "logs:DescribeLogGroups",
 
@@ -314,7 +318,7 @@ The minimum policy. Required for every collection level.
 
 ### Audit level
 
-Add these actions to the trust-level policy above. They surface the Identity Center access model (permission sets, the user and group roster, membership and account-assignment edges), per-function Lambda configuration, KMS alias enrichment, web ACL logging state, and the organization-membership classification of cross-account role trust.
+Add these actions to the trust-level policy above. They surface the Identity Center access model (permission sets, the user and group roster, membership and account-assignment edges), per-function Lambda configuration, KMS alias enrichment, and web ACL logging state.
 
 ```json
 [
@@ -326,8 +330,6 @@ Add these actions to the trust-level policy above. They surface the Identity Cen
   "sso:ListAccountAssignments",
 
   "identitystore:ListGroupMemberships",
-
-  "organizations:ListAccounts",
 
   "lambda:GetPolicy",
   "lambda:ListAliases",
@@ -341,7 +343,7 @@ Add these actions to the trust-level policy above. They surface the Identity Cen
 
 `wafv2:GetLoggingConfiguration` is best effort: without it, per-ACL rows report `logging_evaluated: false` rather than failing the region.
 
-`organizations:ListAccounts` is optional and best effort: it succeeds only from the Organizations management account or a delegated administrator. Without it, per-role `external_trust_in_org` determinations are absent rather than guessed, and the run continues.
+Without `organizations:ListAccounts`, from the trust-level policy, per-role `external_trust_in_org` determinations are absent rather than guessed, and the run continues.
 
 ### Internal level
 
