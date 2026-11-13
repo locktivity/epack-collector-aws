@@ -16,7 +16,7 @@
     {
       "operation": "github.id_token.get",
       "method": "GET",
-      "url": "https://token.actions.githubusercontent.test/idtoken?api-version=2.0&audience=sts.amazonaws.com",
+      "url": "https://token.actions.githubusercontent.test/idtoken",
       "status": 200,
       "header": {
         "Content-Type": [

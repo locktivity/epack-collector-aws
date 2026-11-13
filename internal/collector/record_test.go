@@ -41,6 +41,7 @@ func TestRecord(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		tokenURL := kit.Scheme + "://" + kit.Host + kit.Path
 		isolateAWSEnvironment(t)
 		report, err := collectortest.Record(collectortest.RecordOptions{
 			Spec: Spec("record", "collectortest"),
@@ -60,8 +61,15 @@ func TestRecord(t *testing.T) {
 				Identifiers: collectortest.EnvIdentifiers("SANDBOX_", map[string]string{"SANDBOX_ACCOUNT_ID": kitAccountID}),
 				Literals:    map[string]string{requested.Host: kit.Host, requested.Path: kit.Path},
 				// The SDK names each role session by the time in nanoseconds,
-				// so no replay sends the recorded name.
-				Patterns: append([]collectortest.ScrubPattern{{Pattern: regexp.MustCompile(`,"RoleSessionName":"[0-9]+"`), Replace: ""}}, recordScrubPatterns...),
+				// so no replay sends the recorded name. The token request
+				// keeps its URL's host and path only: with its query the URL
+				// would hold kitTokenURL whole, which the suite checks
+				// recordings for as a secret, and a URL with no query matches
+				// the request whatever its query.
+				Patterns: append([]collectortest.ScrubPattern{
+					{Pattern: regexp.MustCompile(`,"RoleSessionName":"[0-9]+"`), Replace: ""},
+					{Pattern: regexp.MustCompile(regexp.QuoteMeta(tokenURL) + `\?[^"]*`), Replace: tokenURL},
+				}, recordScrubPatterns...),
 			},
 		})
 		if err != nil {
