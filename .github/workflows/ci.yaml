@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   collector:
-    uses: locktivity/epack/.github/workflows/collector-ci.yaml@39624edf371f96e4a997170c7e84983c327dda41 # v0.10.0 plus test-timeout
+    uses: locktivity/epack/.github/workflows/collector-ci.yaml@0230915f198796725c1468b8e41694de14f168df # v0.12.2
     with:
       name: aws
       # The test kit runs past 10 minutes under the race detector.

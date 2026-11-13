@@ -39,7 +39,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.4
 	github.com/aws/aws-sdk-go-v2/service/wafv2 v1.77.6
 	github.com/aws/smithy-go v1.28.5
-	github.com/locktivity/epack v0.11.3
+	github.com/locktivity/epack v0.12.2
 )
 
 require (
