@@ -16,20 +16,28 @@ import (
 // and never compares them, so one fake for every ID changes no reading.
 var kitCanonicalID = strings.Repeat("0", 63) + "1"
 
+// kitUniqueIDSuffix follows the prefix of each IAM unique ID in a
+// recording, such as a role's AROA ID. The characters after an ID's prefix
+// encode its account, and these encode the kit's. The collector never
+// compares these IDs, so one fake for every ID changes no reading.
+const kitUniqueIDSuffix = "BTX3GSDSQAAAAAAAA"
+
 // kitStoreIDHex is the hex part of the kit's identity store ID, which
 // also prefixes the IDs of the users and groups of an older identity store.
 var kitStoreIDHex = strings.TrimPrefix(kitStoreID, "d-")
 
 // recordScrubPatterns remove from a recording the sandbox's identifiers
 // other than its account ID, which SANDBOX_ACCOUNT_ID names: the S3
-// canonical user IDs and display names of bucket owners and grantees, and
-// the IDs of the account's IAM Identity Center instance and identity store.
+// canonical user IDs and display names of bucket owners and grantees, the
+// unique IDs of IAM roles and users, which encode the account ID, and the
+// IDs of the account's IAM Identity Center instance and identity store.
 var recordScrubPatterns = []collectortest.ScrubPattern{
 	{Pattern: canonicalID, Replace: "<ID>" + kitCanonicalID + "</ID>"},
 	{Pattern: regexp.MustCompile(`<DisplayName>[^<]*</DisplayName>`), Replace: "<DisplayName>kit</DisplayName>"},
 	{Pattern: identityStoreID, Replace: kitStoreID},
 	{Pattern: identityStoreMemberID, Replace: kitStoreIDHex + "-$1"},
 	{Pattern: ssoInstanceID, Replace: "ssoins-1111222233334444"},
+	{Pattern: uniqueID, Replace: "${1}" + kitUniqueIDSuffix},
 }
 
 var (
@@ -37,6 +45,7 @@ var (
 	identityStoreID       = regexp.MustCompile(`\bd-[0-9a-f]{10}\b`)
 	identityStoreMemberID = regexp.MustCompile(`\b[0-9a-f]{10}-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`)
 	ssoInstanceID         = regexp.MustCompile(`\bssoins-[0-9a-f]{16}\b`)
+	uniqueID              = regexp.MustCompile(`\b(A(?:ROA|IDA|GPA|IPA|NPA|NVA|PKA|BIA|CCA))[A-Z2-7]{16,17}\b`)
 
 	// recordedCanonicalID finds a canonical ID in a recording, where the
 	// XML body is a JSON string that may escape its angle brackets.
@@ -50,6 +59,8 @@ func TestRecordScrubPatterns(t *testing.T) {
 		owner: "<Owner><ID>" + kitCanonicalID + "</ID><DisplayName>kit</DisplayName></Owner>",
 		`{"InstanceArn":"arn:aws:sso:::instance/ssoins-7223a1b2c3d4e5f6","IdentityStoreId":"d-90679a1b2c","Status":"ACTIVE"}`: `{"InstanceArn":"` + kitInstanceARN + `","IdentityStoreId":"` + kitStoreID + `","Status":"ACTIVE"}`,
 		`{"UserId":"90679a1b2c-4a3b0d9c-1f2e-4d5c-8b7a-0123456789ab","UserName":"epack-sandbox-idc-user-1"}`:                  `{"UserId":"` + kitStoreIDHex + `-4a3b0d9c-1f2e-4d5c-8b7a-0123456789ab","UserName":"epack-sandbox-idc-user-1"}`,
+		`<RoleId>AROABZPUZDIKAAAAAAAAA</RoleId>`:                   `<RoleId>AROA` + kitUniqueIDSuffix + `</RoleId>`,
+		`{"CreatedBy":"AROABZPUZDIKAAAAAAAAB:botocore-session-1"}`: `{"CreatedBy":"AROA` + kitUniqueIDSuffix + `:botocore-session-1"}`,
 	} {
 		got := in
 		for _, p := range recordScrubPatterns {
@@ -62,8 +73,8 @@ func TestRecordScrubPatterns(t *testing.T) {
 }
 
 // TestRecordingsScrubbed fails while a committed recording still holds an S3
-// canonical user ID, or an ID of an Identity Center instance or identity
-// store, other than the kit's.
+// canonical user ID, an IAM unique ID, or an ID of an Identity Center
+// instance or identity store, other than the kit's.
 func TestRecordingsScrubbed(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join("testdata", "recordings", "*.json"))
 	if err != nil {
@@ -92,6 +103,11 @@ func TestRecordingsScrubbed(t *testing.T) {
 		for _, id := range ssoInstanceID.FindAll(raw, -1) {
 			if !strings.HasSuffix(kitInstanceARN, string(id)) {
 				t.Errorf("%s: holds an Identity Center instance ID", path)
+			}
+		}
+		for _, id := range uniqueID.FindAll(raw, -1) {
+			if !strings.HasSuffix(string(id), kitUniqueIDSuffix) {
+				t.Errorf("%s: holds an IAM unique ID, which encodes an account ID", path)
 			}
 		}
 	}
