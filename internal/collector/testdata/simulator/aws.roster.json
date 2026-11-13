@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "vendor": "aws",
+  "source": "terraform/, seed.sh, checklist.md and the bootstrap state bucket, as expectations.yaml's notes describe them, for the two regions epack.yaml scans. The account is named by 123456789012, since its ID stays out of this repository. The IAM users have no console password, so they hold credentials and are not people's accounts. There is no scanning block: Inspector was never turned on, and expectations.yaml waits for a run to show how the collector reports that. The bootstrap's GitHub OIDC provider and roles are left out too, since they sign in workflow jobs rather than people. Each access key's age is one day inside the range its expectations allow.",
+  "placeholders": {
+    "SANDBOX_ACCOUNT_ID": "123456789012"
+  },
+  "providers": {"cloud-posture": "aws", "access-posture": "aws", "vuln-scanning": "aws"},
+  "accounts": {
+    "root": {
+      "kind": "root_user", "enabled": true, "cloud_account": "sandbox", "mfa": "mfa_device",
+      "case": "Checklist steps 1 and 2: an MFA device, no access key and no signing certificate. In an Organizations member account root may instead have no credentials at all, which protects it as well."
+    },
+    "epack-sandbox-1-mfa-new-key": {
+      "kind": "iam_user_no_console_password", "enabled": true, "cloud_account": "sandbox", "mfa": "virtual_mfa_device",
+      "case": "iam.tf. seed.sh enables a virtual MFA device, and the key rotator keeps one access key under 30 days old."
+    },
+    "epack-sandbox-2-no-mfa-old-key": {
+      "kind": "iam_user_no_console_password", "enabled": true, "cloud_account": "sandbox",
+      "case": "iam.tf. No MFA device. seed.sh creates one access key once and never rotates it."
+    },
+    "epack-sandbox-3-mfa-no-key": {
+      "kind": "iam_user_no_console_password", "enabled": true, "cloud_account": "sandbox", "mfa": "virtual_mfa_device",
+      "case": "iam.tf. seed.sh enables a virtual MFA device. No access key."
+    },
+    "epack-sandbox-4-no-mfa-no-key": {
+      "kind": "iam_user_no_console_password", "enabled": true, "cloud_account": "sandbox",
+      "case": "iam.tf. No MFA device and no access key."
+    },
+    "epack-sandbox-idc-user-1": {
+      "kind": "identity_center_user", "enabled": true,
+      "case": "identity_center.tf, in the account instance's directory with no external ID. Member of the sandbox group. An account instance can't sign anyone in to the account."
+    },
+    "epack-sandbox-idc-user-2": {
+      "kind": "identity_center_user", "enabled": true,
+      "case": "identity_center.tf, in the account instance's directory with no external ID. In no group."
+    }
+  },
+  "groups": {
+    "epack-sandbox-no-access": {
+      "members": ["epack-sandbox-1-mfa-new-key", "epack-sandbox-2-no-mfa-old-key", "epack-sandbox-3-mfa-no-key", "epack-sandbox-4-no-mfa-no-key"],
+      "case": "iam.tf. IAM group whose inline deny-all policy denies every action, so its users hold no cloud role."
+    },
+    "epack-sandbox-idc-group": {
+      "members": ["epack-sandbox-idc-user-1"],
+      "case": "identity_center.tf. Identity Center group with one member."
+    }
+  },
+  "security_groups": {
+    "us-east-1/default": {"region": "us-east-1", "case": "network.tf. The default VPC's group, emptied of rules.", "rules": {}},
+    "us-east-1/epack-sandbox-ssh-open-ipv4": {"region": "us-east-1", "case": "network.tf. SSH from anywhere over IPv4.", "rules": {
+      "ssh": {"direction": "inbound", "access": "allow", "protocol": "tcp", "ports": ["22"], "sources": ["0.0.0.0/0"]}
+    }},
+    "us-east-1/epack-sandbox-tcp-20-25-open": {"region": "us-east-1", "case": "network.tf. A port range from anywhere that includes SSH.", "rules": {
+      "tcp-20-25": {"direction": "inbound", "access": "allow", "protocol": "tcp", "ports": ["20-25"], "sources": ["0.0.0.0/0"]}
+    }},
+    "us-east-1/epack-sandbox-ssh-restricted": {"region": "us-east-1", "case": "network.tf. SSH from a private range only.", "rules": {
+      "ssh": {"direction": "inbound", "access": "allow", "protocol": "tcp", "ports": ["22"], "sources": ["10.0.0.0/8"]}
+    }},
+    "us-west-2/default": {"region": "us-west-2", "case": "network.tf. The default VPC's group, emptied of rules.", "rules": {}},
+    "us-west-2/epack-sandbox-rdp-open-ipv6": {"region": "us-west-2", "case": "network.tf. RDP from anywhere over IPv6.", "rules": {
+      "rdp": {"direction": "inbound", "access": "allow", "protocol": "tcp", "ports": ["3389"], "sources": ["::/0"]}
+    }},
+    "us-west-2/epack-sandbox-rdp-restricted": {"region": "us-west-2", "case": "network.tf. RDP from a private range only.", "rules": {
+      "rdp": {"direction": "inbound", "access": "allow", "protocol": "tcp", "ports": ["3389"], "sources": ["10.0.0.0/8"]}
+    }}
+  },
+  "storage": {
+    "epack-collector-sandboxes-state-123456789012": {
+      "region": "us-east-1", "key_source": "AES256", "anonymous_access": false, "network_access": "public_endpoint",
+      "case": "bootstrap/aws/state.tf. Blocks all public access, versioned, SSE-S3, denies plaintext requests."
+    },
+    "epack-sandbox-123456789012-access-logs": {
+      "region": "us-east-1", "key_source": "AES256", "anonymous_access": false, "network_access": "public_endpoint",
+      "case": "s3.tf. Blocks all public access and denies plaintext requests. Receives the server access logs of cloudtrail and pab-combined."
+    },
+    "epack-sandbox-123456789012-cloudtrail": {
+      "region": "us-east-1", "key_source": "AES256", "anonymous_access": false, "network_access": "public_endpoint",
+      "case": "s3.tf. Blocks all public access, versioned, logged, denies plaintext requests. The three trails deliver here."
+    },
+    "epack-sandbox-123456789012-pab-absent": {
+      "region": "us-east-1", "key_source": "AES256", "anonymous_access": true, "network_access": "public_endpoint",
+      "case": "s3.tf. seed.sh deletes its public access block, and the account block covers only bucket policies, so nothing blocks a public ACL."
+    },
+    "epack-sandbox-123456789012-pab-combined": {
+      "region": "us-east-1", "key_source": "AES256", "anonymous_access": false, "network_access": "public_endpoint",
+      "case": "s3.tf. Its own block covers ACLs and the account block covers policies. Versioned, logged, denies plaintext reads only."
+    },
+    "epack-sandbox-123456789012-pab-off": {
+      "region": "us-east-1", "key_source": "AES256", "anonymous_access": true, "network_access": "public_endpoint",
+      "case": "s3.tf. Its own block turns every flag off, and the account block covers only bucket policies, so nothing blocks a public ACL."
+    }
+  },
+  "cloud": {
+    "system_type": "cloud",
+    "accounts": {
+      "sandbox": {
+        "id": "123456789012", "kind": "account", "regions": ["us-east-1", "us-west-2"],
+        "audit_logs": {
+          "epack-sandbox-trail-1-multi-region": {"regions": ["*"], "case": "cloudtrail.tf. Multi-region and logging."},
+          "epack-sandbox-trail-2-single-region": {"regions": ["us-east-1"], "case": "cloudtrail.tf. us-east-1 only, write events only."},
+          "epack-sandbox-trail-3-stopped": {"enabled": false, "regions": ["*"], "case": "cloudtrail.tf. Multi-region, logging stopped."}
+        },
+        "threat_detection": [],
+        "case": "One standalone account with no alias. No identity provider for people, no SCIM, and GuardDuty, Config and Security Hub off (checklist step 3)."
+      }
+    },
+    "credentials": {
+      "epack-sandbox-1-mfa-new-key/access-key": {
+        "owner": "epack-sandbox-1-mfa-new-key", "created_days_ago": 15, "permissions": "deny-all",
+        "case": "The key rotator (key_rotator.tf) replaces it every 30 days and discards its secret, so it is never used. AWS access keys never expire."
+      },
+      "epack-sandbox-2-no-mfa-old-key/access-key": {
+        "owner": "epack-sandbox-2-no-mfa-old-key", "created_days_ago": 120, "permissions": "deny-all",
+        "case": "seed.sh creates it once and discards its secret, so it is never used. Past 90 days, as checklist step 8 expects. AWS access keys never expire."
+      }
+    },
+    "workforce_sign_in": {
+      "identity_source": "identity_center_directory",
+      "case": "The Identity Center account instance in us-east-1 (checklist step 4). Its users live in its own directory, and no account trusts it for sign-in."
+    }
+  },
+  "terms": {
+    "account_kinds": {"root_user": "root", "iam_user_no_console_password": "service", "identity_center_user": "member"},
+    "mfa_methods": {"mfa_device": "mfa", "virtual_mfa_device": "mfa"},
+    "protocols": {"tcp": "tcp"},
+    "network_sources": {"0.0.0.0/0": "any", "::/0": "any", "10.0.0.0/8": "limited"},
+    "key_sources": {"AES256": "provider_key"},
+    "cloud_account_kinds": {"account": "account"},
+    "cloud_network_access": {"public_endpoint": "open"},
+    "cloud_credential_permissions": {"deny-all": "read"},
+    "workforce_identity_sources": {"identity_center_directory": "sign_in_service"}
+  }
+}
+
