@@ -3,6 +3,8 @@ package collector
 import (
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/locktivity/epack/componentsdk"
@@ -899,5 +901,34 @@ func TestToCloudPosture_ThreatDetection(t *testing.T) {
 	}
 	if got := posture.Accounts[2].ThreatDetection.Enabled; got != nil {
 		t.Errorf("no region list: enabled = %s, want it left out", showBool(got))
+	}
+}
+
+// S3 has no setting that turns off public network access, so the storage
+// network restriction values are left out as unsupported, the count only from
+// the audit level, where the schema writes it.
+func TestToCloudPosture_StorageNetworkRestrictionUnsupported(t *testing.T) {
+	for _, tc := range []struct {
+		level componentsdk.Level
+		want  []string
+	}{
+		{componentsdk.LevelTrust, []string{"/accounts/0/storage/network_restricted_pct"}},
+		{componentsdk.LevelAudit, []string{"/accounts/0/storage/network_restricted_pct", "/accounts/0/storage/network_restricted_storage_resource_count"}},
+	} {
+		gaps := newGapLog(nil)
+		toCloudPosture(&Output{CollectedAtLevel: string(tc.level), Accounts: []AccountPosture{evaluatedAccountFixture()}}, gaps)
+
+		var got []string
+		for _, g := range gaps.gaps {
+			if g.path == cloudPosturePath && strings.Contains(g.pointer, "/storage/network_restricted") {
+				if code := componentsdk.Classify(g.err); code != componentsdk.CodeUnsupported {
+					t.Errorf("%s at %s: gap code %s, want unsupported", tc.level, g.pointer, code)
+				}
+				got = append(got, g.pointer)
+			}
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: gaps at %v, want %v", tc.level, got, tc.want)
+		}
 	}
 }

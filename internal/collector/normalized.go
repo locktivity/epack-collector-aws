@@ -193,6 +193,10 @@ var normalizedSources = []struct {
 	{"vuln_scanning/unpatched_pct", []string{"account_security/inspector/unpatched_server_percent"}, false},
 }
 
+// storageNetworkUnsupported is why the storage network restriction values
+// are left out: S3 has no setting that turns off public network access.
+var storageNetworkUnsupported = unsupported("S3 has no setting that turns off public network access for a bucket or an account.")
+
 // failedAccountsPointer is the detailed list the account totals come from.
 const failedAccountsPointer = "/failed_accounts"
 
@@ -233,6 +237,11 @@ func toCloudPosture(o *Output, gaps *gapLog) *CloudPosture {
 		if gaps != nil {
 			mirrorNormalizedGaps(gaps, i, &normalized, audit)
 			gaps.movedDeprecated(i)
+			storage := fmt.Sprintf("/accounts/%d/storage/", i)
+			storageNetworkUnsupported.record(gaps, cloudPosturePath, storage+"network_restricted_pct")
+			if audit {
+				storageNetworkUnsupported.record(gaps, cloudPosturePath, storage+"network_restricted_storage_resource_count")
+			}
 		}
 		posture.Accounts = append(posture.Accounts, normalized)
 	}
