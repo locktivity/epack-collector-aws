@@ -12,9 +12,10 @@ import (
 // the audit level scopes holds each account alone. Members are the IAM users
 // with a console password in each account's credential report, and the
 // users of the organization's IAM Identity Center. Admins are the IAM users
-// with an AWS managed policy in adminPolicies. Credentials are the IAM
-// users' active access keys. Connected apps are the AWS accounts outside the
-// organization that a role's trust policy lets assume the role without MFA.
+// with an AWS managed policy in adminPolicies. Credentials are the active
+// access keys, the root user's included. Connected apps are the AWS accounts
+// outside the organization that a role's trust policy lets assume the role
+// without MFA.
 // A value left out has a gap, and the counts and scopes are written from the
 // audit level only.
 type AccessPosture struct {
@@ -75,7 +76,9 @@ type AccessRoot struct {
 	RootAccessKeysPresent *bool            `json:"root_access_keys_present,omitempty"`
 }
 
-// AccessCredentials counts the IAM users' active access keys.
+// AccessCredentials counts the active access keys, the root user's
+// included. A key is unrestricted and can write by what its user's identity
+// policies allow, as collectKeyAccess evaluates them.
 type AccessCredentials struct {
 	CredentialsPresent             *bool            `json:"credentials_present,omitempty"`
 	CredentialCount                *int             `json:"credential_count,omitempty"`
@@ -83,6 +86,10 @@ type AccessCredentials struct {
 	NeverExpiringPct               Reading[float64] `json:"never_expiring_pct,omitzero"`
 	UnusedCredentialCount          *int             `json:"unused_credential_count,omitempty"`
 	UnusedPct                      Reading[float64] `json:"unused_pct,omitzero"`
+	UnrestrictedCredentialCount    *int             `json:"unrestricted_credential_count,omitempty"`
+	UnrestrictedPct                Reading[float64] `json:"unrestricted_pct,omitzero"`
+	WriteAccessCredentialCount     *int             `json:"write_access_credential_count,omitempty"`
+	WriteAccessPct                 Reading[float64] `json:"write_access_pct,omitzero"`
 	RotationOverdueCredentialCount *int             `json:"rotation_overdue_credential_count,omitempty"`
 	RotationOverduePct             Reading[float64] `json:"rotation_overdue_pct,omitzero"`
 }
@@ -118,8 +125,6 @@ var (
 	identityCenterAdminsNotRead   = notRead("Which Identity Center users can administer an account depends on the policies of the permission sets ListAccountAssignments assigns them, which this collector does not evaluate.")
 	identityCenterInactiveNotRead = notRead("When Identity Center users last signed in is in CloudTrail's sign-in events, which this collector does not read.")
 	scopeSSOMembersNotRead        = notRead("Who is assigned to each account is listed with ListAccountAssignments from the account that holds the organization's Identity Center instance, and no account collected read them.")
-	unrestrictedKeysNotRead       = notRead("An access key's IP and scope limits are in its user's policy documents, from GetUserPolicy and GetPolicyVersion, which this collector does not read.")
-	writeAccessKeysNotRead        = notRead("What an access key can change is in its user's policy documents, from GetUserPolicy and GetPolicyVersion, which this collector does not read.")
 	wildcardTrustNotRead          = notRead("A role whose trust policy lets every principal, *, assume it without MFA admits whoever the policy's other conditions allow, and this collector evaluates only the MFA conditions of the trust policies ListRoles returns.")
 	unreadDirectoryNotRead        = notRead("The organization's Identity Center users are listed with ListUsers from the account that holds the instance or a delegated administrator, and no account collected is one.")
 	accessPostureLeftOut          = []struct {
@@ -132,10 +137,6 @@ var (
 		{scimUnsupported, false, []string{"sign_in/scim_enabled"}},
 		{externalMembersUnsupported, false, []string{"members/external_members_present"}},
 		{externalMembersUnsupported, true, []string{"members/external_member_count"}},
-		{unrestrictedKeysNotRead, false, []string{"credentials/unrestricted_pct"}},
-		{unrestrictedKeysNotRead, true, []string{"credentials/unrestricted_credential_count"}},
-		{writeAccessKeysNotRead, false, []string{"credentials/write_access_pct"}},
-		{writeAccessKeysNotRead, true, []string{"credentials/write_access_credential_count"}},
 	}
 )
 
@@ -191,6 +192,7 @@ type accountAccess struct {
 	rootPresent, rootKeys truth
 
 	keys, unusedKeys, overdueKeys count
+	unrestrictedKeys, writeKeys   count
 	keysPresent                   truth
 }
 
@@ -203,7 +205,7 @@ func failedAccess(err error) accountAccess {
 		ssoConfigured: t, members: c, localMFA: c, inactive: c, membersPresent: t,
 		localAdmins: c, adminMFA: c, localAdminsPresent: t,
 		rootAccounts: c, rootMFA: c, rootPresent: t, rootKeys: t,
-		keys: c, unusedKeys: c, overdueKeys: c, keysPresent: t,
+		keys: c, unusedKeys: c, overdueKeys: c, unrestrictedKeys: c, writeKeys: c, keysPresent: t,
 	}
 }
 
@@ -227,6 +229,7 @@ func accessOf(acct AccountPosture, i int, gaps *gapLog) accountAccess {
 		overdueKeys:   countAt(gaps, keys, iam.usage.rotationOverdueKeys),
 	}
 	a.localAdmins, a.adminMFA, a.localAdminsPresent = adminsOf(acct.admins, a.members)
+	a.unrestrictedKeys, a.writeKeys = keyAccessOf(acct.keys, a.keys)
 	a.membersPresent = presentIn(a.members)
 	a.rootPresent = presentIn(a.rootAccounts)
 	a.keysPresent = presentIn(a.keys)
@@ -254,6 +257,28 @@ func adminsOf(admins iamAdmins, members count) (count, count, truth) {
 		return count{why: why}, count{why: why}, present
 	}
 	return count{n: admins.admins}, count{n: admins.mfaAdmins}, truth{v: admins.admins > 0}
+}
+
+// keyAccessOf folds the access key evaluation. Without the credential
+// report there were no keys to evaluate, so the counts are unknown for the
+// keys' reason. A key whose user's policies could not be read, or whose
+// user has a permissions boundary, leaves a count it does not decide out
+// with a partial gap.
+func keyAccessOf(keys iamKeyAccess, all count) (unrestricted, write count) {
+	switch {
+	case all.why != nil:
+		return all, all
+	case !keys.read:
+		why := &reason{err: fmt.Errorf("the IAM users' policies were not read")}
+		return count{why: why}, count{why: why}
+	}
+	fold := func(n, unknown int) count {
+		if unknown > 0 {
+			return count{why: &reason{err: keys.err, unmeasured: unknown}}
+		}
+		return count{n: n}
+	}
+	return fold(keys.unrestricted, keys.unknownUnrestricted), fold(keys.write, keys.unknownWrite)
 }
 
 // rootMFAOf is 1 when the account's root user has MFA, or has no password,
@@ -644,6 +669,8 @@ func foldAccess(accounts []accountAccess) accountAccess {
 		keys:               field(func(a accountAccess) count { return a.keys }),
 		unusedKeys:         field(func(a accountAccess) count { return a.unusedKeys }),
 		overdueKeys:        field(func(a accountAccess) count { return a.overdueKeys }),
+		unrestrictedKeys:   field(func(a accountAccess) count { return a.unrestrictedKeys }),
+		writeKeys:          field(func(a accountAccess) count { return a.writeKeys }),
 		keysPresent:        anyOf(flags(func(a accountAccess) truth { return a.keysPresent })...),
 	}
 }
@@ -687,6 +714,10 @@ func writeAccess(w writer, base string, a accountAccess, signIn *AccessSignIn, m
 	creds.UnusedPct = w.pct(a.unusedKeys, a.keys, componentsdk.RoundUp, at("credentials/unused_pct"))
 	creds.RotationOverdueCredentialCount = w.count(a.overdueKeys, at("credentials/rotation_overdue_credential_count"))
 	creds.RotationOverduePct = w.pct(a.overdueKeys, a.keys, componentsdk.RoundUp, at("credentials/rotation_overdue_pct"))
+	creds.UnrestrictedCredentialCount = w.count(a.unrestrictedKeys, at("credentials/unrestricted_credential_count"))
+	creds.UnrestrictedPct = w.pct(a.unrestrictedKeys, a.keys, componentsdk.RoundUp, at("credentials/unrestricted_pct"))
+	creds.WriteAccessCredentialCount = w.count(a.writeKeys, at("credentials/write_access_credential_count"))
+	creds.WriteAccessPct = w.pct(a.writeKeys, a.keys, componentsdk.RoundUp, at("credentials/write_access_pct"))
 }
 
 // leaveOutUnreportedAccess records the gaps on the values AWS never reports

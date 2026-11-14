@@ -13,7 +13,8 @@ import (
 )
 
 // iamUsage is what the credential report shows of the IAM users' activity
-// and access keys. The root user is not counted.
+// and the account's access keys. The root user is not counted among the
+// users, and its access keys are counted among the keys.
 type iamUsage struct {
 	// inactiveUsers counts the users whose password and access keys were all
 	// last used before the cutoff, or never.
@@ -30,6 +31,11 @@ type iamUsage struct {
 	// the cutoff, or with no rotation date.
 	rotationOverdueKeys int
 
+	// keyUsers counts the users with an active access key, the root user
+	// included, and rotatedKeyUsers those of them whose every active key was
+	// rotated within AccessKeyAgeThreshold days, as hasRotatedKeys decides.
+	keyUsers, rotatedKeyUsers int
+
 	// consoleUsers counts the users with a console password, who are the
 	// access-posture artifact's members. A user with access keys and no
 	// password is a credential, not a member. consoleMFAUsers counts those
@@ -37,30 +43,21 @@ type iamUsage struct {
 	consoleUsers, consoleMFAUsers, consoleInactiveUsers int
 }
 
-// credentialUsage counts the users' activity and access keys in report
+// credentialUsage counts the users' activity and the access keys in report
 // against now. A user is inactive and a key is unused when its last use is
 // more than InactiveDaysThreshold days before now, or there is none. A key
 // is overdue for rotation by the same rule hasRotatedKeys applies, with
-// AccessKeyAgeThreshold days.
+// AccessKeyAgeThreshold days. The root user's keys count as any other
+// user's.
 func credentialUsage(report *aws.CredentialReport, now time.Time) iamUsage {
 	inactiveBefore := now.AddDate(0, 0, -InactiveDaysThreshold)
 	rotateBefore := now.AddDate(0, 0, -AccessKeyAgeThreshold)
 	var u iamUsage
 	for _, user := range report.Users {
-		if user.IsRootUser() {
-			continue
-		}
-		inactive := !usedSince(inactiveBefore, user.PasswordLastUsed, user.AccessKey1LastUsedDate, user.AccessKey2LastUsedDate)
-		if inactive {
-			u.inactiveUsers++
-		}
-		if user.PasswordEnabled {
-			u.consoleUsers++
-			if user.MFAActive {
-				u.consoleMFAUsers++
-			}
-			if inactive {
-				u.consoleInactiveUsers++
+		if user.AccessKey1Active || user.AccessKey2Active {
+			u.keyUsers++
+			if hasRotatedKeys(user, rotateBefore) {
+				u.rotatedKeyUsers++
 			}
 		}
 		for _, key := range []struct {
@@ -79,6 +76,22 @@ func credentialUsage(report *aws.CredentialReport, now time.Time) iamUsage {
 			}
 			if key.rotated == nil || key.rotated.Before(rotateBefore) {
 				u.rotationOverdueKeys++
+			}
+		}
+		if user.IsRootUser() {
+			continue
+		}
+		inactive := !usedSince(inactiveBefore, user.PasswordLastUsed, user.AccessKey1LastUsedDate, user.AccessKey2LastUsedDate)
+		if inactive {
+			u.inactiveUsers++
+		}
+		if user.PasswordEnabled {
+			u.consoleUsers++
+			if user.MFAActive {
+				u.consoleMFAUsers++
+			}
+			if inactive {
+				u.consoleInactiveUsers++
 			}
 		}
 	}
@@ -108,16 +121,118 @@ var adminPolicies = []string{
 // errPolicyDocumentsNotRead is why a user with an inline or customer
 // managed policy, and none of adminPolicies, is unmeasured.
 var errPolicyDocumentsNotRead = componentsdk.CodeError(componentsdk.CodeNotRead,
-	errors.New("an IAM user or one of its groups has an inline or customer managed policy, whose document, from GetUserPolicy, GetGroupPolicy or GetPolicyVersion, this collector does not read"))
+	errors.New("an IAM user or one of its groups has an inline or customer managed policy, whose document the admin check does not evaluate"))
 
-// adminPolicyLister is the slice of the AWS client collectIAMAdmins uses,
-// extracted so the failure paths can be tested without AWS.
-type adminPolicyLister interface {
+// iamPolicyClient is the slice of the AWS client the admin check and the
+// access key evaluation use, extracted so the failure paths can be tested
+// without AWS.
+type iamPolicyClient interface {
 	ListAttachedUserPolicyARNs(ctx context.Context, userName string) ([]string, error)
 	ListUserPolicyNames(ctx context.Context, userName string) ([]string, error)
 	ListGroupsForUser(ctx context.Context, userName string) ([]string, error)
 	ListAttachedGroupPolicyARNs(ctx context.Context, groupName string) ([]string, error)
 	ListGroupPolicyNames(ctx context.Context, groupName string) ([]string, error)
+	GetPolicyDocument(ctx context.Context, arn string) (string, error)
+	GetUserPolicyDocument(ctx context.Context, userName, policyName string) (string, error)
+	GetGroupPolicyDocument(ctx context.Context, groupName, policyName string) (string, error)
+	GetUserPermissionsBoundary(ctx context.Context, userName string) (string, error)
+}
+
+// iamPolicies reads one account's IAM user and group policies for the admin
+// check and the access key evaluation. Each listing and each document is
+// read once, and warn is told of each read that fails.
+type iamPolicies struct {
+	ctx       context.Context
+	client    iamPolicyClient
+	warn      func(what named, err error)
+	users     map[string]policySet
+	groups    map[string]policySet
+	memberOf  map[string]groupList
+	documents map[string]documentRead
+}
+
+// policySet is what IAM lists of a user's or a group's own policies: the
+// ARNs of the managed policies attached to it and the names of its inline
+// policies, or why they could not be listed.
+type policySet struct {
+	attached, inline []string
+	err              error
+}
+
+// groupList is the groups a user belongs to, or why they could not be
+// listed.
+type groupList struct {
+	names []string
+	err   error
+}
+
+func newIAMPolicies(ctx context.Context, client iamPolicyClient, warn func(what named, err error)) *iamPolicies {
+	return &iamPolicies{
+		ctx: ctx, client: client, warn: warn,
+		users: map[string]policySet{}, groups: map[string]policySet{},
+		memberOf: map[string]groupList{}, documents: map[string]documentRead{},
+	}
+}
+
+// policiesWarn returns the function an account's iamPolicies tells of each
+// read that fails, which warns of it as accountID's.
+func (c *Collector) policiesWarn(accountID string) func(what named, err error) {
+	return func(what named, err error) {
+		c.warn("account %s: failed to read %s: %v", accountID, what, err)
+	}
+}
+
+// user lists the IAM user's own policies.
+func (p *iamPolicies) user(name string) policySet {
+	set, ok := p.users[name]
+	if !ok {
+		set = p.list(name, p.client.ListAttachedUserPolicyARNs, p.client.ListUserPolicyNames)
+		p.users[name] = set
+		if set.err != nil {
+			p.warn(named{"the policies of IAM user " + name, "the policies of an IAM user"}, set.err)
+		}
+	}
+	return set
+}
+
+// group lists the IAM group's own policies.
+func (p *iamPolicies) group(name string) policySet {
+	set, ok := p.groups[name]
+	if !ok {
+		set = p.list(name, p.client.ListAttachedGroupPolicyARNs, p.client.ListGroupPolicyNames)
+		p.groups[name] = set
+		if set.err != nil {
+			p.warn(named{"the policies of IAM group " + name, "the policies of an IAM group"}, set.err)
+		}
+	}
+	return set
+}
+
+// groupsOf lists the groups the IAM user belongs to.
+func (p *iamPolicies) groupsOf(user string) groupList {
+	list, ok := p.memberOf[user]
+	if !ok {
+		list.names, list.err = p.client.ListGroupsForUser(p.ctx, user)
+		p.memberOf[user] = list
+		if list.err != nil {
+			p.warn(named{"the groups of IAM user " + user, "the groups of an IAM user"}, list.err)
+		}
+	}
+	return list
+}
+
+// list lists the managed policies attached to the user or group called
+// name, and its inline policies.
+func (p *iamPolicies) list(name string, attached, inline func(context.Context, string) ([]string, error)) policySet {
+	arns, err := attached(p.ctx, name)
+	if err != nil {
+		return policySet{err: err}
+	}
+	names, err := inline(p.ctx, name)
+	if err != nil {
+		return policySet{err: err}
+	}
+	return policySet{attached: arns, inline: names}
 }
 
 // iamAdmins counts the IAM users with administrator access and how many of
@@ -137,24 +252,21 @@ type iamAdmins struct {
 // collectIAMAdmins checks each IAM user in the credential report with a
 // console password for one of adminPolicies, attached to the user or to a
 // group the user belongs to. A user without a password is a credential, not
-// a member, so it is not checked. Each group's policies are read once. A
-// nil report checks no one.
-func (c *Collector) collectIAMAdmins(ctx context.Context, client adminPolicyLister, report *aws.CredentialReport, accountID string) iamAdmins {
+// a member, so it is not checked. A nil report checks no one.
+func (c *Collector) collectIAMAdmins(policies *iamPolicies, report *aws.CredentialReport) iamAdmins {
 	out := iamAdmins{}
 	if report == nil {
 		return out
 	}
 	out.read = true
-	groups := map[string]policyCheck{}
 	unread := false
 	for _, user := range report.Users {
 		if user.IsRootUser() || !user.PasswordEnabled {
 			continue
 		}
-		check := c.userIsAdmin(ctx, client, user.User, groups)
+		check := userIsAdmin(policies, user.User)
 		switch {
 		case check.err != nil:
-			c.warn("account %s: failed to read the policies of %s: %v", accountID, named{"IAM user " + user.User, "an IAM user"}, check.err)
 			out.unmeasured++
 			if out.err == nil {
 				out.err = check.err
@@ -184,22 +296,19 @@ type policyCheck struct {
 }
 
 // userIsAdmin checks the user and the groups the user belongs to for one
-// of adminPolicies. groups caches each group's answer.
-func (c *Collector) userIsAdmin(ctx context.Context, client adminPolicyLister, userName string, groups map[string]policyCheck) policyCheck {
-	check := checkPolicies(ctx, userName, client.ListAttachedUserPolicyARNs, client.ListUserPolicyNames)
+// of adminPolicies. The groups are listed only when the user's own policies
+// grant no administrator access.
+func userIsAdmin(policies *iamPolicies, userName string) policyCheck {
+	check := checkPolicies(policies.user(userName))
 	if check.err != nil || check.admin {
 		return check
 	}
-	names, err := client.ListGroupsForUser(ctx, userName)
-	if err != nil {
-		return policyCheck{err: err}
+	groups := policies.groupsOf(userName)
+	if groups.err != nil {
+		return policyCheck{err: groups.err}
 	}
-	for _, name := range names {
-		g, ok := groups[name]
-		if !ok {
-			g = checkPolicies(ctx, name, client.ListAttachedGroupPolicyARNs, client.ListGroupPolicyNames)
-			groups[name] = g
-		}
+	for _, name := range groups.names {
+		g := checkPolicies(policies.group(name))
 		if g.admin {
 			return g
 		}
@@ -211,34 +320,27 @@ func (c *Collector) userIsAdmin(ctx context.Context, client adminPolicyLister, u
 	return check
 }
 
-// checkPolicies lists the managed policies attached to the user or group
-// called name, and its inline policies when none of them is one of
+// checkPolicies checks a user's or a group's own policies for one of
 // adminPolicies.
-func checkPolicies(ctx context.Context, name string, attached, inline func(context.Context, string) ([]string, error)) policyCheck {
-	arns, err := attached(ctx, name)
-	if err != nil {
-		return policyCheck{err: err}
+func checkPolicies(set policySet) policyCheck {
+	if set.err != nil {
+		return policyCheck{err: set.err}
 	}
-	if grantsAdministratorAccess(arns) {
+	if grantsAdministratorAccess(set.attached) {
 		return policyCheck{admin: true}
 	}
-	embedded, err := inline(ctx, name)
-	if err != nil {
-		return policyCheck{err: err}
-	}
-	customer := slices.ContainsFunc(arns, func(arn string) bool { return !strings.Contains(arn, ":iam::aws:policy/") })
-	return policyCheck{unread: customer || len(embedded) > 0}
+	customer := slices.ContainsFunc(set.attached, func(arn string) bool { return !strings.Contains(arn, ":iam::aws:policy/") })
+	return policyCheck{unread: customer || len(set.inline) > 0}
 }
 
 // grantsAdministratorAccess reports whether the policy ARNs include one of
 // adminPolicies.
 func grantsAdministratorAccess(arns []string) bool {
-	for _, arn := range arns {
-		for _, policy := range adminPolicies {
-			if strings.HasPrefix(arn, "arn:") && strings.HasSuffix(arn, policy) {
-				return true
-			}
-		}
-	}
-	return false
+	return slices.ContainsFunc(arns, func(arn string) bool { return awsManaged(arn, adminPolicies) })
+}
+
+// awsManaged reports whether arn, in any partition, ends with one of
+// policies.
+func awsManaged(arn string, policies []string) bool {
+	return strings.HasPrefix(arn, "arn:") && slices.ContainsFunc(policies, func(policy string) bool { return strings.HasSuffix(arn, policy) })
 }

@@ -13,7 +13,8 @@ func lastAt(t time.Time) *time.Time { return &t }
 
 // A user is inactive when neither the password nor an access key was used in
 // the last 90 days, including a user who never signed in. A key counts when
-// it is active, and is unused or overdue for rotation by its own dates.
+// it is active, the root user's included, and is unused or overdue for
+// rotation by its own dates.
 func TestCredentialUsage(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	recent, old := now.AddDate(0, 0, -10), now.AddDate(0, 0, -91)
@@ -42,18 +43,23 @@ func TestCredentialUsage(t *testing.T) {
 	if got.consoleUsers != 4 || got.consoleInactiveUsers != 2 || got.consoleMFAUsers != 0 {
 		t.Errorf("console users = %d, inactive %d, with MFA %d; want 4, 2, 0", got.consoleUsers, got.consoleInactiveUsers, got.consoleMFAUsers)
 	}
-	if got.activeKeys != 3 {
-		t.Errorf("active keys = %d, want 3", got.activeKeys)
+	if got.activeKeys != 4 {
+		t.Errorf("active keys = %d, want 4", got.activeKeys)
 	}
-	// keys-only's second key was never used, and inactive-key's second key
-	// was last used 91 days ago.
-	if got.unusedKeys != 2 {
-		t.Errorf("unused keys = %d, want 2", got.unusedKeys)
+	// The root user's key and keys-only's second key were never used, and
+	// inactive-key's second key was last used 91 days ago.
+	if got.unusedKeys != 3 {
+		t.Errorf("unused keys = %d, want 3", got.unusedKeys)
 	}
-	// keys-only's first key was rotated 91 days ago, and inactive-key's
-	// second key has no rotation date.
-	if got.rotationOverdueKeys != 2 {
-		t.Errorf("keys overdue for rotation = %d, want 2", got.rotationOverdueKeys)
+	// The root user's key and keys-only's first key were rotated 91 days
+	// ago, and inactive-key's second key has no rotation date.
+	if got.rotationOverdueKeys != 3 {
+		t.Errorf("keys overdue for rotation = %d, want 3", got.rotationOverdueKeys)
+	}
+	// The root user, keys-only, and inactive-key have an active key, and
+	// each has one overdue.
+	if got.keyUsers != 3 || got.rotatedKeyUsers != 0 {
+		t.Errorf("users with keys = %d, with every key rotated %d; want 3 and 0", got.keyUsers, got.rotatedKeyUsers)
 	}
 }
 
@@ -93,6 +99,28 @@ func (f *fakeAdminPolicies) ListAttachedGroupPolicyARNs(_ context.Context, group
 	return f.group[group], f.groupErr[group]
 }
 
+func (f *fakeAdminPolicies) GetPolicyDocument(context.Context, string) (string, error) {
+	return "", errors.New("the admin check reads no policy document")
+}
+
+func (f *fakeAdminPolicies) GetUserPolicyDocument(context.Context, string, string) (string, error) {
+	return "", errors.New("the admin check reads no policy document")
+}
+
+func (f *fakeAdminPolicies) GetGroupPolicyDocument(context.Context, string, string) (string, error) {
+	return "", errors.New("the admin check reads no policy document")
+}
+
+func (f *fakeAdminPolicies) GetUserPermissionsBoundary(context.Context, string) (string, error) {
+	return "", errors.New("the admin check reads no permissions boundary")
+}
+
+// adminsFrom runs the admin check over report with client's answers.
+func adminsFrom(client iamPolicyClient, report *aws.CredentialReport) iamAdmins {
+	c := newTestCollector(Config{})
+	return c.collectIAMAdmins(newIAMPolicies(context.Background(), client, c.policiesWarn("111122223333")), report)
+}
+
 func reportOf(users ...aws.CredentialReportUser) *aws.CredentialReport {
 	return &aws.CredentialReport{Users: append([]aws.CredentialReportUser{{User: "<root_account>"}}, users...)}
 }
@@ -102,7 +130,6 @@ func reportOf(users ...aws.CredentialReportUser) *aws.CredentialReport {
 // customer managed policy with the same name does not count, and each group
 // is read once.
 func TestCollectIAMAdmins(t *testing.T) {
-	c := newTestCollector(Config{})
 	client := &fakeAdminPolicies{
 		user: map[string][]string{
 			"direct":    {"arn:aws:iam::aws:policy/ReadOnlyAccess", "arn:aws:iam::aws:policy/AdministratorAccess"},
@@ -128,7 +155,7 @@ func TestCollectIAMAdmins(t *testing.T) {
 		aws.CredentialReportUser{User: "developer", PasswordEnabled: true, MFAActive: true},
 	)
 
-	got := c.collectIAMAdmins(context.Background(), client, report, "111122223333")
+	got := adminsFrom(client, report)
 
 	if !got.read || got.unmeasured != 1 || !errors.Is(got.err, errPolicyDocumentsNotRead) {
 		t.Fatalf("read %t, %d unmeasured, err %v; want lookalike unmeasured for its unread policy", got.read, got.unmeasured, got.err)
@@ -149,7 +176,6 @@ func TestCollectIAMAdmins(t *testing.T) {
 // read leaves its member unmeasured unless another group makes the member an
 // admin.
 func TestCollectIAMAdmins_UnreadPolicies(t *testing.T) {
-	c := newTestCollector(Config{})
 	denied := errors.New("AccessDenied")
 	client := &fakeAdminPolicies{
 		user:     map[string][]string{"admin": {"arn:aws:iam::aws:policy/AdministratorAccess"}},
@@ -165,7 +191,7 @@ func TestCollectIAMAdmins_UnreadPolicies(t *testing.T) {
 		aws.CredentialReportUser{User: "two-groups", PasswordEnabled: true},
 	)
 
-	got := c.collectIAMAdmins(context.Background(), client, report, "111122223333")
+	got := adminsFrom(client, report)
 
 	if got.unmeasured != 2 || !errors.Is(got.err, denied) {
 		t.Errorf("%d unmeasured, err %v; want 2 and the denial", got.unmeasured, got.err)
@@ -181,7 +207,6 @@ func TestCollectIAMAdmins_UnreadPolicies(t *testing.T) {
 // have, and a user without a console password is a credential, so it is not
 // checked.
 func TestCollectIAMAdmins_InlineAndCustomerManagedPolicies(t *testing.T) {
-	c := newTestCollector(Config{})
 	client := &fakeAdminPolicies{
 		user: map[string][]string{
 			"admin":   {"arn:aws:iam::aws:policy/IAMFullAccess", "arn:aws:iam::111122223333:policy/deploy"},
@@ -202,7 +227,7 @@ func TestCollectIAMAdmins_InlineAndCustomerManagedPolicies(t *testing.T) {
 		aws.CredentialReportUser{User: "keys", AccessKey1Active: true},
 	)
 
-	got := c.collectIAMAdmins(context.Background(), client, report, "111122223333")
+	got := adminsFrom(client, report)
 
 	if got.admins != 1 || got.unmeasured != 3 || !errors.Is(got.err, errPolicyDocumentsNotRead) {
 		t.Errorf("%d admins, %d unmeasured, err %v; want 1, 3, and the unread policy documents", got.admins, got.unmeasured, got.err)
@@ -211,7 +236,7 @@ func TestCollectIAMAdmins_InlineAndCustomerManagedPolicies(t *testing.T) {
 
 // Without a credential report there are no users to check.
 func TestCollectIAMAdmins_NoReport(t *testing.T) {
-	got := newTestCollector(Config{}).collectIAMAdmins(context.Background(), &fakeAdminPolicies{}, nil, "111122223333")
+	got := adminsFrom(&fakeAdminPolicies{}, nil)
 	if got.read {
 		t.Error("read = true without a credential report")
 	}

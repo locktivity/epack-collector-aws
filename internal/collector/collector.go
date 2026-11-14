@@ -354,7 +354,9 @@ func (c *Collector) collectGlobalMetrics(steps *stepper, client *aws.AWSClient, 
 	iamCtx := steps.next("iam", "IAM users, roles, and password policy")
 	posture.IAM = *c.collectIAMMetrics(iamCtx, client, accountID, at, level)
 	if !c.config.SkipAccessPosture {
-		posture.admins = c.collectIAMAdmins(iamCtx, client, posture.IAM.report, accountID)
+		policies := newIAMPolicies(iamCtx, client, c.policiesWarn(accountID))
+		posture.admins = c.collectIAMAdmins(policies, posture.IAM.report)
+		posture.keys = collectKeyAccess(policies, posture.IAM.report)
 	}
 	posture.S3 = *c.collectS3Metrics(steps.next("s3", "S3 buckets"), client, accountID, at, level)
 	posture.CloudFront = *c.collectCloudFrontMetrics(steps.next("cloudfront", "CloudFront distributions"), client, accountID, level)

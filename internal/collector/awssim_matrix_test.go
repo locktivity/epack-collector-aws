@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/locktivity/epack/componentsdk/collectortest/roster"
@@ -15,7 +16,8 @@ import (
 
 const (
 	simConsoleUser = "epack-sandbox-5-console"
-	simKey         = "epack-sandbox-1-mfa-new-key/access-key"
+	simKeyOwner    = "epack-sandbox-1-mfa-new-key"
+	simKey         = simKeyOwner + "/access-key"
 	simDatabase    = "epack-sandbox-db"
 	simAdminGroup  = "epack-sandbox-admins"
 	simVendor      = "epack-sandbox-vendor"
@@ -26,7 +28,8 @@ const (
 // database that keeps a week of backups, so the axes reach the member and
 // database values the sandbox has none of. Its terms name every vendor
 // term an axis uses, since a change must not write to the terms the base
-// shares with its variants.
+// shares with its variants. A credential's permissions term names the AWS
+// managed policy that gives it, and root's key has every permission.
 func simMatrixBase(t testing.TB) *roster.Roster {
 	t.Helper()
 	r := simBase(t)
@@ -42,6 +45,10 @@ func simMatrixBase(t testing.TB) *roster.Roster {
 	terms.CloudNetworkAccess["private"] = roster.NetworkOff
 	terms.CloudIdentityProviders = map[string]string{"saml": roster.IdPSAML}
 	terms.AppPublishers = map[string]string{"vendor": roster.PublisherThirdParty}
+	terms.CloudCredentialPermissions = map[string]string{
+		"deny-all": roster.PermissionsRead, "AWSDenyAll": roster.PermissionsRead, "ReadOnlyAccess": roster.PermissionsRead,
+		"PowerUserAccess": roster.PermissionsWrite, "AdministratorAccess": roster.PermissionsFull, "root": roster.PermissionsFull,
+	}
 	r.Accounts = append(r.Accounts, roster.Account{
 		Key: simConsoleUser, Kind: "iam_user_console_password", Enabled: true, CloudAccount: "sandbox",
 		Methods: []string{"virtual_mfa_device"}, Logins: []string{"console_password"}, SignedInDaysAgo: new(3),
@@ -60,6 +67,19 @@ func onKey(key string, change func(*roster.MachineCredential)) func(*roster.Rost
 		for i := range r.Cloud.Credentials {
 			if r.Cloud.Credentials[i].Key == key {
 				change(&r.Cloud.Credentials[i])
+			}
+		}
+	}
+}
+
+// onOwnKey changes simKey and takes its owner out of the no-access group,
+// whose deny of every action would take back what the key's policy gives.
+func onOwnKey(change func(*roster.MachineCredential)) func(*roster.Roster) {
+	return func(r *roster.Roster) {
+		onKey(simKey, change)(r)
+		for i := range r.Groups {
+			if g := &r.Groups[i]; g.Key == simNoAccessGroup {
+				g.Members = slices.DeleteFunc(slices.Clone(g.Members), func(m string) bool { return m == simKeyOwner })
 			}
 		}
 	}
@@ -139,7 +159,7 @@ func simMatrixAxes() []roster.Axis {
 			{Name: "none"},
 			{Name: "used_yesterday", Change: func(r *roster.Roster) {
 				r.Cloud.Credentials = append(r.Cloud.Credentials, roster.MachineCredential{
-					Key: simConsoleUser + "/access-key", Owner: simConsoleUser, Active: true, CreatedDaysAgo: new(10), LastUsedDaysAgo: new(1), Permissions: "deny-all",
+					Key: simConsoleUser + "/access-key", Owner: simConsoleUser, Active: true, CreatedDaysAgo: new(10), LastUsedDaysAgo: new(1), Permissions: "AWSDenyAll",
 				})
 			}},
 		}},
@@ -154,6 +174,28 @@ func simMatrixAxes() []roster.Axis {
 			{Name: "90_days_ago", Change: onKey(simKey, func(m *roster.MachineCredential) { m.LastUsedDaysAgo = new(90) })},
 			{Name: "91_days_ago", Change: onKey(simKey, func(m *roster.MachineCredential) { m.LastUsedDaysAgo = new(91) })},
 			{Name: "deactivated", Change: onKey(simKey, func(m *roster.MachineCredential) { m.Active = false })},
+		}},
+		{Name: "key_policy", Values: []roster.Value{
+			{Name: "deny_all"},
+			{Name: "admin", Change: onOwnKey(func(m *roster.MachineCredential) { m.Permissions = "AdministratorAccess" })},
+			{Name: "read_only", Change: onOwnKey(func(m *roster.MachineCredential) { m.Permissions = "ReadOnlyAccess" })},
+			{Name: "power_user", Change: onOwnKey(func(m *roster.MachineCredential) { m.Permissions = "PowerUserAccess" })},
+			{Name: "source_deny", Change: onOwnKey(func(m *roster.MachineCredential) {
+				m.Permissions, m.AllowedSources = "AdministratorAccess", []string{"10.0.0.0/8"}
+			})},
+			{Name: "source_allow", Change: onOwnKey(func(m *roster.MachineCredential) {
+				m.Permissions, m.AllowedSources = "AdministratorAccess", []string{"10.0.0.0/8"}
+				simulate.SetExtra(&m.Extra, "ip_limit", "allow")
+			})},
+			{Name: "any_source", Change: onOwnKey(func(m *roster.MachineCredential) {
+				m.Permissions, m.AllowedSources = "AdministratorAccess", []string{"0.0.0.0/0"}
+			})},
+			{Name: "boundary", Change: func(r *roster.Roster) {
+				onOwnKey(func(m *roster.MachineCredential) { m.Permissions = "AdministratorAccess" })(r)
+				simulate.OnAccount(simKeyOwner, func(a *roster.Account) {
+					simulate.SetExtra(&a.Extra, "permissions_boundary", "developer-boundary")
+				})(r)
+			}},
 		}},
 		{Name: "ssh_group", Values: []roster.Value{
 			{Name: "restricted"},
@@ -230,7 +272,7 @@ func simMatrixAxes() []roster.Axis {
 			{Name: "no_credentials", Change: simulate.OnAccount("root", func(a *roster.Account) { a.Methods = nil })},
 			{Name: "access_key", Change: func(r *roster.Roster) {
 				r.Cloud.Credentials = append(r.Cloud.Credentials, roster.MachineCredential{
-					Key: "root/access-key", Owner: "root", Active: true, CreatedDaysAgo: new(30), Permissions: "deny-all",
+					Key: "root/access-key", Owner: "root", Active: true, CreatedDaysAgo: new(30), Permissions: "root",
 				})
 			}},
 		}},
@@ -261,9 +303,6 @@ func simMatrixAxes() []roster.Axis {
 var simAdminValues = simAccessBoth("/admins/admins_present", "/admins/admin_count", "/admins/admin_share_pct",
 	"/admins/local_admins_present", "/admins/local_admin_count", "/admins/local_mfa_admin_count", "/admins/local_admin_mfa_coverage_pct")
 
-// simRootKeyNote says why the root user's access key is counted apart.
-const simRootKeyNote = "credentialUsage in iam_access.go counts the IAM users' access keys, as docs/overview.md says, and leaves the root user's out, which root_access_keys_present reports instead. Derive counts every active access key, the root user's too, since the schema's credential_count names access keys. Whether the root user's keys are machine credentials is a definition question."
-
 // simMatrixAlone lists, by axis=value, the differences a setting shows on
 // its own.
 var simMatrixAlone = map[string]simulate.Differences{
@@ -282,19 +321,16 @@ var simMatrixAlone = map[string]simulate.Differences{
 	"cloudtrail=regional_pair": simulate.Same(simulate.Definition,
 		"summarizeCloudTrailStatus in account.go counts an audit log as covering every region only when one multi-region trail logs, and Derive counts single-region trails that between them cover every region the account uses. Whether they cover every region, including ones the run doesn't scan, is a definition question.",
 		"/accounts/0/logging/audit_log_all_regions", "/accounts/0/logging/cloudtrail_multiregion"),
-	"database=no_backups": simulate.Same(simulate.Definition,
-		"countDatabase in rds.go counts a database with automated backups off as 0 days, which TestToCloudPosture_ZeroRetention pins as evidence, and the schema's retention_days_min counts only backup-enabled resources and is null when none has backups. Which one holds is a definition question.",
-		"/accounts/0/backup/retention_days_min"),
 	"database=none": simNoDatabase,
 	"root=no_credentials": simulate.Same(simulate.Known,
 		"rootMFAOf in access_posture.go and normalizedIAM in deprecated.go count a root user with no password, access key or signing certificate as having MFA, as docs/overview.md and the v0.7.0 changelog say. The schema's root_mfa_account_count counts the root accounts that have MFA turned on.",
 		"access-posture:/root/root_mfa_account_count", "access-posture:/root/root_mfa_coverage_pct",
 		"access-posture:/scopes/0/root/root_mfa_account_count", "access-posture:/scopes/0/root/root_mfa_coverage_pct",
 		"/accounts/0/iam/root_mfa_enabled"),
-	"root=access_key": simulate.Same(simulate.Definition, simRootKeyNote,
-		append(simAccessBoth("/credentials/credential_count", "/credentials/never_expiring_credential_count",
-			"/credentials/unused_credential_count", "/credentials/rotation_overdue_pct"),
-			"/accounts/0/iam/access_key_user_count", "/accounts/0/iam/access_key_rotation_compliant_pct")...),
+	"key_policy=boundary": simulate.Same(simulate.Gap,
+		"verdictOf in key_access.go: the key's user has a permissions boundary, which can take back what AdministratorAccess allows and which the collector does not evaluate, so the values the identity policies allow are left out with a partial not_read gap, as docs/overview.md says.",
+		simAccessBoth("/credentials/unrestricted_credential_count", "/credentials/unrestricted_pct",
+			"/credentials/write_access_credential_count", "/credentials/write_access_pct")...),
 }
 
 // simMatrixTogether lists the differences that show only when settings
@@ -309,12 +345,6 @@ var simMatrixTogether = []simulate.Together{
 		Differences: simulate.Same(simulate.Unmodeled,
 			"credentialUsage in iam_access.go counts the use of a member's access key as activity, as the schema's inactive_member_count, members with no sign-in or other recorded activity, does. The roster gives a member's sign-ins alone, so Derive counts the member inactive.",
 			simAccessBoth("/members/inactive_member_count", "/members/inactive_pct")...),
-	},
-	{
-		// The unused share over the root user's key as well, once another
-		// key was used.
-		Match:       func(choices []string) bool { return simulate.Any(choices, "root=access_key") },
-		Differences: simulate.Same(simulate.Definition, simRootKeyNote, simAccessBoth("/credentials/unused_pct")...),
 	},
 }
 

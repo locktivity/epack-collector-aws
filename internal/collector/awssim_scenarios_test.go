@@ -28,10 +28,6 @@ var simStanding = simulate.Same(simulate.Gap,
 ), simulate.Same(simulate.Gap,
 	"externalMembersUnsupported in access_posture.go: IAM has no guest or outside users, so the collector leaves the external member values out with an unsupported gap. definitions.yaml asks external-members-without-guests of them.",
 	simAccessBoth("/members/external_members_present", "/members/external_member_count")...,
-), simulate.Same(simulate.Gap,
-	"unrestrictedKeysNotRead and writeAccessKeysNotRead in access_posture.go: what a key can do and where from is in its user's policy documents, which the collector doesn't read, so it leaves these out with a not_read gap. expectations.yaml lists them as an open bug.",
-	simAccessBoth("/credentials/unrestricted_credential_count", "/credentials/unrestricted_pct",
-		"/credentials/write_access_credential_count", "/credentials/write_access_pct")...,
 ))
 
 // simAccessBoth is each access-posture pointer in the totals and in the
@@ -52,13 +48,18 @@ var simNoDatabase = simulate.Same(simulate.Definition,
 // simUnrecorded lists the answers the sandbox's recording can't vouch
 // for, with why. Each body follows the service's API reference.
 var simUnrecorded = map[string]string{
-	"aws.iam.ListAttachedUserPolicies: unrecorded operation":                                                                                    simNoConsoleUser,
-	"aws.iam.ListUserPolicies: unrecorded operation":                                                                                            simNoConsoleUser,
-	"aws.iam.ListGroupsForUser: unrecorded operation":                                                                                           simNoConsoleUser,
-	"aws.iam.ListAttachedGroupPolicies: unrecorded operation":                                                                                   simNoConsoleUser,
-	"aws.iam.ListGroupPolicies: unrecorded operation":                                                                                           simNoConsoleUser,
-	"aws.iam.ListSAMLProviders ListSAMLProvidersResponse.ListSAMLProvidersResult[].SAMLProviderList[]: type":                                    "the sandbox account trusts no SAML provider, so IAM lists none",
-	"aws.iam.ListSAMLProviders ListSAMLProvidersResponse.ListSAMLProvidersResult[].SAMLProviderList[].member: unrecorded field":                 "the sandbox account trusts no SAML provider, so IAM lists none",
+	"aws.iam.ListAttachedUserPolicies: unrecorded operation":                                                                    simPolicyReadsUnrecorded,
+	"aws.iam.ListUserPolicies: unrecorded operation":                                                                            simPolicyReadsUnrecorded,
+	"aws.iam.ListGroupsForUser: unrecorded operation":                                                                           simPolicyReadsUnrecorded,
+	"aws.iam.ListAttachedGroupPolicies: unrecorded operation":                                                                   simPolicyReadsUnrecorded,
+	"aws.iam.ListGroupPolicies: unrecorded operation":                                                                           simPolicyReadsUnrecorded,
+	"aws.iam.GetGroupPolicy: unrecorded operation":                                                                              simPolicyReadsUnrecorded,
+	"aws.iam.GetUser: unrecorded operation":                                                                                     simPolicyReadsUnrecorded,
+	"aws.iam.GetPolicy: unrecorded operation":                                                                                   simNoManagedPolicy,
+	"aws.iam.GetPolicyVersion: unrecorded operation":                                                                            simNoManagedPolicy,
+	"aws.iam.GetUserPolicy: unrecorded operation":                                                                               simNoUserPolicy,
+	"aws.iam.ListSAMLProviders ListSAMLProvidersResponse.ListSAMLProvidersResult[].SAMLProviderList[]: type":                    "the sandbox account trusts no SAML provider, so IAM lists none",
+	"aws.iam.ListSAMLProviders ListSAMLProvidersResponse.ListSAMLProvidersResult[].SAMLProviderList[].member: unrecorded field": "the sandbox account trusts no SAML provider, so IAM lists none",
 	"aws.ec2.DescribeSecurityGroups DescribeSecurityGroupsResponse.securityGroupInfo[].item[].ipPermissions[].item[].fromPort: missing field":   "the sandbox has no rule for all traffic, which EC2 lists with no ports",
 	"aws.ec2.DescribeSecurityGroups DescribeSecurityGroupsResponse.securityGroupInfo[].item[].ipPermissions[].item[].toPort: missing field":     "the sandbox has no rule for all traffic, which EC2 lists with no ports",
 	"aws.s3.GetBucketLocation LocationConstraint.#text: unrecorded field":                                                                       "every sandbox bucket is in us-east-1, whose location S3 answers empty",
@@ -68,8 +69,12 @@ var simUnrecorded = map[string]string{
 	"aws.kms.GetKeyRotationStatus: unrecorded operation":                                                                                        "the sandbox has no customer managed KMS key, so the collector never reads a key's rotation",
 }
 
-// simNoConsoleUser says why the IAM policy reads are unrecorded.
-const simNoConsoleUser = "the sandbox's IAM users have no console password, so the collector, which checks only members for administrator access, never reads their policies"
+// Why the IAM policy reads are unrecorded.
+const (
+	simPolicyReadsUnrecorded = "the recording predates the reads of the policies of the IAM users with access keys, and the sandbox's IAM users have no console password, so the collector never checked them for administrator access"
+	simNoManagedPolicy       = "no sandbox IAM user or group has a managed policy attached, so the collector never reads one's default version"
+	simNoUserPolicy          = "no sandbox IAM user has an inline policy of its own, only its group's"
+)
 
 // simUncompared lists the fields the collector writes that the rosters
 // give no value for, with why.

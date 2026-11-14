@@ -137,12 +137,16 @@ func TestNormalizedIAM_RootWithoutCredentialsCountsAsMFAProtected(t *testing.T) 
 // where the percentage is left out, and left out where the credential
 // report was not read. user_count is the users who can sign in, as
 // members.local_member_count is, so it leaves out the users with only access
-// keys.
+// keys. access_key_user_count is the users with an active access key, the
+// root user included, as credential_count counts its keys, and the rotation
+// share is over them.
 func TestToCloudPosture_IAMCounts(t *testing.T) {
 	account := evaluatedAccountFixture()
 	account.IAM.IAMUserCount, account.IAM.ConsoleUserCount, account.IAM.AccessKeyUserCount, account.IAM.SAMLProviderCount = 7, 5, 2, intPtr(1)
+	account.IAM.usage.keyUsers, account.IAM.usage.rotatedKeyUsers = 3, 2
 	noUsers := evaluatedAccountFixture()
 	noUsers.IAM.IAMUserCount, noUsers.IAM.ConsoleUserCount, noUsers.IAM.AccessKeyUserCount = 0, 0, 0
+	noUsers.IAM.usage.keyUsers, noUsers.IAM.usage.rotatedKeyUsers = 0, 0
 	noUsers.IAM.ConsoleMFAEnabled, noUsers.IAM.AccessKeysRotated = nil, nil
 	unread := evaluatedAccountFixture()
 	unread.IAM.CredentialReportEvaluated = false
@@ -151,8 +155,11 @@ func TestToCloudPosture_IAMCounts(t *testing.T) {
 	posture := (&Output{Accounts: []AccountPosture{account, noUsers, unread}}).ToCloudPosture()
 
 	got := posture.Accounts[0].IAM
-	if !pctIs(got.UserCount, 5) || !pctIs(got.AccessKeyUserCount, 2) || !pctIs(got.SAMLProviderCount, 1) {
-		t.Errorf("counts %s, %s, %s; want 5, 2, 1", showPct(got.UserCount), showPct(got.AccessKeyUserCount), showPct(got.SAMLProviderCount))
+	if !pctIs(got.UserCount, 5) || !pctIs(got.AccessKeyUserCount, 3) || !pctIs(got.SAMLProviderCount, 1) {
+		t.Errorf("counts %s, %s, %s; want 5, 3, 1", showPct(got.UserCount), showPct(got.AccessKeyUserCount), showPct(got.SAMLProviderCount))
+	}
+	if got.AccessKeyRotationCompliantPct == nil || *got.AccessKeyRotationCompliantPct != 66 {
+		t.Errorf("access_key_rotation_compliant_pct = %v, want 66", got.AccessKeyRotationCompliantPct)
 	}
 	got = posture.Accounts[1].IAM
 	if !pctIs(got.UserCount, 0) || !pctIs(got.AccessKeyUserCount, 0) || got.MFACoveragePct != nil || got.AccessKeyRotationCompliantPct != nil {

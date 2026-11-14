@@ -180,7 +180,9 @@ If a surface is missing its required permissions, the collector emits a per-surf
 
 Without `iam:ListSAMLProviders`, the SAML provider counts are left out with a `permission_denied` gap. Whether IAM Identity Center is in use is still decided from the instance and role listings.
 
-The access-posture file's admins come from `iam:ListAttachedUserPolicies`, `iam:ListUserPolicies`, `iam:ListGroupsForUser`, `iam:ListAttachedGroupPolicies`, and `iam:ListGroupPolicies`, called for each IAM user with a console password. Without them, the admin values are left out with a `permission_denied` gap that names the missing action. A `collect` list that leaves out `access-posture` skips these calls.
+The access-posture file's admins come from `iam:ListAttachedUserPolicies`, `iam:ListUserPolicies`, `iam:ListGroupsForUser`, `iam:ListAttachedGroupPolicies`, and `iam:ListGroupPolicies`, called for each IAM user with a console password. Without them, the admin values are left out with a `permission_denied` gap that names the missing action.
+
+Its unrestricted and write access credential values come from the same five calls, made for each IAM user with an active access key, and from the documents of the policies they list: `iam:GetPolicy` and `iam:GetPolicyVersion` read the default version of each managed policy attached to the user or one of its groups, and `iam:GetUserPolicy` and `iam:GetGroupPolicy` read the inline policies. `iam:GetUser` reads the user's permissions boundary. Without one of them, the values the unread policy could change are left out with a `permission_denied` gap that names the missing action. A `collect` list that leaves out `access-posture` skips all of these calls.
 
 The access-posture file's connected apps come from `iam:ListRoles`, which the trust-level policy already allows for IAM Identity Center's roles, and `organizations:ListAccounts`, which is optional and best effort: it succeeds only from the Organizations management account or a delegated administrator. Every level calls both, except a run below the audit level whose `collect` list leaves out `access-posture`. Without `organizations:ListAccounts`, a role that lets another account in without MFA leaves the connected app values out with a `permission_denied` gap, and `apps_present` is still true when another account the run collects shows an account outside its organization.
 
@@ -213,6 +215,11 @@ The minimum policy. Required for every collection level.
         "iam:ListGroupsForUser",
         "iam:ListAttachedGroupPolicies",
         "iam:ListGroupPolicies",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:GetUserPolicy",
+        "iam:GetGroupPolicy",
+        "iam:GetUser",
 
         "s3:GetAccountPublicAccessBlock",
         "s3:GetBucketLocation",
